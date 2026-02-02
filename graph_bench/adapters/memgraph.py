@@ -1,0 +1,239 @@
+r"""
+Memgraph database adapter.
+
+Memgraph uses the Bolt protocol, same as Neo4j.
+Requires: pip install neo4j
+
+Environment variables:
+    GRAPH_BENCH_MEMGRAPH_URI: Connection URI (default: bolt://localhost:7687)
+
+    from graph_bench.adapters.memgraph import MemgraphAdapter
+
+    adapter = MemgraphAdapter()
+    adapter.connect(uri="bolt://localhost:7687")
+"""
+
+from collections.abc import Sequence
+from typing import Any
+
+from graph_bench.adapters.base import AdapterRegistry, BaseAdapter
+from graph_bench.config import get_env
+
+__all__ = ["MemgraphAdapter"]
+
+
+@AdapterRegistry.register("memgraph")
+class MemgraphAdapter(BaseAdapter):
+    """Memgraph graph database adapter."""
+
+    def __init__(self) -> None:
+        self._driver: Any = None
+        self._connected = False
+
+    @property
+    def name(self) -> str:
+        return "Memgraph"
+
+    @property
+    def version(self) -> str:
+        if not self._connected or self._driver is None:
+            return "unknown"
+        try:
+            with self._driver.session() as session:
+                result = session.run("CALL mg.info() YIELD value RETURN value")
+                for record in result:
+                    val = record["value"]
+                    if isinstance(val, dict) and "version" in val:
+                        return val["version"]
+                return "unknown"
+        except Exception:
+            return "unknown"
+
+    def connect(self, *, uri: str | None = None, **kwargs: Any) -> None:
+        try:
+            from neo4j import GraphDatabase
+        except ImportError as e:
+            msg = "neo4j package not installed. Install with: pip install neo4j"
+            raise ImportError(msg) from e
+
+        uri = uri or get_env("MEMGRAPH_URI", default="bolt://localhost:7687")
+
+        if uri is None:
+            msg = "Memgraph URI required"
+            raise ValueError(msg)
+
+        self._driver = GraphDatabase.driver(uri)
+        self._driver.verify_connectivity()
+        self._connected = True
+
+    def disconnect(self) -> None:
+        if self._driver:
+            self._driver.close()
+            self._driver = None
+        self._connected = False
+
+    def clear(self) -> None:
+        with self._driver.session() as session:
+            session.run("MATCH (n) DETACH DELETE n")
+
+    def insert_nodes(
+        self,
+        nodes: Sequence[dict[str, Any]],
+        *,
+        label: str = "Node",
+        batch_size: int = 1000,
+    ) -> int:
+        count = 0
+        with self._driver.session() as session:
+            for i in range(0, len(nodes), batch_size):
+                batch = list(nodes[i : i + batch_size])
+                query = f"UNWIND $nodes AS node CREATE (n:{label}) SET n = node"
+                session.run(query, nodes=batch)
+                count += len(batch)
+        return count
+
+    def get_node(self, node_id: str) -> dict[str, Any] | None:
+        with self._driver.session() as session:
+            result = session.run("MATCH (n {id: $id}) RETURN n", id=node_id)
+            record = result.single()
+            if record:
+                return dict(record["n"])
+            return None
+
+    def get_nodes_by_label(self, label: str, *, limit: int = 100) -> list[dict[str, Any]]:
+        with self._driver.session() as session:
+            result = session.run(f"MATCH (n:{label}) RETURN n LIMIT $limit", limit=limit)
+            return [dict(record["n"]) for record in result]
+
+    def insert_edges(
+        self,
+        edges: Sequence[tuple[str, str, str, dict[str, Any]]],
+        *,
+        batch_size: int = 1000,
+    ) -> int:
+        count = 0
+        with self._driver.session() as session:
+            for src, tgt, edge_type, props in edges:
+                query = f"""
+                MATCH (a {{id: $src}}), (b {{id: $tgt}})
+                CREATE (a)-[r:{edge_type}]->(b)
+                SET r = $props
+                """
+                session.run(query, src=src, tgt=tgt, props=props)
+                count += 1
+        return count
+
+    def get_neighbors(self, node_id: str, *, edge_type: str | None = None) -> list[str]:
+        with self._driver.session() as session:
+            if edge_type:
+                query = f"MATCH (n {{id: $id}})-[:{edge_type}]->(m) RETURN m.id AS id"
+            else:
+                query = "MATCH (n {id: $id})-->(m) RETURN m.id AS id"
+            result = session.run(query, id=node_id)
+            return [record["id"] for record in result if record["id"]]
+
+    def shortest_path(
+        self,
+        source: str,
+        target: str,
+        *,
+        edge_type: str | None = None,
+        weighted: bool = False,
+    ) -> list[str] | None:
+        # Memgraph uses variable-length path with BFS (default behavior)
+        with self._driver.session() as session:
+            if edge_type:
+                rel = f":{edge_type}*1..15"
+            else:
+                rel = "*1..15"
+
+            # Variable-length path finds shortest by default in Memgraph
+            query = f"""
+            MATCH (start {{id: $src}}), (end {{id: $tgt}})
+            MATCH path = (start)-[{rel}]->(end)
+            RETURN [n IN nodes(path) | n.id] AS path
+            ORDER BY length(path)
+            LIMIT 1
+            """
+            result = session.run(query, src=source, tgt=target)
+            record = result.single()
+            if record and record["path"]:
+                return [str(n) for n in record["path"]]
+            return None
+
+    def execute_query(self, query: str, *, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        with self._driver.session() as session:
+            result = session.run(query, **(params or {}))
+            return [dict(record) for record in result]
+
+    def count_nodes(self, *, label: str | None = None) -> int:
+        with self._driver.session() as session:
+            if label:
+                query = f"MATCH (n:{label}) RETURN count(n) AS count"
+            else:
+                query = "MATCH (n) RETURN count(n) AS count"
+            result = session.run(query)
+            record = result.single()
+            return record["count"] if record else 0
+
+    def count_edges(self, *, edge_type: str | None = None) -> int:
+        with self._driver.session() as session:
+            if edge_type:
+                query = f"MATCH ()-[r:{edge_type}]->() RETURN count(r) AS count"
+            else:
+                query = "MATCH ()-[r]->() RETURN count(r) AS count"
+            result = session.run(query)
+            record = result.single()
+            return record["count"] if record else 0
+
+    def pagerank(
+        self,
+        *,
+        damping: float = 0.85,
+        max_iterations: int = 100,
+        tolerance: float = 1e-6,
+    ) -> dict[str, float]:
+        # MAGE pagerank module
+        query = """
+        CALL pagerank.get()
+        YIELD node, rank
+        RETURN node.id AS id, rank AS score
+        """
+        try:
+            with self._driver.session() as session:
+                # Configure and run pagerank
+                session.run(
+                    "CALL pagerank.set($damping, $iterations)",
+                    damping=damping,
+                    iterations=max_iterations,
+                )
+                result = session.run(query)
+                return {record["id"]: record["score"] for record in result}
+        except Exception as e:
+            msg = f"Memgraph PageRank failed. Ensure MAGE is installed: {e}"
+            raise NotImplementedError(msg) from e
+
+    def community_detection(self, *, algorithm: str = "louvain") -> list[set[str]]:
+        if algorithm != "louvain":
+            msg = f"Unsupported algorithm: {algorithm}"
+            raise ValueError(msg)
+
+        # MAGE community detection module
+        query = """
+        CALL community_detection.get()
+        YIELD node, community_id
+        RETURN node.id AS id, community_id
+        """
+        try:
+            with self._driver.session() as session:
+                result = session.run(query)
+                communities: dict[int, set[str]] = {}
+                for record in result:
+                    cid = record["community_id"]
+                    if cid not in communities:
+                        communities[cid] = set()
+                    communities[cid].add(record["id"])
+                return list(communities.values())
+        except Exception as e:
+            msg = f"Memgraph community detection failed. Ensure MAGE is installed: {e}"
+            raise NotImplementedError(msg) from e

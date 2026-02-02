@@ -1,0 +1,108 @@
+services:
+  # Neo4j - Community Edition (fresh each run)
+  neo4j:
+    image: neo4j:5-community
+    container_name: graph-bench-neo4j
+    ports:
+      - "7474:7474"  # HTTP (browser)
+      - "7687:7687"  # Bolt
+    environment:
+      - NEO4J_AUTH=neo4j/benchmark
+      - NEO4J_PLUGINS=[]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7474"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Memgraph - with MAGE algorithms (fresh each run)
+  memgraph:
+    image: memgraph/memgraph-mage:latest
+    container_name: graph-bench-memgraph
+    ports:
+      - "7688:7687"  # Bolt (different port to avoid Neo4j conflict)
+      - "3000:3000"  # Lab (web UI)
+    healthcheck:
+      test: ["CMD", "echo", ">", "/dev/tcp/localhost/7687"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ArangoDB (fresh each run)
+  arangodb:
+    image: arangodb:latest
+    container_name: graph-bench-arangodb
+    ports:
+      - "8529:8529"
+    environment:
+      - ARANGO_ROOT_PASSWORD=benchmark
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8529/_api/version"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # FalkorDB - Graph database on Redis (fresh each run)
+  falkordb:
+    image: falkordb/falkordb:latest
+    container_name: graph-bench-falkordb
+    ports:
+      - "6379:6379"  # Redis port
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # NebulaGraph - Distributed graph database (fresh each run)
+  nebula-metad:
+    image: vesoft/nebula-metad:v3.6.0
+    container_name: graph-bench-nebula-metad
+    environment:
+      - USER=root
+    command:
+      - --meta_server_addrs=nebula-metad:9559
+      - --local_ip=nebula-metad
+      - --port=9559
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:19559/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  nebula-storaged:
+    image: vesoft/nebula-storaged:v3.6.0
+    container_name: graph-bench-nebula-storaged
+    environment:
+      - USER=root
+    command:
+      - --meta_server_addrs=nebula-metad:9559
+      - --local_ip=nebula-storaged
+      - --port=9779
+    depends_on:
+      - nebula-metad
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:19779/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  nebula-graphd:
+    image: vesoft/nebula-graphd:v3.6.0
+    container_name: graph-bench-nebula-graphd
+    environment:
+      - USER=root
+    command:
+      - --meta_server_addrs=nebula-metad:9559
+      - --local_ip=nebula-graphd
+      - --port=9669
+    ports:
+      - "9669:9669"  # GraphQL port
+    depends_on:
+      - nebula-metad
+      - nebula-storaged
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:19669/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
