@@ -103,7 +103,10 @@ class GrafeoAdapter(BaseAdapter):
         for row in result:
             nid = row["nid"]
             node_obj = self._db.get_node(nid)
-            return node_obj.properties()
+            # Grafeo's get_node() can return None even when the query found the node
+            # This might be a Grafeo bug with internal ID handling
+            if node_obj is not None:
+                return node_obj.properties()
         return None
 
     def get_nodes_by_label(self, label: str, *, limit: int = 100) -> list[dict[str, Any]]:
@@ -112,7 +115,8 @@ class GrafeoAdapter(BaseAdapter):
         for row in result:
             nid = row["nid"]
             node_obj = self._db.get_node(nid)
-            nodes.append(node_obj.properties())
+            if node_obj is not None:
+                nodes.append(node_obj.properties())
         return nodes
 
     def insert_edges(
