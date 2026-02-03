@@ -23,9 +23,11 @@ docker compose down
 | Neo4j | Server (Docker) | Cypher | 7687 | Community Edition |
 | Memgraph | Server (Docker) | Cypher | 7688 | With MAGE algorithms |
 | ArangoDB | Server (Docker) | AQL | 8529 | Multi-model |
-| Ladybugdb | Embedded | Cypher | N/A | `pip install real_ladybug` |
-| DuckDB | Embedded | SQL | N/A | `pip install duckdb` |
-| Grafeo | Embedded | Cypher-like | N/A | `pip install grafeo` |
+| FalkorDB | Server (Docker) | Cypher | 6379 | Redis-based graph DB |
+| NebulaGraph | Server (Docker) | nGQL | 9669 | Distributed graph DB |
+| LadybugDB | Embedded | Cypher | N/A | `pip install real_ladybug` |
+| DuckDB | Embedded | SQL/PGQ | N/A | `pip install duckdb` |
+| Grafeo | Embedded | GQL (ISO) | N/A | `pip install grafeo` |
 
 ## Server Databases (Docker)
 
@@ -34,6 +36,8 @@ docker compose down
 | Neo4j | `neo4j:5-community` | 7687 (bolt), 7474 (http) | http://localhost:7474 |
 | Memgraph | `memgraph/memgraph-mage` | 7688 (bolt), 3000 (lab) | http://localhost:3000 |
 | ArangoDB | `arangodb:latest` | 8529 | http://localhost:8529 |
+| FalkorDB | `falkordb/falkordb` | 6379 | N/A |
+| NebulaGraph | `vesoft/nebula-*` | 9669 | N/A |
 
 ### Credentials
 
@@ -42,6 +46,7 @@ docker compose down
 | Neo4j | `neo4j` | `benchmark` |
 | Memgraph | (none) | (none) |
 | ArangoDB | `root` | `benchmark` |
+| NebulaGraph | `root` | `nebula` |
 
 ## Embedded Databases (No Docker)
 

@@ -38,7 +38,7 @@ Repository = "https://github.com/StevenBtw/graph-bench"
 dev = [
     "pytest>=9.0.2",
     "pytest-cov>=7.0.0",
-    "ruff>=0.14.14",
+    "ruff>=0.15.0",
     "prek>=0.3.1",
     "ty>=0.0.14",
 ]
@@ -54,13 +54,13 @@ nebula = ["nebula3-python>=3.0"]
 datasets = ["faker>=20.0"]
 reporting = ["matplotlib>=3.8", "pandas>=2.0"]
 all-adapters = [
-    "neo4j>=5.0",
-    "real_ladybug>=0.14",
-    "python-arango>=7.0",
-    "grafeo>=0.2.0",
-    "duckdb>=1.0",
-    "FalkorDB>=1.0",
-    "nebula3-python>=3.0",
+    "neo4j>=6.1.0",
+    "real_ladybug>=0.14.1",
+    "python-arango>=8.2.6",
+    "grafeo>=0.2.5",
+    "duckdb>=1.4.4",
+    "FalkorDB>=1.4.0",
+    "nebula3-python>=3.8.3",
 ]
 all = [
     "graph-bench[dev,cli,all-adapters,datasets,reporting]",

@@ -35,6 +35,7 @@ class GrafeoAdapter(BaseAdapter):
     def __init__(self) -> None:
         self._db: Any = None
         self._connected = False
+        self._id_index_created = False
 
     @property
     def name(self) -> str:
@@ -88,6 +89,12 @@ class GrafeoAdapter(BaseAdapter):
                 props = dict(node)
                 self._db.create_node([label], props)
                 count += 1
+
+        # Create property index on "id" for O(1) lookups (matches LadybugDB PRIMARY KEY)
+        if not self._id_index_created and hasattr(self._db, "create_property_index"):
+            self._db.create_property_index("id")
+            self._id_index_created = True
+
         return count
 
     def get_node(self, node_id: str) -> dict[str, Any] | None:
