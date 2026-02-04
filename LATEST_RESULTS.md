@@ -1,94 +1,64 @@
 # Latest Benchmark Results
 
-Run: 2026-02-04 | Scale: small (10K nodes, 50K edges) | Platform: Windows | **174/186 passed**
+Run: 2026-02-04 | Scale: small (10K nodes, 50K edges) | Platform: Windows
 
-## Databases Tested
+## LDBC Graph Analytics
 
-| Type | Database | Status |
-|------|----------|--------|
-| Embedded | Grafeo 0.2.6 | Native algorithms |
-| Embedded | LadybugDB | NetworkX fallback |
-| Embedded | DuckDB | NetworkX fallback |
-| Server | Neo4j | Partial support |
-| Server | Memgraph | Partial support |
-| Server | FalkorDB | Partial support |
+| Benchmark | Grafeo* | LadybugDB* | DuckDB* | Neo4j | Memgraph | FalkorDB |
+|-----------|---------|------------|---------|-------|----------|----------|
+| BFS | 0.12ms | 3273ms | 3722ms | 115ms | 5.9ms | 3252ms |
+| PageRank | 0.25ms | 661ms | 719ms | 64ms | 13.7ms | 659ms |
+| WCC | 0.55ms | 651ms | 718ms | 30ms | 13.1ms | 658ms |
+| CDLP | 0.51ms | 681ms | 726ms | 43ms | 15.7ms | 664ms |
+| LCC | 0.31ms | 657ms | 709ms | - | 53.1ms | 660ms |
+| SSSP | 2.69ms | 1981ms | 2151ms | 52ms | 6.4ms | 1963ms |
 
-## Core Benchmarks (6 databases)
+## Write Operations
 
-| Benchmark | Grafeo | LadybugDB | DuckDB | Neo4j | Memgraph | FalkorDB |
-|-----------|--------|-----------|--------|-------|----------|----------|
-| node_insertion | **3.3ms** | 255ms | 6773ms | 60ms | 62ms | 522ms |
-| edge_insertion | **7.0ms** | 270ms | 4269ms | 1865ms | 1822ms | 334ms |
-| single_read | **0.6ms** | 30ms | 74ms | 283ms | 269ms | 113ms |
-| batch_read | 5.7ms | **2.9ms** | 2.8ms | 24ms | 25ms | 10ms |
-| bfs | **0.3ms** | 50ms | 25ms | 36ms | 36ms | 20ms |
-| dfs | **0.3ms** | 64ms | 32ms | 49ms | 48ms | 25ms |
-| hop_1 | **0.8ms** | 81ms | 40ms | 65ms | 61ms | 31ms |
-| hop_2 | **0.5ms** | 65ms | 34ms | 49ms | 49ms | 26ms |
-| triangle_count | **0.5ms** | 190ms | 46ms | 356ms | 346ms | 31ms |
-| common_neighbors | **0.7ms** | 38ms | 48ms | 71ms | 70ms | 37ms |
+| Benchmark | Grafeo* | LadybugDB* | DuckDB* | Neo4j | Memgraph | FalkorDB |
+|-----------|---------|------------|---------|-------|----------|----------|
+| node_insertion | 3.3ms | 255ms | 6773ms | 60ms | 62ms | 522ms |
+| edge_insertion | 7.0ms | 270ms | 4269ms | 1865ms | 1822ms | 334ms |
 
-**Grafeo wins 9/10 core benchmarks** across all 6 databases.
+## Read Operations
 
-## LDBC Graphanalytics Benchmarks
+| Benchmark | Grafeo* | LadybugDB* | DuckDB* | Neo4j | Memgraph | FalkorDB |
+|-----------|---------|------------|---------|-------|----------|----------|
+| single_read | 0.6ms | 30ms | 74ms | 283ms | 269ms | 113ms |
+| batch_read | 5.7ms | 2.9ms | 2.8ms | 24ms | 25ms | 10ms |
 
-Standard graph analytics benchmarks from [LDBC Graphanalytics](https://github.com/ldbc/ldbc_graphalytics).
+## Traversals
 
-| Benchmark | Grafeo | LadybugDB | DuckDB | Winner |
-|-----------|--------|-----------|--------|--------|
-| ldbc_bfs | **0.18ms** | 3400ms | 4097ms | Grafeo 19,052x |
-| ldbc_pagerank | **0.41ms** | 698ms | 814ms | Grafeo 1,687x |
-| ldbc_wcc | **0.69ms** | 697ms | 807ms | Grafeo 1,008x |
-| ldbc_cdlp | **0.75ms** | 707ms | 852ms | Grafeo 946x |
-| ldbc_lcc | **0.58ms** | 878ms | 818ms | Grafeo 1,417x |
-| ldbc_sssp | **5.36ms** | 4646ms | 2467ms | Grafeo 460x |
-
-**Grafeo wins all 6 LDBC benchmarks** with native algorithm implementations.
-
-## Summary
-
-### Grafeo Advantages
-
-- **Fastest embedded graph database** tested
-- **Native LDBC algorithm support** (460x - 19,052x faster than NetworkX fallback)
-- Excellent write performance (node/edge insertion)
-- Best traversal performance (BFS, DFS, hops)
-- Best pattern matching (triangles, neighbors)
-
-### Server Databases
-
-Neo4j, Memgraph, and FalkorDB showed:
-
-- Higher latency due to network overhead
-- Some algorithm benchmarks failed (missing implementations)
-- Better suited for distributed/production workloads
-
-### Where Others Win
-
-- **DuckDB/LadybugDB**: Batch reads (SQL optimization)
-- **FalkorDB**: Competitive on some traversals
-
-## Implementation Notes
-
-### Grafeo Native Algorithms
-
-Grafeo 0.2.6 provides native implementations for all LDBC algorithms:
-
-- `bfs_layers` - BFS with depth tracking
-- `pagerank` - PageRank iteration
-- `connected_components` - Weakly Connected Components
-- `label_propagation` - Community Detection (CDLP)
-- `local_clustering_coefficient` - Local Clustering Coefficient
-- `dijkstra` - Single-Source Shortest Paths
-
-### NetworkX Fallback
-
-Databases without native algorithm support use NetworkX:
-
-1. Graph extracted via `get_neighbors()` calls
-2. NetworkX algorithm runs on extracted graph
-3. Extraction overhead included in benchmark time (fair comparison)
+| Benchmark | Grafeo* | LadybugDB* | DuckDB* | Neo4j | Memgraph | FalkorDB |
+|-----------|---------|------------|---------|-------|----------|----------|
+| bfs | 0.3ms | 50ms | 25ms | 36ms | 36ms | 20ms |
+| dfs | 0.3ms | 64ms | 32ms | 49ms | 48ms | 25ms |
+| hop_1 | 0.8ms | 81ms | 40ms | 65ms | 61ms | 31ms |
+| hop_2 | 0.5ms | 65ms | 34ms | 49ms | 49ms | 26ms |
+| triangle_count | 0.5ms | 190ms | 46ms | 356ms | 346ms | 31ms |
+| common_neighbors | 0.7ms | 38ms | 48ms | 71ms | 70ms | 37ms |
 
 ---
 
-Full results: [results/bench_20260203_235328.json](results/bench_20260203_235328.json)
+\* Embedded databases run in-process without network overhead. Server databases (Neo4j, Memgraph, FalkorDB) include network latency, which is inherent to their architecture. This makes direct timing comparisons between embedded and server databases not entirely apples-to-apples.
+
+"-" indicates algorithm failed on this dataset.
+
+---
+
+## Feature Availability
+
+| Feature | Grafeo* | LadybugDB* | DuckDB* | Neo4j | Memgraph | FalkorDB |
+|---------|---------|------------|---------|-------|----------|----------|
+| Native PageRank | ✅ | NetworkX | NetworkX | ✅ | ✅ | NetworkX |
+| Native WCC | ✅ | NetworkX | NetworkX | ✅ | ✅ | NetworkX |
+| Native CDLP | ✅ | NetworkX | NetworkX | ✅ | ✅ | NetworkX |
+| Native LCC | ✅ | NetworkX | NetworkX | ❌ | ✅ | NetworkX |
+| Native SSSP | ✅ | NetworkX | NetworkX | ✅ | ✅ | NetworkX |
+| Native BFS | ✅ | NetworkX | NetworkX | ✅ | ✅ | NetworkX |
+| Query Language | GQL (ISO) | Cypher | SQL/PGQ | Cypher | Cypher | Cypher |
+| Deployment | Embedded | Embedded | Embedded | Server | Server | Server |
+
+---
+
+Full results: [results/bench_20260204_054918.json](results/bench_20260204_054918.json)

@@ -20,7 +20,7 @@ docker compose down
 
 | Database | Type | Query Language | Port | Notes |
 |----------|------|----------------|------|-------|
-| Neo4j | Server (Docker) | Cypher | 7687 | Community Edition |
+| Neo4j | Server (Docker) | Cypher | 7687 | Enterprise + GDS algorithms |
 | Memgraph | Server (Docker) | Cypher | 7688 | With MAGE algorithms |
 | ArangoDB | Server (Docker) | AQL | 8529 | Multi-model |
 | FalkorDB | Server (Docker) | Cypher | 6379 | Redis-based graph DB |
@@ -33,7 +33,7 @@ docker compose down
 
 | Service | Image | Ports | Web UI |
 |---------|-------|-------|--------|
-| Neo4j | `neo4j:5-community` | 7687 (bolt), 7474 (http) | http://localhost:7474 |
+| Neo4j | `neo4j:5-enterprise` | 7687 (bolt), 7474 (http) | http://localhost:7474 |
 | Memgraph | `memgraph/memgraph-mage` | 7688 (bolt), 3000 (lab) | http://localhost:3000 |
 | ArangoDB | `arangodb:latest` | 8529 | http://localhost:8529 |
 | FalkorDB | `falkordb/falkordb` | 6379 | N/A |
@@ -68,17 +68,39 @@ Docker containers start fresh each time (no persistent volumes). This ensures:
 - No stale data between runs
 - The benchmark suite clears data before each run anyway
 
-## Feature Availability (Community Editions)
+## Feature Availability
 
-| Feature | Neo4j | Memgraph | ArangoDB | ladybug | DuckDB | Grafeo |
-|---------|-------|----------|----------|------|--------|--------|
+| Feature | Neo4j+GDS | Memgraph+MAGE | ArangoDB | LadybugDB | DuckDB | Grafeo |
+|---------|-----------|---------------|----------|-----------|--------|--------|
 | Basic CRUD | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Traversal (BFS/DFS) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Shortest Path | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| PageRank | ❌ | ✅ | ❌ | ❌ | ❌ | ⚡ |
-| Community Detection | ❌ | ✅ | ❌ | ❌ | ❌ | ⚡ |
+| PageRank | ✅ | ✅ | ❌ | ❌* | ❌* | ✅ |
+| Community Detection | ✅ | ✅ | ❌ | ❌* | ❌* | ✅ |
+| WCC | ✅ | ✅ | ❌ | ❌* | ❌* | ✅ |
+| LCC | ✅ | ✅ | ❌ | ❌* | ❌* | ✅ |
+| SSSP | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
-**Legend:** ✅ Available | ❌ Not available | ⚡ Depends on version
+**Legend:** ✅ Native | ❌ Not available | ❌* Uses NetworkX fallback
+
+## Neo4j GDS Library
+
+Neo4j Enterprise includes the Graph Data Science (GDS) library with algorithms:
+- `gds.pageRank` - PageRank centrality
+- `gds.louvain` - Community detection (Louvain)
+- `gds.labelPropagation` - Label Propagation
+- `gds.wcc` - Weakly Connected Components
+- `gds.localClusteringCoefficient` - Local Clustering Coefficient
+- `gds.shortestPath.dijkstra` - Single-Source Shortest Path
+
+## Memgraph MAGE
+
+Memgraph MAGE includes graph algorithms:
+- `pagerank.get()` - PageRank
+- `community_detection.get()` - Louvain community detection
+- `label_propagation.get()` - Label Propagation
+- `weakly_connected_components.get()` - WCC
+- `clustering_coefficient.get()` - Clustering coefficients
 
 ## Existing Neo4j Container
 

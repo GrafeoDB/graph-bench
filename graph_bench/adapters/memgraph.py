@@ -5,12 +5,12 @@ Memgraph uses the Bolt protocol, same as Neo4j.
 Requires: pip install neo4j
 
 Environment variables:
-    GRAPH_BENCH_MEMGRAPH_URI: Connection URI (default: bolt://localhost:7687)
+    GRAPH_BENCH_MEMGRAPH_URI: Connection URI (default: bolt://localhost:7688)
 
     from graph_bench.adapters.memgraph import MemgraphAdapter
 
     adapter = MemgraphAdapter()
-    adapter.connect(uri="bolt://localhost:7687")
+    adapter.connect(uri="bolt://localhost:7688")
 """
 
 from collections.abc import Sequence
@@ -56,7 +56,7 @@ class MemgraphAdapter(BaseAdapter):
             msg = "neo4j package not installed. Install with: pip install neo4j"
             raise ImportError(msg) from e
 
-        uri = uri or get_env("MEMGRAPH_URI", default="bolt://localhost:7687")
+        uri = uri or get_env("MEMGRAPH_URI", default="bolt://localhost:7688")
 
         if uri is None:
             msg = "Memgraph URI required"
@@ -193,37 +193,39 @@ class MemgraphAdapter(BaseAdapter):
         max_iterations: int = 100,
         tolerance: float = 1e-6,
     ) -> dict[str, float]:
-        # MAGE pagerank module
+        """PageRank using MAGE pagerank.get()."""
         query = """
-        CALL pagerank.get()
+        CALL pagerank.get($max_iter, $damping, $tol)
         YIELD node, rank
         RETURN node.id AS id, rank AS score
         """
         try:
             with self._driver.session() as session:
-                # Configure and run pagerank
-                session.run(
-                    "CALL pagerank.set($damping, $iterations)",
+                result = session.run(
+                    query,
+                    max_iter=max_iterations,
                     damping=damping,
-                    iterations=max_iterations,
+                    tol=tolerance,
                 )
-                result = session.run(query)
-                return {record["id"]: record["score"] for record in result}
+                return {record["id"]: record["score"] for record in result if record["id"]}
         except Exception as e:
             msg = f"Memgraph PageRank failed. Ensure MAGE is installed: {e}"
             raise NotImplementedError(msg) from e
 
     def community_detection(self, *, algorithm: str = "louvain") -> list[set[str]]:
-        if algorithm != "louvain":
-            msg = f"Unsupported algorithm: {algorithm}"
-            raise ValueError(msg)
-
-        # MAGE community detection module
-        query = """
-        CALL community_detection.get()
-        YIELD node, community_id
-        RETURN node.id AS id, community_id
-        """
+        """Community detection using MAGE."""
+        if algorithm == "louvain":
+            query = """
+            CALL community_detection.get()
+            YIELD node, community_id
+            RETURN node.id AS id, community_id
+            """
+        else:  # label_propagation -> use leiden
+            query = """
+            CALL leiden_community_detection.get()
+            YIELD node, community_id
+            RETURN node.id AS id, community_id
+            """
         try:
             with self._driver.session() as session:
                 result = session.run(query)
@@ -235,5 +237,96 @@ class MemgraphAdapter(BaseAdapter):
                     communities[cid].add(record["id"])
                 return list(communities.values())
         except Exception as e:
-            msg = f"Memgraph community detection failed. Ensure MAGE is installed: {e}"
+            msg = f"Memgraph community detection failed: {e}"
+            raise NotImplementedError(msg) from e
+
+    def weakly_connected_components(self) -> list[set[str]]:
+        """WCC using MAGE."""
+        query = """
+        CALL weakly_connected_components.get()
+        YIELD node, component_id
+        RETURN node.id AS id, component_id
+        """
+        try:
+            with self._driver.session() as session:
+                result = session.run(query)
+                components: dict[int, set[str]] = {}
+                for record in result:
+                    cid = record["component_id"]
+                    if cid not in components:
+                        components[cid] = set()
+                    components[cid].add(record["id"])
+                return list(components.values())
+        except Exception as e:
+            msg = f"Memgraph WCC failed. Ensure MAGE is installed: {e}"
+            raise NotImplementedError(msg) from e
+
+    def local_clustering_coefficient(self) -> dict[str, float]:
+        """LCC using MAGE nxalg.clustering()."""
+        query = """
+        CALL nxalg.clustering()
+        YIELD node, clustering
+        RETURN node.id AS id, clustering AS coeff
+        """
+        try:
+            with self._driver.session() as session:
+                result = session.run(query)
+                return {record["id"]: record["coeff"] for record in result if record["id"]}
+        except Exception as e:
+            msg = f"Memgraph LCC failed. Ensure MAGE is installed: {e}"
+            raise NotImplementedError(msg) from e
+
+    def bfs_levels(self, source: str) -> dict[str, int]:
+        """BFS levels using MAGE nxalg.bfs_predecessors()."""
+        query = """
+        MATCH (start {id: $source})
+        CALL nxalg.bfs_predecessors(start)
+        YIELD node, predecessor
+        WITH node, predecessor
+        MATCH path = shortestPath((start)-[*]-(node))
+        WHERE start.id = $source
+        RETURN node.id AS id, length(path) AS depth
+        """
+        # Simpler approach: use native BFS traversal
+        simple_query = """
+        MATCH (start {id: $source})
+        CALL nxalg.bfs_tree(start) YIELD tree
+        UNWIND nodes(tree) AS node
+        WITH start, node
+        MATCH path = shortestPath((start)-[*0..]-(node))
+        RETURN node.id AS id, length(path) AS depth
+        """
+        # Fallback to pure Cypher BFS
+        cypher_query = """
+        MATCH (start {id: $source})
+        CALL {
+            WITH start
+            MATCH path = (start)-[*0..10]-(node)
+            WITH node, min(length(path)) AS depth
+            RETURN node, depth
+        }
+        RETURN node.id AS id, depth
+        """
+        try:
+            with self._driver.session() as session:
+                result = session.run(cypher_query, source=source)
+                return {record["id"]: record["depth"] for record in result if record["id"]}
+        except Exception as e:
+            msg = f"Memgraph BFS failed: {e}"
+            raise NotImplementedError(msg) from e
+
+    def sssp(self, source: str, *, weight_attr: str = "weight") -> dict[str, float]:
+        """SSSP using MAGE nxalg.shortest_path_length()."""
+        query = """
+        MATCH (start {id: $source})
+        CALL nxalg.shortest_path_length(start, Null, $weight_attr)
+        YIELD target, length
+        RETURN target.id AS id, length AS distance
+        """
+        try:
+            with self._driver.session() as session:
+                result = session.run(query, source=source, weight_attr=weight_attr)
+                return {record["id"]: record["distance"] for record in result if record["id"]}
+        except Exception as e:
+            msg = f"Memgraph SSSP failed: {e}"
             raise NotImplementedError(msg) from e

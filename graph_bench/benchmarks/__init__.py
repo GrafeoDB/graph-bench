@@ -10,6 +10,7 @@ Benchmarks are organized by category:
 - structure: Connected components, degree distribution
 - write: Property updates, mixed workloads
 - ldbc_graphanalytics: LDBC Graphanalytics standard benchmarks (BFS, PR, WCC, CDLP, LCC, SSSP)
+- ldbc_snb: LDBC SNB Interactive workload benchmarks (IS1, IS3, IC1, IC2, IC3, IC6)
 
     from graph_bench.benchmarks import NodeInsertionBenchmark, BFSBenchmark
 """
@@ -58,6 +59,14 @@ from graph_bench.benchmarks.graphanalytics import (
     LdbcSsspBenchmark,
     LdbcWccBenchmark,
 )
+from graph_bench.benchmarks.snb_interactive import (
+    SnbIC1Benchmark,
+    SnbIC2Benchmark,
+    SnbIC3Benchmark,
+    SnbIC6Benchmark,
+    SnbIS1Benchmark,
+    SnbIS3Benchmark,
+)
 
 __all__ = [
     # Base
@@ -102,4 +111,11 @@ __all__ = [
     "LdbcPageRankBenchmark",
     "LdbcSsspBenchmark",
     "LdbcWccBenchmark",
+    # LDBC SNB Interactive
+    "SnbIC1Benchmark",
+    "SnbIC2Benchmark",
+    "SnbIC3Benchmark",
+    "SnbIC6Benchmark",
+    "SnbIS1Benchmark",
+    "SnbIS3Benchmark",
 ]

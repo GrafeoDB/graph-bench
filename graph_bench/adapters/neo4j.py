@@ -6,7 +6,7 @@ Requires: pip install neo4j
 Environment variables:
     GRAPH_BENCH_NEO4J_URI: Connection URI (default: bolt://localhost:7687)
     GRAPH_BENCH_NEO4J_USER: Username (default: neo4j)
-    GRAPH_BENCH_NEO4J_PASSWORD: Password
+    GRAPH_BENCH_NEO4J_PASSWORD: Password (default: benchmark)
 
     from graph_bench.adapters.neo4j import Neo4jAdapter
 
@@ -56,7 +56,7 @@ class Neo4jAdapter(BaseAdapter):
 
         uri = uri or get_env("NEO4J_URI", default="bolt://localhost:7687")
         user = kwargs.get("user") or get_env("NEO4J_USER", default="neo4j")
-        password = kwargs.get("password") or get_env("NEO4J_PASSWORD")
+        password = kwargs.get("password") or get_env("NEO4J_PASSWORD", default="benchmark")
 
         if uri is None:
             msg = "Neo4j URI required"
@@ -203,6 +203,34 @@ class Neo4jAdapter(BaseAdapter):
             record = result.single()
             return record["count"] if record else 0
 
+    def _ensure_gds_projection(self, session: Any) -> str:
+        """Create a GDS graph projection if it doesn't exist."""
+        graph_name = "bench_graph"
+        # Drop existing projection if any
+        try:
+            session.run(f"CALL gds.graph.drop('{graph_name}', false)")
+        except Exception:
+            pass
+        # Create new projection with all nodes and relationships
+        session.run(
+            f"""
+            CALL gds.graph.project(
+                '{graph_name}',
+                '*',
+                '*',
+                {{relationshipProperties: 'weight'}}
+            )
+            """
+        )
+        return graph_name
+
+    def _drop_gds_projection(self, session: Any, graph_name: str) -> None:
+        """Drop a GDS graph projection."""
+        try:
+            session.run(f"CALL gds.graph.drop('{graph_name}', false)")
+        except Exception:
+            pass
+
     def pagerank(
         self,
         *,
@@ -210,17 +238,176 @@ class Neo4jAdapter(BaseAdapter):
         max_iterations: int = 100,
         tolerance: float = 1e-6,
     ) -> dict[str, float]:
-        # Requires Neo4j Graph Data Science (GDS) plugin - not in Community Edition
-        msg = (
-            "Neo4j PageRank requires the Graph Data Science (GDS) plugin. "
-            "Community Edition does not include GDS."
-        )
-        raise NotImplementedError(msg)
+        """PageRank using Neo4j GDS."""
+        with self._driver.session() as session:
+            try:
+                graph_name = self._ensure_gds_projection(session)
+                result = session.run(
+                    f"""
+                    CALL gds.pageRank.stream('{graph_name}', {{
+                        dampingFactor: $damping,
+                        maxIterations: $max_iter,
+                        tolerance: $tol
+                    }})
+                    YIELD nodeId, score
+                    RETURN gds.util.asNode(nodeId).id AS id, score
+                    """,
+                    damping=damping,
+                    max_iter=max_iterations,
+                    tol=tolerance,
+                )
+                scores = {record["id"]: record["score"] for record in result if record["id"]}
+                self._drop_gds_projection(session, graph_name)
+                return scores
+            except Exception as e:
+                msg = f"Neo4j GDS PageRank failed: {e}"
+                raise NotImplementedError(msg) from e
 
     def community_detection(self, *, algorithm: str = "louvain") -> list[set[str]]:
-        # Requires Neo4j Graph Data Science (GDS) plugin - not in Community Edition
-        msg = (
-            "Neo4j community detection requires the Graph Data Science (GDS) plugin. "
-            "Community Edition does not include GDS."
-        )
-        raise NotImplementedError(msg)
+        """Community detection using Neo4j GDS."""
+        with self._driver.session() as session:
+            try:
+                graph_name = self._ensure_gds_projection(session)
+                if algorithm == "louvain":
+                    result = session.run(
+                        f"""
+                        CALL gds.louvain.stream('{graph_name}')
+                        YIELD nodeId, communityId
+                        RETURN gds.util.asNode(nodeId).id AS id, communityId
+                        """
+                    )
+                else:  # label_propagation
+                    result = session.run(
+                        f"""
+                        CALL gds.labelPropagation.stream('{graph_name}')
+                        YIELD nodeId, communityId
+                        RETURN gds.util.asNode(nodeId).id AS id, communityId
+                        """
+                    )
+                communities: dict[int, set[str]] = {}
+                for record in result:
+                    cid = record["communityId"]
+                    nid = record["id"]
+                    if nid:
+                        if cid not in communities:
+                            communities[cid] = set()
+                        communities[cid].add(str(nid))
+                self._drop_gds_projection(session, graph_name)
+                return list(communities.values())
+            except Exception as e:
+                msg = f"Neo4j GDS community detection failed: {e}"
+                raise NotImplementedError(msg) from e
+
+    def weakly_connected_components(self) -> list[set[str]]:
+        """WCC using Neo4j GDS."""
+        with self._driver.session() as session:
+            try:
+                graph_name = self._ensure_gds_projection(session)
+                result = session.run(
+                    f"""
+                    CALL gds.wcc.stream('{graph_name}')
+                    YIELD nodeId, componentId
+                    RETURN gds.util.asNode(nodeId).id AS id, componentId
+                    """
+                )
+                components: dict[int, set[str]] = {}
+                for record in result:
+                    cid = record["componentId"]
+                    nid = record["id"]
+                    if nid:
+                        if cid not in components:
+                            components[cid] = set()
+                        components[cid].add(str(nid))
+                self._drop_gds_projection(session, graph_name)
+                return list(components.values())
+            except Exception as e:
+                msg = f"Neo4j GDS WCC failed: {e}"
+                raise NotImplementedError(msg) from e
+
+    def local_clustering_coefficient(self) -> dict[str, float]:
+        """LCC using Neo4j GDS."""
+        with self._driver.session() as session:
+            try:
+                graph_name = self._ensure_gds_projection(session)
+                result = session.run(
+                    f"""
+                    CALL gds.localClusteringCoefficient.stream('{graph_name}')
+                    YIELD nodeId, localClusteringCoefficient
+                    RETURN gds.util.asNode(nodeId).id AS id, localClusteringCoefficient AS coeff
+                    """
+                )
+                coeffs = {record["id"]: record["coeff"] for record in result if record["id"]}
+                self._drop_gds_projection(session, graph_name)
+                return coeffs
+            except Exception as e:
+                msg = f"Neo4j GDS LCC failed: {e}"
+                raise NotImplementedError(msg) from e
+
+    def bfs_levels(self, source: str) -> dict[str, int]:
+        """BFS levels using Neo4j GDS."""
+        with self._driver.session() as session:
+            try:
+                graph_name = self._ensure_gds_projection(session)
+                # Get source node id
+                source_result = session.run(
+                    "MATCH (n {id: $id}) RETURN id(n) AS nodeId",
+                    id=source,
+                )
+                source_record = source_result.single()
+                if not source_record:
+                    self._drop_gds_projection(session, graph_name)
+                    return {}
+                source_node_id = source_record["nodeId"]
+
+                result = session.run(
+                    f"""
+                    CALL gds.bfs.stream('{graph_name}', {{
+                        sourceNode: $sourceId
+                    }})
+                    YIELD path
+                    UNWIND nodes(path) AS node
+                    WITH node, length(path) AS depth
+                    RETURN node.id AS id, depth
+                    """,
+                    sourceId=source_node_id,
+                )
+                levels = {record["id"]: record["depth"] for record in result if record["id"]}
+                self._drop_gds_projection(session, graph_name)
+                return levels
+            except Exception as e:
+                msg = f"Neo4j GDS BFS failed: {e}"
+                raise NotImplementedError(msg) from e
+
+    def sssp(self, source: str, *, weight_attr: str = "weight") -> dict[str, float]:
+        """SSSP using Neo4j GDS Dijkstra."""
+        with self._driver.session() as session:
+            try:
+                graph_name = self._ensure_gds_projection(session)
+                # Get source node id
+                source_result = session.run(
+                    "MATCH (n {id: $id}) RETURN id(n) AS nodeId",
+                    id=source,
+                )
+                source_record = source_result.single()
+                if not source_record:
+                    self._drop_gds_projection(session, graph_name)
+                    return {}
+                source_node_id = source_record["nodeId"]
+
+                result = session.run(
+                    f"""
+                    CALL gds.allShortestPaths.dijkstra.stream('{graph_name}', {{
+                        sourceNode: $sourceId,
+                        relationshipWeightProperty: 'weight'
+                    }})
+                    YIELD targetNode, totalCost
+                    RETURN gds.util.asNode(targetNode).id AS id, totalCost AS distance
+                    """,
+                    sourceId=source_node_id,
+                )
+                distances = {record["id"]: record["distance"] for record in result if record["id"]}
+                self._drop_gds_projection(session, graph_name)
+                return distances
+            except Exception as e:
+                msg = f"Neo4j GDS SSSP failed: {e}"
+                raise NotImplementedError(msg) from e
