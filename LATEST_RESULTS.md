@@ -176,10 +176,6 @@ Grafeo is embedded, meaning it runs in-process with your application. This elimi
 | Single read | ~0.6ms (direct memory) | ~283ms (network + disk) |
 | Best for | Analytics, local apps, edge | Multi-user, distributed |
 
-### Consistency Trade-offs
-
-NebulaGraph's fast writes (1.8ms) come from eventual consistency, writes return before data is replicated. Grafeo's writes (3.3ms) are durable, the WAL is fsynced before returning. Both are valid choices depending on your requirements.
-
 ---
 
 ## Benchmark Caveats
