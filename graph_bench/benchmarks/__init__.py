@@ -9,6 +9,7 @@ Benchmarks are organized by category:
 - pattern: Triangle counting, common neighbors
 - structure: Connected components, degree distribution
 - write: Property updates, mixed workloads
+- ldbc_graphanalytics: LDBC Graphanalytics standard benchmarks (BFS, PR, WCC, CDLP, LCC, SSSP)
 
     from graph_bench.benchmarks import NodeInsertionBenchmark, BFSBenchmark
 """
@@ -49,6 +50,14 @@ from graph_bench.benchmarks.write import (
     MixedWorkloadBenchmark,
     PropertyUpdateBenchmark,
 )
+from graph_bench.benchmarks.graphanalytics import (
+    LdbcBfsBenchmark,
+    LdbcCdlpBenchmark,
+    LdbcLccBenchmark,
+    LdbcPageRankBenchmark,
+    LdbcSsspBenchmark,
+    LdbcWccBenchmark,
+)
 
 __all__ = [
     # Base
@@ -86,4 +95,11 @@ __all__ = [
     "EdgeAddExistingBenchmark",
     "MixedWorkloadBenchmark",
     "PropertyUpdateBenchmark",
+    # LDBC Graphanalytics
+    "LdbcBfsBenchmark",
+    "LdbcCdlpBenchmark",
+    "LdbcLccBenchmark",
+    "LdbcPageRankBenchmark",
+    "LdbcSsspBenchmark",
+    "LdbcWccBenchmark",
 ]

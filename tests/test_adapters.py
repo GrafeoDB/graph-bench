@@ -12,9 +12,10 @@ class TestAdapterRegistry:
         adapters = AdapterRegistry.list()
         assert "neo4j" in adapters
         assert "memgraph" in adapters
-        assert "kuzu" in adapters
         assert "arangodb" in adapters
         assert "grafeo" in adapters
+        assert "duckdb" in adapters
+        assert "ladybug" in adapters
 
     def test_get_adapter_class(self):
         adapter_cls = AdapterRegistry.get("neo4j")
@@ -64,15 +65,6 @@ class TestMemgraphAdapter:
 
         adapter = MemgraphAdapter()
         assert adapter.name == "Memgraph"
-        assert adapter.connected is False
-
-
-class TestKuzuAdapter:
-    def test_create_adapter(self):
-        from graph_bench.adapters.kuzu import KuzuAdapter
-
-        adapter = KuzuAdapter()
-        assert adapter.name == "Kuzu"
         assert adapter.connected is False
 
 

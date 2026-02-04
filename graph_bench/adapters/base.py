@@ -215,6 +215,50 @@ class BaseAdapter(ABC):
         """Count edges, optionally filtered by type."""
         ...
 
+    def _build_networkx_graph(self) -> Any:
+        """Extract graph from database for algorithm fallback.
+
+        Uses BFS from known nodes to discover the graph structure.
+        The extraction overhead is included in benchmark timing,
+        representing the real cost of not having native support.
+        """
+        import networkx as nx
+
+        G = nx.DiGraph()
+        visited: set[str] = set()
+        to_visit: list[str] = []
+
+        # Get starting nodes from common labels
+        for label in ["Person", "Node", "Vertex"]:
+            try:
+                for node in self.get_nodes_by_label(label, limit=5000):
+                    node_id = node.get("id")
+                    if node_id and str(node_id) not in visited:
+                        to_visit.append(str(node_id))
+            except Exception:
+                pass
+            if to_visit:
+                break
+
+        # BFS to discover all nodes and edges
+        while to_visit:
+            node_id = to_visit.pop(0)
+            if node_id in visited:
+                continue
+            visited.add(node_id)
+            G.add_node(node_id)
+
+            try:
+                for neighbor in self.get_neighbors(node_id):
+                    neighbor_str = str(neighbor)
+                    G.add_edge(node_id, neighbor_str)
+                    if neighbor_str not in visited:
+                        to_visit.append(neighbor_str)
+            except Exception:
+                pass
+
+        return G
+
     def pagerank(
         self,
         *,
@@ -224,18 +268,126 @@ class BaseAdapter(ABC):
     ) -> dict[str, float]:
         """Compute PageRank scores.
 
-        Default: raise NotImplementedError.
+        Default uses NetworkX fallback (extracts graph from database).
         Override for native database support.
         """
-        raise NotImplementedError(f"{self.name} does not support native PageRank")
+        import networkx as nx
+
+        G = self._build_networkx_graph()
+        if len(G) == 0:
+            return {}
+
+        scores = nx.pagerank(G, alpha=damping, max_iter=max_iterations, tol=tolerance)
+        return {str(k): float(v) for k, v in scores.items()}
 
     def community_detection(self, *, algorithm: str = "louvain") -> list[set[str]]:
         """Detect communities in the graph.
 
-        Default: raise NotImplementedError.
+        Default uses NetworkX fallback (extracts graph from database).
         Override for native database support.
         """
-        raise NotImplementedError(f"{self.name} does not support native community detection")
+        import networkx as nx
+        from networkx.algorithms.community import label_propagation_communities, louvain_communities
+
+        G = self._build_networkx_graph()
+        if len(G) == 0:
+            return []
+
+        # Convert to undirected for community detection
+        G_undirected = G.to_undirected()
+
+        if algorithm == "louvain":
+            communities = louvain_communities(G_undirected)
+        elif algorithm == "label_propagation":
+            communities = label_propagation_communities(G_undirected)
+        else:
+            msg = f"Unknown community detection algorithm: {algorithm}"
+            raise ValueError(msg)
+
+        return [set(str(n) for n in c) for c in communities]
+
+    def local_clustering_coefficient(self) -> dict[str, float]:
+        """Compute Local Clustering Coefficient for all vertices.
+
+        LDBC Graphanalytics LCC: ratio of edges between neighbors
+        to maximum possible edges between neighbors.
+
+        Default uses NetworkX fallback (extracts graph from database).
+        Override for native database support.
+        """
+        import networkx as nx
+
+        G = self._build_networkx_graph()
+        if len(G) == 0:
+            return {}
+
+        # For directed graphs, use undirected neighborhood but directed edges
+        # NetworkX clustering handles this correctly
+        coefficients = nx.clustering(G)
+        return {str(k): float(v) for k, v in coefficients.items()}
+
+    def weakly_connected_components(self) -> list[set[str]]:
+        """Find Weakly Connected Components.
+
+        LDBC Graphanalytics WCC: assigns each vertex a component label.
+        Two vertices are in the same component if connected (ignoring direction).
+
+        Default uses NetworkX fallback (extracts graph from database).
+        Override for native database support.
+        """
+        import networkx as nx
+
+        G = self._build_networkx_graph()
+        if len(G) == 0:
+            return []
+
+        components = list(nx.weakly_connected_components(G))
+        return [set(str(n) for n in c) for c in components]
+
+    def sssp(self, source: str, *, weight_attr: str = "weight") -> dict[str, float]:
+        """Single-Source Shortest Paths with weights.
+
+        LDBC Graphanalytics SSSP: shortest path distances from source to all vertices.
+        Returns dict mapping vertex ID to distance (infinity if unreachable).
+
+        Default uses NetworkX fallback (extracts graph from database).
+        Override for native database support.
+        """
+        import networkx as nx
+
+        G = self._build_networkx_graph()
+        if len(G) == 0:
+            return {}
+
+        try:
+            # Use Dijkstra for weighted shortest paths
+            distances = nx.single_source_dijkstra_path_length(G, source, weight=weight_attr)
+            return {str(k): float(v) for k, v in distances.items()}
+        except nx.NetworkXError:
+            # Source not in graph
+            return {}
+
+    def bfs_levels(self, source: str) -> dict[str, int]:
+        """BFS with level/depth tracking.
+
+        LDBC Graphanalytics BFS: assigns each vertex its distance from source.
+        Unreachable vertices get infinity (represented as -1 here).
+
+        Default uses NetworkX fallback (extracts graph from database).
+        Override for native database support.
+        """
+        import networkx as nx
+
+        G = self._build_networkx_graph()
+        if len(G) == 0:
+            return {}
+
+        try:
+            # BFS returns dict of node -> distance
+            distances = dict(nx.single_source_shortest_path_length(G, source))
+            return {str(k): int(v) for k, v in distances.items()}
+        except nx.NetworkXError:
+            return {}
 
     def __enter__(self) -> "BaseAdapter":
         """Context manager entry."""

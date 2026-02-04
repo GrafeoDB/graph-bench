@@ -14,7 +14,7 @@ from typing import Any
 
 from graph_bench.benchmarks.base import BaseBenchmark, BenchmarkRegistry
 from graph_bench.protocols import GraphDatabaseAdapter
-from graph_bench.types import Metrics, ScaleConfig, TimingStats
+from graph_bench.types import ScaleConfig
 
 __all__ = [
     "PageRankBenchmark",
@@ -49,72 +49,36 @@ class AlgorithmBenchmarkBase(BaseBenchmark):
 
 @BenchmarkRegistry.register("pagerank", category="algorithm")
 class PageRankBenchmark(AlgorithmBenchmarkBase):
-    """Benchmark PageRank computation."""
+    """Benchmark PageRank computation.
+
+    Databases with native PageRank use their implementation.
+    Others use NetworkX fallback (includes graph extraction overhead).
+    """
 
     @property
     def name(self) -> str:
         return "pagerank"
 
     def run_iteration(self, adapter: GraphDatabaseAdapter, scale: ScaleConfig) -> int:
-        try:
-            scores = adapter.pagerank(damping=0.85, max_iterations=20, tolerance=1e-4)
-            return len(scores)
-        except NotImplementedError:
-            return 0
-
-    def run(self, adapter: GraphDatabaseAdapter, scale: ScaleConfig) -> Metrics:
-        try:
-            return super().run(adapter, scale)
-        except NotImplementedError:
-            return Metrics(
-                timing=TimingStats(
-                    min_ns=0,
-                    max_ns=0,
-                    mean_ns=0.0,
-                    median_ns=0.0,
-                    std_ns=0.0,
-                    p99_ns=0.0,
-                    iterations=0,
-                ),
-                throughput=0.0,
-                items_processed=0,
-                custom={"skipped": True, "reason": "PageRank not supported"},
-            )
+        scores = adapter.pagerank(damping=0.85, max_iterations=20, tolerance=1e-4)
+        return len(scores)
 
 
 @BenchmarkRegistry.register("community_detection", category="algorithm")
 class CommunityDetectionBenchmark(AlgorithmBenchmarkBase):
-    """Benchmark community detection (Louvain)."""
+    """Benchmark community detection (Louvain).
+
+    Databases with native Louvain use their implementation.
+    Others use NetworkX fallback (includes graph extraction overhead).
+    """
 
     @property
     def name(self) -> str:
         return "community_detection"
 
     def run_iteration(self, adapter: GraphDatabaseAdapter, scale: ScaleConfig) -> int:
-        try:
-            communities = adapter.community_detection(algorithm="louvain")
-            return len(communities)
-        except NotImplementedError:
-            return 0
-
-    def run(self, adapter: GraphDatabaseAdapter, scale: ScaleConfig) -> Metrics:
-        try:
-            return super().run(adapter, scale)
-        except NotImplementedError:
-            return Metrics(
-                timing=TimingStats(
-                    min_ns=0,
-                    max_ns=0,
-                    mean_ns=0.0,
-                    median_ns=0.0,
-                    std_ns=0.0,
-                    p99_ns=0.0,
-                    iterations=0,
-                ),
-                throughput=0.0,
-                items_processed=0,
-                custom={"skipped": True, "reason": "Community detection not supported"},
-            )
+        communities = adapter.community_detection(algorithm="louvain")
+        return len(communities)
 
 
 class CentralityBenchmarkBase(BaseBenchmark):

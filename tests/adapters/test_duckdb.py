@@ -182,10 +182,28 @@ class TestDuckDBAdapter:
         # After context exit, should be disconnected
         assert adapter.connected is False
 
-    def test_pagerank_not_implemented(self, adapter):
-        with pytest.raises(NotImplementedError):
-            adapter.pagerank()
+    def test_pagerank_networkx_fallback(self, adapter):
+        """PageRank uses NetworkX fallback for databases without native support."""
+        nodes = [{"id": "a"}, {"id": "b"}, {"id": "c"}]
+        adapter.insert_nodes(nodes, label="Person")
+        edges = [("a", "b", "E", {}), ("b", "c", "E", {}), ("c", "a", "E", {})]
+        adapter.insert_edges(edges)
 
-    def test_community_detection_not_implemented(self, adapter):
-        with pytest.raises(NotImplementedError):
-            adapter.community_detection()
+        scores = adapter.pagerank()
+        assert len(scores) == 3
+        assert all(0 <= v <= 1 for v in scores.values())
+
+    def test_community_detection_networkx_fallback(self, adapter):
+        """Community detection uses NetworkX fallback for databases without native support."""
+        nodes = [{"id": "a"}, {"id": "b"}, {"id": "c"}]
+        adapter.insert_nodes(nodes, label="Person")
+        edges = [("a", "b", "E", {}), ("b", "c", "E", {})]
+        adapter.insert_edges(edges)
+
+        communities = adapter.community_detection()
+        assert isinstance(communities, list)
+        # All nodes should be in some community
+        all_nodes = set()
+        for community in communities:
+            all_nodes.update(community)
+        assert all_nodes == {"a", "b", "c"}

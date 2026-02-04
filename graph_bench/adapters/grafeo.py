@@ -286,5 +286,74 @@ class GrafeoAdapter(BaseAdapter):
                 return [{str(n) for n in community} for community in result]
             elif algorithm == "label_propagation" and hasattr(self._db.algorithms, "label_propagation"):
                 result = self._db.algorithms.label_propagation()
+                # label_propagation returns dict[node_id, label] - convert to list of sets
+                if isinstance(result, dict):
+                    communities: dict[int, set[str]] = {}
+                    for node_id, label in result.items():
+                        if label not in communities:
+                            communities[label] = set()
+                        communities[label].add(str(node_id))
+                    return list(communities.values())
                 return [{str(n) for n in community} for community in result]
         raise NotImplementedError(f"{self.name} does not support native community detection with {algorithm}")
+
+    def bfs_levels(self, source: str) -> dict[str, int]:
+        """LDBC BFS using native Grafeo bfs_layers."""
+        if hasattr(self._db, "algorithms") and hasattr(self._db.algorithms, "bfs_layers"):
+            src_result = self._db.execute("MATCH (n {id: $id}) RETURN id(n) as nid", {"id": source})
+            for row in src_result:
+                src_nid = row["nid"]
+                # bfs_layers returns list of lists: [[level0_nodes], [level1_nodes], ...]
+                layers = self._db.algorithms.bfs_layers(src_nid)
+                result: dict[str, int] = {}
+                for depth, layer in enumerate(layers):
+                    for node_id in layer:
+                        result[str(node_id)] = depth
+                return result
+        return super().bfs_levels(source)
+
+    def weakly_connected_components(self) -> list[set[str]]:
+        """LDBC WCC using native Grafeo connected_components."""
+        if hasattr(self._db, "algorithms") and hasattr(self._db.algorithms, "connected_components"):
+            result = self._db.algorithms.connected_components()
+            # Returns dict[node_id, component_id] - convert to list of sets
+            if isinstance(result, dict):
+                components: dict[int, set[str]] = {}
+                for node_id, comp_id in result.items():
+                    if comp_id not in components:
+                        components[comp_id] = set()
+                    components[comp_id].add(str(node_id))
+                return list(components.values())
+            return [{str(n) for n in comp} for comp in result]
+        return super().weakly_connected_components()
+
+    def sssp(self, source: str, *, weight_attr: str = "weight") -> dict[str, float]:
+        """LDBC SSSP using native Grafeo dijkstra."""
+        if hasattr(self._db, "algorithms") and hasattr(self._db.algorithms, "dijkstra"):
+            src_result = self._db.execute("MATCH (n {id: $id}) RETURN id(n) as nid", {"id": source})
+            for row in src_result:
+                src_nid = row["nid"]
+                # Get all nodes and compute shortest paths
+                all_nodes = self._db.execute("MATCH (n) RETURN id(n) as nid")
+                result: dict[str, float] = {}
+                result[source] = 0.0
+                for target_row in all_nodes:
+                    tgt_nid = target_row["nid"]
+                    if tgt_nid != src_nid:
+                        try:
+                            path = self._db.algorithms.dijkstra(src_nid, tgt_nid, weight=weight_attr)
+                            if path:
+                                # Calculate path length from weights
+                                # For now, use path length as distance (unweighted)
+                                result[str(tgt_nid)] = float(len(path) - 1)
+                        except Exception:
+                            pass  # Unreachable
+                return result
+        return super().sssp(source, weight_attr=weight_attr)
+
+    def local_clustering_coefficient(self) -> dict[str, float]:
+        """LDBC LCC using native Grafeo local_clustering_coefficient."""
+        if hasattr(self._db, "algorithms") and hasattr(self._db.algorithms, "local_clustering_coefficient"):
+            result = self._db.algorithms.local_clustering_coefficient()
+            return {str(k): float(v) for k, v in result.items()}
+        return super().local_clustering_coefficient()

@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Comprehensive benchmark suite for graph databases"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = ["networkx>=3.0"]
 authors = [{ name = "Steven Grond" }]
 license = { text = "Apache-2.0" }
 keywords = [
@@ -47,7 +47,8 @@ neo4j = ["neo4j>=5.0"]
 memgraph = ["neo4j>=5.0"]
 ladybug = ["real_ladybug>=0.14"]
 arangodb = ["python-arango>=7.0"]
-grafeo = ["grafeo>=0.2.0"]
+grafeo = ["grafeo>=0.2.5"]
+# grafeo-local: cd H:\GrafeoDB\grafeo && maturin develop --release
 duckdb = ["duckdb>=1.0"]
 falkordb = ["FalkorDB>=1.0"]
 nebula = ["nebula3-python>=3.0"]
