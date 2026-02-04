@@ -144,6 +144,32 @@ class LadybugAdapter(BaseAdapter):
             pass
         return None
 
+    def update_node(self, node_id: str, properties: dict[str, Any]) -> bool:
+        import json
+
+        try:
+            # Get existing props
+            result = self._conn.execute(
+                "MATCH (n:Node {id: $id}) RETURN n.props",
+                {"id": node_id},
+            )
+            existing_props = {}
+            for row in result:
+                existing_props = json.loads(row[0]) if row[0] else {}
+                break
+            else:
+                return False  # Node not found
+
+            # Merge and update
+            existing_props.update(properties)
+            self._conn.execute(
+                "MATCH (n:Node {id: $id}) SET n.props = $props",
+                {"id": node_id, "props": json.dumps(existing_props)},
+            )
+            return True
+        except Exception:
+            return False
+
     def get_nodes_by_label(self, label: str, *, limit: int = 100) -> list[dict[str, Any]]:
         import json
 

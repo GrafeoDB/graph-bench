@@ -11,6 +11,7 @@ Benchmarks are organized by category:
 - write: Property updates, mixed workloads
 - ldbc_graphanalytics: LDBC Graphanalytics standard benchmarks (BFS, PR, WCC, CDLP, LCC, SSSP)
 - ldbc_snb: LDBC SNB Interactive workload benchmarks (IS1, IS3, IC1, IC2, IC3, IC6)
+- concurrent: Concurrent ACID tests (throughput scaling, lost updates, read-after-write)
 
     from graph_bench.benchmarks import NodeInsertionBenchmark, BFSBenchmark
 """
@@ -67,6 +68,13 @@ from graph_bench.benchmarks.snb_interactive import (
     SnbIS1Benchmark,
     SnbIS3Benchmark,
 )
+from graph_bench.benchmarks.concurrent import (
+    ConcurrentAcidBenchmark,
+    LostUpdateBenchmark,
+    ReadAfterWriteBenchmark,
+    ThroughputScalingBenchmark,
+    MixedWorkloadBenchmark as ConcurrentMixedWorkloadBenchmark,
+)
 
 __all__ = [
     # Base
@@ -118,4 +126,10 @@ __all__ = [
     "SnbIC6Benchmark",
     "SnbIS1Benchmark",
     "SnbIS3Benchmark",
+    # Concurrent ACID
+    "ConcurrentAcidBenchmark",
+    "LostUpdateBenchmark",
+    "ReadAfterWriteBenchmark",
+    "ThroughputScalingBenchmark",
+    "ConcurrentMixedWorkloadBenchmark",
 ]

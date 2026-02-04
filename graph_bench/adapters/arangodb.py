@@ -138,6 +138,15 @@ class ArangoDBAdapter(BaseAdapter):
         except Exception:
             return None
 
+    def update_node(self, node_id: str, properties: dict[str, Any]) -> bool:
+        try:
+            collection = self._db.collection("nodes")
+            # ArangoDB update merges properties by default
+            collection.update({"_key": node_id, **properties})
+            return True
+        except Exception:
+            return False
+
     def get_nodes_by_label(self, label: str, *, limit: int = 100) -> list[dict[str, Any]]:
         query = "FOR n IN nodes FILTER n._label == @label LIMIT @limit RETURN n"
         cursor = self._db.aql.execute(query, bind_vars={"label": label, "limit": limit})

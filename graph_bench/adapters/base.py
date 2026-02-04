@@ -112,6 +112,19 @@ class BaseAdapter(ABC):
         ...
 
     @abstractmethod
+    def update_node(self, node_id: str, properties: dict[str, Any]) -> bool:
+        """Update node properties.
+
+        Args:
+            node_id: The ID of the node to update.
+            properties: Properties to update (merged with existing).
+
+        Returns:
+            True if node was found and updated, False otherwise.
+        """
+        ...
+
+    @abstractmethod
     def get_nodes_by_label(self, label: str, *, limit: int = 100) -> list[dict[str, Any]]:
         """Retrieve nodes by label."""
         ...

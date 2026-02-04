@@ -100,6 +100,15 @@ class MemgraphAdapter(BaseAdapter):
                 return dict(record["n"])
             return None
 
+    def update_node(self, node_id: str, properties: dict[str, Any]) -> bool:
+        with self._driver.session() as session:
+            result = session.run(
+                "MATCH (n {id: $id}) SET n += $props RETURN n",
+                id=node_id,
+                props=properties,
+            )
+            return result.single() is not None
+
     def get_nodes_by_label(self, label: str, *, limit: int = 100) -> list[dict[str, Any]]:
         with self._driver.session() as session:
             result = session.run(f"MATCH (n:{label}) RETURN n LIMIT $limit", limit=limit)

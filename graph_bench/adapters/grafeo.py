@@ -109,6 +109,17 @@ class GrafeoAdapter(BaseAdapter):
                 return node_obj.properties()
         return None
 
+    def update_node(self, node_id: str, properties: dict[str, Any]) -> bool:
+        # Build SET clause for properties
+        set_clauses = ", ".join(f"n.{k} = ${k}" for k in properties.keys())
+        query = f"MATCH (n {{id: $id}}) SET {set_clauses} RETURN n"
+        params = {"id": node_id, **properties}
+        result = self._db.execute(query, params)
+        # Check if any rows were returned (node was found and updated)
+        for _ in result:
+            return True
+        return False
+
     def get_nodes_by_label(self, label: str, *, limit: int = 100) -> list[dict[str, Any]]:
         result = self._db.execute(f"MATCH (n:{label}) RETURN id(n) AS nid LIMIT {limit}")
         nodes = []

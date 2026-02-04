@@ -175,6 +175,20 @@ class NebulaGraphAdapter(BaseAdapter):
                 }
         return None
 
+    def update_node(self, node_id: str, properties: dict[str, Any]) -> bool:
+        # Try updating on common tags
+        for tag in ["Node", "`Vertex`", "Person"]:
+            # Build UPDATE VERTEX query
+            set_clauses = ", ".join(
+                f'{k} = "{v}"' if isinstance(v, str) else f"{k} = {v}"
+                for k, v in properties.items()
+            )
+            query = f'UPDATE VERTEX ON {tag} "{node_id}" SET {set_clauses}'
+            result = self._session.execute(query)
+            if result.is_succeeded():
+                return True
+        return False
+
     def _convert_value(self, v: Any) -> Any:
         """Convert NebulaGraph ValueWrapper to Python value."""
         if hasattr(v, "is_string") and v.is_string():

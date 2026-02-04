@@ -165,6 +165,28 @@ class DuckDBAdapter(BaseAdapter):
             return {"id": result[0], "label": result[1], **props}
         return None
 
+    def update_node(self, node_id: str, properties: dict[str, Any]) -> bool:
+        import json
+
+        # Get existing node
+        existing = self._conn.execute(
+            "SELECT properties FROM nodes WHERE id = ?", [node_id]
+        ).fetchone()
+
+        if not existing:
+            return False
+
+        # Merge properties
+        current_props = json.loads(existing[0]) if existing[0] else {}
+        current_props.update(properties)
+
+        # Update
+        self._conn.execute(
+            "UPDATE nodes SET properties = ? WHERE id = ?",
+            [json.dumps(current_props), node_id],
+        )
+        return True
+
     def get_nodes_by_label(self, label: str, *, limit: int = 100) -> list[dict[str, Any]]:
         import json
 
