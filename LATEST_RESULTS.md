@@ -6,12 +6,12 @@ Run: 2026-02-04 | Scale: small (10K nodes, 50K edges) | Platform: Windows
 
 | Benchmark | Grafeo* | LadybugDB* | DuckDB* | Neo4j | Memgraph | FalkorDB | ArangoDB | NebulaGraph |
 |-----------|---------|------------|---------|-------|----------|----------|----------|-------------|
-| BFS | 0.12ms | 3273ms | 3722ms | 115ms | 5.9ms | 3252ms | - | - |
-| PageRank | 0.25ms | 661ms | 719ms | 64ms | 13.7ms | 659ms | - | - |
-| WCC | 0.55ms | 651ms | 718ms | 30ms | 13.1ms | 658ms | - | - |
-| CDLP | 0.51ms | 681ms | 726ms | 43ms | 15.7ms | 664ms | - | - |
-| LCC | 0.31ms | 657ms | 709ms | - | 53.1ms | 660ms | - | - |
-| SSSP | 2.69ms | 1981ms | 2151ms | 52ms | 6.4ms | 1963ms | - | - |
+| BFS | 0.12ms | 3273ms | 3722ms | 115ms | 5.9ms | 3252ms | 220ms | 7044ms‡ |
+| PageRank | 0.25ms | 661ms | 719ms | 64ms | 13.7ms | 659ms | 44382ms† | 1423ms‡ |
+| WCC | 0.55ms | 651ms | 718ms | 30ms | 13.1ms | 658ms | 44361ms† | 1425ms‡ |
+| CDLP | 0.51ms | 681ms | 726ms | 43ms | 15.7ms | 664ms | 44405ms† | 1450ms‡ |
+| LCC | 0.31ms | 657ms | 709ms | - | 53.1ms | 660ms | 44429ms† | 1450ms‡ |
+| SSSP | 2.69ms | 1981ms | 2151ms | 52ms | 6.4ms | 1963ms | 133170ms† | 4329ms‡ |
 
 ## Write Operations
 
@@ -55,18 +55,22 @@ Run: 2026-02-04 | Scale: small (10K nodes, 50K edges) | Platform: Windows
 
 "-" indicates algorithm failed on this dataset.
 
+† ArangoDB uses NetworkX fallback for graph algorithms (includes graph extraction overhead from database). BFS uses native AQL graph traversal.
+
+‡ NebulaGraph uses NetworkX fallback for all graph algorithms (includes graph extraction overhead from database).
+
 ---
 
 ## Feature Availability
 
 | Feature | Grafeo* | LadybugDB* | DuckDB* | Neo4j | Memgraph | FalkorDB | ArangoDB | NebulaGraph |
 |---------|---------|------------|---------|-------|----------|----------|----------|-------------|
-| Native PageRank | ✅ | NetworkX | NetworkX | ✅ | ✅ | NetworkX | ❌ | ❌ |
-| Native WCC | ✅ | NetworkX | NetworkX | ✅ | ✅ | NetworkX | ❌ | ❌ |
-| Native CDLP | ✅ | NetworkX | NetworkX | ✅ | ✅ | NetworkX | ❌ | ❌ |
-| Native LCC | ✅ | NetworkX | NetworkX | ❌ | ✅ | NetworkX | ❌ | ❌ |
-| Native SSSP | ✅ | NetworkX | NetworkX | ✅ | ✅ | NetworkX | ❌ | ❌ |
-| Native BFS | ✅ | NetworkX | NetworkX | ✅ | ✅ | NetworkX | ❌ | ✅ |
+| Native PageRank | ✅ | NetworkX | NetworkX | ✅ | ✅ | NetworkX | NetworkX | NetworkX |
+| Native WCC | ✅ | NetworkX | NetworkX | ✅ | ✅ | NetworkX | NetworkX | NetworkX |
+| Native CDLP | ✅ | NetworkX | NetworkX | ✅ | ✅ | NetworkX | NetworkX | NetworkX |
+| Native LCC | ✅ | NetworkX | NetworkX | ❌ | ✅ | NetworkX | NetworkX | NetworkX |
+| Native SSSP | ✅ | NetworkX | NetworkX | ✅ | ✅ | NetworkX | NetworkX | NetworkX |
+| Native BFS | ✅ | NetworkX | NetworkX | ✅ | ✅ | NetworkX | ✅ | NetworkX |
 | Query Language | GQL (ISO) | Cypher | SQL/PGQ | Cypher | Cypher | Cypher | AQL | nGQL |
 | Deployment | Embedded | Embedded | Embedded | Server | Server | Server | Server | Server |
 

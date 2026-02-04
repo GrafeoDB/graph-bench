@@ -77,6 +77,8 @@ class NebulaGraphAdapter(BaseAdapter):
 
     def _ensure_space(self) -> None:
         """Create space if not exists and use it."""
+        import time
+
         # Create space
         create_space = f"""
         CREATE SPACE IF NOT EXISTS {self._space}
@@ -84,18 +86,25 @@ class NebulaGraphAdapter(BaseAdapter):
         """
         self._session.execute(create_space)
 
-        # Use space
+        # Use space - may need to wait for space creation
+        time.sleep(1)
         self._session.execute(f"USE {self._space}")
 
-        # Create tag (node label)
-        self._session.execute(
-            "CREATE TAG IF NOT EXISTS Node(id string, name string, value int)"
-        )
+        # Create common tags (node labels) - use backticks for reserved words
+        time.sleep(1)
+        for tag in ["Node", "`Vertex`", "Person"]:
+            self._session.execute(
+                f"CREATE TAG IF NOT EXISTS {tag}(id string, name string, value int)"
+            )
 
-        # Create edge type
+        # Create edge types - use backticks for reserved words
         self._session.execute(
             "CREATE EDGE IF NOT EXISTS CONNECTS(weight double)"
         )
+        self._session.execute(
+            "CREATE EDGE IF NOT EXISTS `EDGE`(weight double)"
+        )
+        time.sleep(1)  # Wait for schema propagation
 
     def disconnect(self) -> None:
         if self._session:
@@ -112,6 +121,13 @@ class NebulaGraphAdapter(BaseAdapter):
         except Exception:
             pass
 
+    def _escape_name(self, name: str) -> str:
+        """Escape reserved words with backticks."""
+        reserved = {"VERTEX", "EDGE", "TAG", "SPACE", "PATH", "INDEX"}
+        if name.upper() in reserved:
+            return f"`{name}`"
+        return name
+
     def insert_nodes(
         self,
         nodes: Sequence[dict[str, Any]],
@@ -119,6 +135,7 @@ class NebulaGraphAdapter(BaseAdapter):
         label: str = "Node",
         batch_size: int = 1000,
     ) -> int:
+        escaped_label = self._escape_name(label)
         count = 0
         for i in range(0, len(nodes), batch_size):
             batch = nodes[i : i + batch_size]
@@ -127,32 +144,69 @@ class NebulaGraphAdapter(BaseAdapter):
                 node_id = node.get("id", f"n{count}")
                 name = node.get("name", "")
                 value = node.get("value", 0)
-                values.append(f'"{node_id}":({label} {{id: "{node_id}", name: "{name}", value: {value}}})')
+                # Correct NebulaGraph syntax: "vid":(prop1_value, prop2_value, ...)
+                values.append(f'"{node_id}":("{node_id}", "{name}", {value})')
                 count += 1
 
             if values:
-                query = f"INSERT VERTEX {label}(id, name, value) VALUES {', '.join(values)}"
-                self._session.execute(query)
+                query = f"INSERT VERTEX {escaped_label}(id, name, value) VALUES {', '.join(values)}"
+                result = self._session.execute(query)
+                if not result.is_succeeded():
+                    # Try creating the tag on-the-fly
+                    self._session.execute(
+                        f"CREATE TAG IF NOT EXISTS {escaped_label}(id string, name string, value int)"
+                    )
+                    import time
+                    time.sleep(1)
+                    self._session.execute(query)
 
         return count
 
     def get_node(self, node_id: str) -> dict[str, Any] | None:
-        query = f'FETCH PROP ON Node "{node_id}" YIELD properties(vertex) AS props'
-        result = self._session.execute(query)
-        if result.is_succeeded() and result.row_size() > 0:
-            props = result.row_values(0)[0].as_map()
-            return {k: v.as_string() if hasattr(v, "as_string") else v for k, v in props.items()}
+        # Try multiple common tags
+        for tag in ["Node", "`Vertex`", "Person"]:
+            query = f'FETCH PROP ON {tag} "{node_id}" YIELD properties(vertex) AS props'
+            result = self._session.execute(query)
+            if result.is_succeeded() and result.row_size() > 0:
+                props = result.row_values(0)[0].as_map()
+                return {
+                    k: v.as_string() if hasattr(v, "as_string") else v
+                    for k, v in props.items()
+                }
         return None
 
+    def _convert_value(self, v: Any) -> Any:
+        """Convert NebulaGraph ValueWrapper to Python value."""
+        if hasattr(v, "is_string") and v.is_string():
+            return v.as_string()
+        if hasattr(v, "is_int") and v.is_int():
+            return v.as_int()
+        if hasattr(v, "is_double") and v.is_double():
+            return v.as_double()
+        if hasattr(v, "is_bool") and v.is_bool():
+            return v.as_bool()
+        return str(v)
+
     def get_nodes_by_label(self, label: str, *, limit: int = 100) -> list[dict[str, Any]]:
-        query = f"MATCH (n:{label}) RETURN n LIMIT {limit}"
+        escaped_label = self._escape_name(label)
+        # Use MATCH with escaped label
+        query = f"MATCH (n:{escaped_label}) RETURN n LIMIT {limit}"
         result = self._session.execute(query)
         nodes = []
         if result.is_succeeded():
             for i in range(result.row_size()):
-                node = result.row_values(i)[0].as_node()
-                props = node.properties(label)
-                nodes.append({k: v.as_string() if hasattr(v, "as_string") else v for k, v in props.items()})
+                try:
+                    node = result.row_values(i)[0].as_node()
+                    # Get properties - try with both escaped and unescaped label
+                    try:
+                        props = node.properties(label)
+                    except Exception:
+                        props = node.properties(escaped_label.strip("`"))
+                    nodes.append({
+                        k: self._convert_value(v) for k, v in props.items()
+                    })
+                except Exception:
+                    continue
         return nodes
 
     def insert_edges(
@@ -164,20 +218,33 @@ class NebulaGraphAdapter(BaseAdapter):
         count = 0
         for i in range(0, len(edges), batch_size):
             batch = edges[i : i + batch_size]
-            values = []
+            # Group by edge type
+            by_type: dict[str, list[str]] = {}
             for src, tgt, edge_type, props in batch:
                 weight = props.get("weight", 1.0)
-                values.append(f'"{src}"->"{tgt}"@0:(CONNECTS {{weight: {weight}}})')
+                escaped_type = self._escape_name(edge_type)
+                if escaped_type not in by_type:
+                    by_type[escaped_type] = []
+                by_type[escaped_type].append(f'"{src}"->"{tgt}"@0:({weight})')
                 count += 1
 
-            if values:
-                query = f"INSERT EDGE CONNECTS(weight) VALUES {', '.join(values)}"
-                self._session.execute(query)
+            for escaped_type, values in by_type.items():
+                query = f"INSERT EDGE {escaped_type}(weight) VALUES {', '.join(values)}"
+                result = self._session.execute(query)
+                if not result.is_succeeded():
+                    # Try creating the edge type on-the-fly
+                    self._session.execute(
+                        f"CREATE EDGE IF NOT EXISTS {escaped_type}(weight double)"
+                    )
+                    import time
+                    time.sleep(1)
+                    self._session.execute(query)
 
         return count
 
     def get_neighbors(self, node_id: str, *, edge_type: str | None = None) -> list[str]:
-        query = f'GO FROM "{node_id}" OVER CONNECTS YIELD dst(edge) AS id'
+        edge = self._escape_name(edge_type) if edge_type else "*"
+        query = f'GO FROM "{node_id}" OVER {edge} YIELD dst(edge) AS id'
         result = self._session.execute(query)
         neighbors = []
         if result.is_succeeded():
@@ -243,7 +310,11 @@ class NebulaGraphAdapter(BaseAdapter):
         edge_type: str | None = None,
     ) -> list[str]:
         """BFS traversal using native NebulaGraph GO statement."""
-        edge = edge_type or "CONNECTS"
+        # Use * for all edges, or escape specific edge type
+        if edge_type:
+            edge = self._escape_name(edge_type)
+        else:
+            edge = "*"  # All edge types
         # NebulaGraph GO with 1..N steps performs BFS
         query = f'GO 1 TO {max_depth} STEPS FROM "{start}" OVER {edge} YIELD DISTINCT dst(edge) AS id'
         result = self._session.execute(query)
