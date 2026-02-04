@@ -77,9 +77,12 @@ class ArangoDBAdapter(BaseAdapter):
     def _ensure_collections(self) -> None:
         """Create default collections if not exist."""
         if not self._db.has_collection("nodes"):
-            self._db.create_collection("nodes")
+            nodes_col = self._db.create_collection("nodes")
+            # Add index on id field for fast lookups
+            nodes_col.add_hash_index(fields=["id"], unique=False)
         if not self._db.has_collection("edges"):
-            self._db.create_collection("edges", edge=True)
+            edges_col = self._db.create_collection("edges", edge=True)
+            # Edge collections automatically have _from/_to indexes
 
         if not self._db.has_graph("benchmark_graph"):
             edge_def = {
@@ -163,21 +166,50 @@ class ArangoDBAdapter(BaseAdapter):
         return count
 
     def get_neighbors(self, node_id: str, *, edge_type: str | None = None) -> list[str]:
-        if edge_type:
-            query = """
-            FOR e IN edges
-                FILTER e._from == @from AND e._type == @type
-                RETURN PARSE_IDENTIFIER(e._to).key
-            """
-            cursor = self._db.aql.execute(query, bind_vars={"from": f"nodes/{node_id}", "type": edge_type})
-        else:
-            query = """
-            FOR e IN edges
-                FILTER e._from == @from
-                RETURN PARSE_IDENTIFIER(e._to).key
-            """
-            cursor = self._db.aql.execute(query, bind_vars={"from": f"nodes/{node_id}"})
+        # Use native graph traversal for better performance
+        query = """
+        FOR v IN 1..1 OUTBOUND @start GRAPH 'benchmark_graph'
+            OPTIONS {bfs: true}
+            RETURN v._key
+        """
+        cursor = self._db.aql.execute(query, bind_vars={"start": f"nodes/{node_id}"})
+        return list(cursor)
 
+    def traverse_bfs(
+        self,
+        start: str,
+        *,
+        max_depth: int = 3,
+        edge_type: str | None = None,
+    ) -> list[str]:
+        """BFS traversal using native ArangoDB graph traversal."""
+        query = """
+        FOR v IN 0..@depth OUTBOUND @start GRAPH 'benchmark_graph'
+            OPTIONS {bfs: true, uniqueVertices: 'global'}
+            RETURN DISTINCT v._key
+        """
+        cursor = self._db.aql.execute(
+            query, bind_vars={"start": f"nodes/{start}", "depth": max_depth}
+        )
+        return list(cursor)
+
+    def traverse_dfs(
+        self,
+        start: str,
+        *,
+        max_depth: int = 3,
+        edge_type: str | None = None,
+    ) -> list[str]:
+        """DFS traversal using native ArangoDB graph traversal."""
+        # Use 'path' uniqueness for DFS (ArangoDB doesn't support 'global' with DFS)
+        query = """
+        FOR v IN 0..@depth OUTBOUND @start GRAPH 'benchmark_graph'
+            OPTIONS {bfs: false, uniqueVertices: 'path'}
+            RETURN DISTINCT v._key
+        """
+        cursor = self._db.aql.execute(
+            query, bind_vars={"start": f"nodes/{start}", "depth": max_depth}
+        )
         return list(cursor)
 
     def shortest_path(
@@ -255,3 +287,155 @@ class ArangoDBAdapter(BaseAdapter):
         for count in cursor:
             return count
         return 0
+
+    def bfs_levels(self, source: str) -> dict[str, int]:
+        """BFS using native ArangoDB graph traversal."""
+        query = """
+        FOR v, e, p IN 0..100 OUTBOUND @start GRAPH 'benchmark_graph'
+            OPTIONS {bfs: true, uniqueVertices: 'global'}
+            RETURN {id: v._key, depth: LENGTH(p.edges)}
+        """
+        try:
+            cursor = self._db.aql.execute(query, bind_vars={"start": f"nodes/{source}"})
+            return {record["id"]: record["depth"] for record in cursor if record["id"]}
+        except Exception as e:
+            msg = f"ArangoDB BFS failed: {e}"
+            raise NotImplementedError(msg) from e
+
+    def pagerank(
+        self,
+        *,
+        damping: float = 0.85,
+        max_iterations: int = 100,
+        tolerance: float = 1e-6,
+    ) -> dict[str, float]:
+        """PageRank using ArangoDB Pregel."""
+        import time
+
+        try:
+            pregel = self._db.pregel
+            job_id = pregel.create_job(
+                graph="benchmark_graph",
+                algorithm="pagerank",
+                params={
+                    "dampingFactor": damping,
+                    "maxGSS": max_iterations,
+                    "threshold": tolerance,
+                    "resultField": "_pagerank",
+                },
+            )
+            while True:
+                status = pregel.job(job_id)
+                if status["state"] in ("done", "canceled", "fatal error"):
+                    break
+                time.sleep(0.1)
+
+            if status["state"] != "done":
+                raise RuntimeError(f"Pregel job failed: {status}")
+
+            query = "FOR n IN nodes RETURN {id: n._key, score: n._pagerank}"
+            cursor = self._db.aql.execute(query)
+            return {record["id"]: record["score"] for record in cursor if record["id"] and record["score"]}
+        except Exception as e:
+            msg = f"ArangoDB PageRank failed: {e}"
+            raise NotImplementedError(msg) from e
+
+    def weakly_connected_components(self) -> list[set[str]]:
+        """WCC using ArangoDB Pregel."""
+        import time
+
+        try:
+            pregel = self._db.pregel
+            job_id = pregel.create_job(
+                graph="benchmark_graph",
+                algorithm="wcc",
+                params={"resultField": "_wcc"},
+            )
+            while True:
+                status = pregel.job(job_id)
+                if status["state"] in ("done", "canceled", "fatal error"):
+                    break
+                time.sleep(0.1)
+
+            if status["state"] != "done":
+                raise RuntimeError(f"Pregel job failed: {status}")
+
+            query = "FOR n IN nodes RETURN {id: n._key, component: n._wcc}"
+            cursor = self._db.aql.execute(query)
+            components: dict[int, set[str]] = {}
+            for record in cursor:
+                cid = record["component"]
+                nid = record["id"]
+                if nid and cid is not None:
+                    if cid not in components:
+                        components[cid] = set()
+                    components[cid].add(str(nid))
+            return list(components.values())
+        except Exception as e:
+            msg = f"ArangoDB WCC failed: {e}"
+            raise NotImplementedError(msg) from e
+
+    def sssp(self, source: str, *, weight_attr: str = "weight") -> dict[str, float]:
+        """SSSP using ArangoDB Pregel."""
+        import time
+
+        try:
+            pregel = self._db.pregel
+            job_id = pregel.create_job(
+                graph="benchmark_graph",
+                algorithm="sssp",
+                params={
+                    "source": f"nodes/{source}",
+                    "resultField": "_sssp",
+                },
+            )
+            while True:
+                status = pregel.job(job_id)
+                if status["state"] in ("done", "canceled", "fatal error"):
+                    break
+                time.sleep(0.1)
+
+            if status["state"] != "done":
+                raise RuntimeError(f"Pregel job failed: {status}")
+
+            query = "FOR n IN nodes RETURN {id: n._key, distance: n._sssp}"
+            cursor = self._db.aql.execute(query)
+            return {record["id"]: record["distance"] for record in cursor if record["id"] and record["distance"] is not None}
+        except Exception as e:
+            msg = f"ArangoDB SSSP failed: {e}"
+            raise NotImplementedError(msg) from e
+
+    def community_detection(self, *, algorithm: str = "louvain") -> list[set[str]]:
+        """Community detection using ArangoDB Pregel LPA."""
+        import time
+
+        try:
+            pregel = self._db.pregel
+            job_id = pregel.create_job(
+                graph="benchmark_graph",
+                algorithm="labelpropagation",
+                params={"resultField": "_community"},
+            )
+            while True:
+                status = pregel.job(job_id)
+                if status["state"] in ("done", "canceled", "fatal error"):
+                    break
+                time.sleep(0.1)
+
+            if status["state"] != "done":
+                raise RuntimeError(f"Pregel job failed: {status}")
+
+            query = "FOR n IN nodes RETURN {id: n._key, community: n._community}"
+            cursor = self._db.aql.execute(query)
+            communities: dict[int, set[str]] = {}
+            for record in cursor:
+                cid = record["community"]
+                nid = record["id"]
+                if nid and cid is not None:
+                    if cid not in communities:
+                        communities[cid] = set()
+                    communities[cid].add(str(nid))
+            return list(communities.values())
+        except Exception as e:
+            msg = f"ArangoDB community detection failed: {e}"
+            raise NotImplementedError(msg) from e

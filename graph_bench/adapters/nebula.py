@@ -234,3 +234,35 @@ class NebulaGraphAdapter(BaseAdapter):
         if result.is_succeeded() and result.row_size() > 0:
             return result.row_values(0)[0].as_int()
         return 0
+
+    def traverse_bfs(
+        self,
+        start: str,
+        *,
+        max_depth: int = 3,
+        edge_type: str | None = None,
+    ) -> list[str]:
+        """BFS traversal using native NebulaGraph GO statement."""
+        edge = edge_type or "CONNECTS"
+        # NebulaGraph GO with 1..N steps performs BFS
+        query = f'GO 1 TO {max_depth} STEPS FROM "{start}" OVER {edge} YIELD DISTINCT dst(edge) AS id'
+        result = self._session.execute(query)
+        visited = [start]
+        if result.is_succeeded():
+            for i in range(result.row_size()):
+                val = result.row_values(i)[0]
+                node_id = val.as_string() if hasattr(val, "as_string") else str(val)
+                if node_id not in visited:
+                    visited.append(node_id)
+        return visited
+
+    def traverse_dfs(
+        self,
+        start: str,
+        *,
+        max_depth: int = 3,
+        edge_type: str | None = None,
+    ) -> list[str]:
+        """DFS traversal - NebulaGraph doesn't have native DFS, use GO statement."""
+        # NebulaGraph GO is BFS-like, but we can still use it for traversal
+        return self.traverse_bfs(start, max_depth=max_depth, edge_type=edge_type)
