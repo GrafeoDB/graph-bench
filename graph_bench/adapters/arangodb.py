@@ -57,7 +57,7 @@ class ArangoDBAdapter(BaseAdapter):
 
         uri = uri or get_env("ARANGO_URI", default="http://localhost:8529")
         user = kwargs.get("user") or get_env("ARANGO_USER", default="root")
-        password = kwargs.get("password") or get_env("ARANGO_PASSWORD", default="")
+        password = kwargs.get("password") or get_env("ARANGO_PASSWORD", default="benchmark")
         database = kwargs.get("database") or get_env("ARANGO_DATABASE", default="benchmark")
 
         if uri is None:
