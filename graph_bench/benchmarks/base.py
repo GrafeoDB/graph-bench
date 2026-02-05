@@ -86,7 +86,15 @@ class BaseBenchmark(ABC):
 
     def run(self, adapter: GraphDatabaseAdapter, scale: ScaleConfig) -> Metrics:
         """Execute the benchmark and return metrics."""
+        from graph_bench.utils.memory import get_container_memory, get_process_memory
+
         self.setup(adapter, scale)
+
+        # Measure memory before benchmark
+        if adapter.is_embedded:
+            mem_before = get_process_memory()
+        else:
+            mem_before = get_container_memory(adapter.name)
 
         try:
             for _ in range(scale.warmup_iterations):
@@ -113,10 +121,20 @@ class BaseBenchmark(ABC):
             total_items = items_processed // scale.measurement_iterations if scale.measurement_iterations else 0
             throughput = timing_stats.ops_per_second * total_items if total_items else timing_stats.ops_per_second
 
+            # Measure memory after benchmark
+            if adapter.is_embedded:
+                mem_after = get_process_memory()
+            else:
+                mem_after = get_container_memory(adapter.name)
+
+            # Use peak memory (max of before/after as approximation)
+            peak_memory = max(mem_before, mem_after) if mem_before or mem_after else None
+
             return Metrics(
                 timing=timing_stats,
                 throughput=throughput,
                 items_processed=items_processed,
+                memory_bytes=peak_memory,
             )
         finally:
             self.teardown(adapter)

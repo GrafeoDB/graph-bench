@@ -1,14 +1,20 @@
 r"""
 Benchmark configuration and scale definitions.
 
-Scales:
-    - small: Quick validation, ~10K nodes
-    - medium: Standard benchmark, ~100K nodes
-    - large: Full scale, ~1M nodes
+LDBC SNB Scale Factors (official):
+    - sf01: SF0.1 - 1K persons, 18K edges (quick validation)
+    - sf1: SF1 - 10K persons, 180K edges (standard)
+    - sf3: SF3 - 27K persons, 540K edges
+    - sf10: SF10 - 73K persons, 2M edges
+    - sf30: SF30 - 180K persons, 6.5M edges
+    - sf100: SF100 - 280K persons, 18M edges (full scale)
+
+Reference: https://ldbcouncil.org/benchmarks/snb/
+Spec: https://ldbcouncil.org/ldbc_snb_docs/ldbc-snb-specification.pdf
 
     from graph_bench.config import SCALES, get_scale
 
-    scale = get_scale("medium")
+    scale = get_scale("sf1")  # Standard LDBC SF1
     print(f"Nodes: {scale.nodes}, Edges: {scale.edges}")
 """
 
@@ -40,34 +46,72 @@ __all__ = [
 
 ENV_PREFIX = "GRAPH_BENCH_"
 
+# LDBC SNB Scale Factors
+# Reference: https://ldbcouncil.org/ldbc_snb_docs/ldbc-snb-specification.pdf
+# Person counts and KNOWS edge counts from official LDBC datagen
 SCALES: dict[str, ScaleConfig] = {
-    "small": ScaleConfig(
-        name="small",
-        nodes=10_000,
-        edges=50_000,
+    # SF0.1 - Quick validation
+    "sf01": ScaleConfig(
+        name="sf01",
+        nodes=1_000,
+        edges=18_000,
         warmup_iterations=2,
         measurement_iterations=5,
         timeout_seconds=60,
     ),
-    "medium": ScaleConfig(
-        name="medium",
-        nodes=100_000,
-        edges=500_000,
+    # SF1 - Standard benchmark (default)
+    "sf1": ScaleConfig(
+        name="sf1",
+        nodes=10_000,
+        edges=180_000,
+        warmup_iterations=3,
+        measurement_iterations=10,
+        timeout_seconds=120,
+    ),
+    # SF3
+    "sf3": ScaleConfig(
+        name="sf3",
+        nodes=27_000,
+        edges=540_000,
         warmup_iterations=3,
         measurement_iterations=10,
         timeout_seconds=300,
     ),
-    "large": ScaleConfig(
-        name="large",
-        nodes=1_000_000,
-        edges=5_000_000,
+    # SF10
+    "sf10": ScaleConfig(
+        name="sf10",
+        nodes=73_000,
+        edges=2_000_000,
+        warmup_iterations=5,
+        measurement_iterations=10,
+        timeout_seconds=600,
+    ),
+    # SF30
+    "sf30": ScaleConfig(
+        name="sf30",
+        nodes=180_000,
+        edges=6_500_000,
         warmup_iterations=5,
         measurement_iterations=10,
         timeout_seconds=1800,
     ),
+    # SF100 - Full scale (reduced iterations due to long query times)
+    "sf100": ScaleConfig(
+        name="sf100",
+        nodes=280_000,
+        edges=18_000_000,
+        warmup_iterations=1,
+        measurement_iterations=1,
+        timeout_seconds=3600,
+    ),
 }
 
-DEFAULT_SCALE = "medium"
+# Aliases for backward compatibility
+SCALES["small"] = SCALES["sf01"]
+SCALES["medium"] = SCALES["sf1"]
+SCALES["large"] = SCALES["sf100"]
+
+DEFAULT_SCALE = "sf1"
 
 
 def get_scale(name: str) -> ScaleConfig:

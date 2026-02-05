@@ -50,6 +50,10 @@ class GrafeoAdapter(BaseAdapter):
         except Exception:
             return "unknown"
 
+    @property
+    def is_embedded(self) -> bool:
+        return True
+
     def connect(self, *, uri: str | None = None, **kwargs: Any) -> None:
         try:
             from grafeo import GrafeoDB
@@ -82,6 +86,8 @@ class GrafeoAdapter(BaseAdapter):
         label: str = "Node",
         batch_size: int = 1000,
     ) -> int:
+        # Grafeo's native Python API is most efficient for batch inserts
+        # GQL UNWIND has limitations with property setting from variables
         count = 0
         for i in range(0, len(nodes), batch_size):
             batch = nodes[i : i + batch_size]
@@ -90,7 +96,7 @@ class GrafeoAdapter(BaseAdapter):
                 self._db.create_node([label], props)
                 count += 1
 
-        # Create property index on "id" for O(1) lookups (matches LadybugDB PRIMARY KEY)
+        # Create property index on "id" for O(1) lookups
         if not self._id_index_created and hasattr(self._db, "create_property_index"):
             self._db.create_property_index("id")
             self._id_index_created = True
@@ -136,10 +142,16 @@ class GrafeoAdapter(BaseAdapter):
         *,
         batch_size: int = 1000,
     ) -> int:
+        # Grafeo's native Python API is most efficient
+        # GQL UNWIND has limitations with property access from variables
         count = 0
         for src, tgt, edge_type, props in edges:
-            src_result = self._db.execute("MATCH (n {id: $id}) RETURN id(n) as nid", {"id": src})
-            tgt_result = self._db.execute("MATCH (n {id: $id}) RETURN id(n) as nid", {"id": tgt})
+            src_result = self._db.execute(
+                "MATCH (n {id: $id}) RETURN id(n) as nid", {"id": src}
+            )
+            tgt_result = self._db.execute(
+                "MATCH (n {id: $id}) RETURN id(n) as nid", {"id": tgt}
+            )
 
             src_id = None
             tgt_id = None

@@ -17,7 +17,7 @@ uv run ty check graph_bench/
 
 ## Project Structure
 
-```
+```text
 graph-bench/
 ├── graph_bench/
 │   ├── adapters/          # Database adapters
@@ -33,7 +33,11 @@ graph-bench/
 │   │   ├── pattern.py     # Pattern matching benchmarks
 │   │   ├── structure.py   # Graph structure benchmarks
 │   │   ├── write.py       # Write operation benchmarks
-│   │   └── query.py       # Query benchmarks
+│   │   ├── query.py       # Query benchmarks
+│   │   ├── snb_interactive.py  # LDBC SNB Interactive benchmarks
+│   │   ├── graphanalytics.py   # LDBC GraphAnalytics benchmarks
+│   │   ├── ldbc_acid.py   # LDBC ACID tests
+│   │   └── concurrent.py  # Concurrent workload benchmarks
 │   ├── cli/               # CLI interface
 │   ├── runner/            # Benchmark orchestration
 │   ├── config.py          # Configuration
@@ -54,6 +58,10 @@ graph-bench/
 - `pattern` - Triangles, common neighbors
 - `structure` - Graph structure analysis
 - `write` - Write-heavy operations
+- `ldbc_snb` - LDBC Social Network Benchmark interactive queries
+- `ldbc_graphanalytics` - LDBC standard graph algorithms (BFS, PageRank, WCC, etc.)
+- `ldbc_acid` - LDBC ACID isolation anomaly tests
+- `concurrent` - Concurrent/multi-threaded workloads
 
 ### 2. Create the benchmark
 

@@ -85,12 +85,19 @@ class FalkorDBAdapter(BaseAdapter):
     ) -> int:
         count = 0
         for i in range(0, len(nodes), batch_size):
-            batch = nodes[i : i + batch_size]
-            for node in batch:
-                props = ", ".join(f"{k}: ${k}" for k in node.keys())
-                query = f"CREATE (n:{label} {{{props}}})"
-                self._graph.query(query, node)
-                count += 1
+            batch = list(nodes[i : i + batch_size])
+            try:
+                # Use UNWIND for batch insert
+                query = f"UNWIND $nodes AS node CREATE (n:{label}) SET n = node"
+                self._graph.query(query, {"nodes": batch})
+                count += len(batch)
+            except Exception:
+                # Fall back to individual inserts if UNWIND fails
+                for node in batch:
+                    props = ", ".join(f"{k}: ${k}" for k in node.keys())
+                    query = f"CREATE (n:{label} {{{props}}})"
+                    self._graph.query(query, node)
+                    count += 1
         return count
 
     def get_node(self, node_id: str) -> dict[str, Any] | None:
@@ -121,16 +128,38 @@ class FalkorDBAdapter(BaseAdapter):
         batch_size: int = 1000,
     ) -> int:
         count = 0
-        for src, tgt, edge_type, props in edges:
-            props_str = ", ".join(f"{k}: ${k}" for k in props.keys()) if props else ""
-            props_clause = f" {{{props_str}}}" if props_str else ""
-            query = f"""
-            MATCH (a {{id: $src}}), (b {{id: $tgt}})
-            CREATE (a)-[r:{edge_type}{props_clause}]->(b)
-            """
-            params = {"src": src, "tgt": tgt, **props}
-            self._graph.query(query, params)
-            count += 1
+        for i in range(0, len(edges), batch_size):
+            batch = edges[i : i + batch_size]
+            # Group edges by type for UNWIND (Cypher requires static relationship types)
+            by_type: dict[str, list[dict[str, Any]]] = {}
+            for src, tgt, edge_type, props in batch:
+                if edge_type not in by_type:
+                    by_type[edge_type] = []
+                by_type[edge_type].append({"src": src, "tgt": tgt, "props": props})
+
+            for edge_type, edge_list in by_type.items():
+                try:
+                    query = f"""
+                    UNWIND $edges AS e
+                    MATCH (a {{id: e.src}}), (b {{id: e.tgt}})
+                    CREATE (a)-[r:{edge_type}]->(b)
+                    SET r = e.props
+                    """
+                    self._graph.query(query, {"edges": edge_list})
+                    count += len(edge_list)
+                except Exception:
+                    # Fall back to individual inserts
+                    for edge in edge_list:
+                        props = edge["props"]
+                        props_str = ", ".join(f"{k}: ${k}" for k in props.keys())
+                        props_clause = f" {{{props_str}}}" if props_str else ""
+                        query = f"""
+                        MATCH (a {{id: $src}}), (b {{id: $tgt}})
+                        CREATE (a)-[r:{edge_type}{props_clause}]->(b)
+                        """
+                        params = {"src": edge["src"], "tgt": edge["tgt"], **props}
+                        self._graph.query(query, params)
+                        count += 1
         return count
 
     def get_neighbors(self, node_id: str, *, edge_type: str | None = None) -> list[str]:

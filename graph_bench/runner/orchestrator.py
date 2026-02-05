@@ -9,6 +9,7 @@ Benchmark orchestrator for coordinating execution.
 
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -88,6 +89,34 @@ class BenchmarkOrchestrator:
         """Set callback for progress updates."""
         self._progress_callback = callback
 
+    def _run_with_timeout(
+        self,
+        benchmark: BaseBenchmark,
+        adapter: GraphDatabaseAdapter,
+        scale: ScaleConfig,
+        timeout_seconds: int,
+    ) -> Any:
+        """Run benchmark with timeout enforcement.
+
+        Args:
+            benchmark: Benchmark to run.
+            adapter: Database adapter.
+            scale: Scale configuration.
+            timeout_seconds: Maximum seconds before timeout.
+
+        Returns:
+            Metrics from benchmark execution.
+
+        Raises:
+            TimeoutError: If benchmark exceeds timeout.
+        """
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(benchmark.run, adapter, scale)
+            try:
+                return future.result(timeout=timeout_seconds)
+            except FuturesTimeout:
+                raise TimeoutError(f"Benchmark timed out after {timeout_seconds}s")
+
     def run(
         self,
         adapters: list[GraphDatabaseAdapter],
@@ -160,12 +189,14 @@ class BenchmarkOrchestrator:
         result: OrchestratorResult,
     ) -> None:
         """Run all benchmarks for a single adapter."""
+        timeout = self._config.timeout_override or scale.timeout_seconds
+
         for benchmark in benchmarks:
             if self._progress_callback:
                 self._progress_callback(adapter.name, benchmark.name, "running")
 
             try:
-                metrics = benchmark.run(adapter, scale)
+                metrics = self._run_with_timeout(benchmark, adapter, scale, timeout)
                 bench_result = BenchmarkResult(
                     benchmark_name=benchmark.name,
                     database=adapter.name,

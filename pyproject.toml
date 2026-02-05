@@ -1,11 +1,11 @@
 [project]
 name = "graph-bench"
-version = "0.1.0"
-description = "Comprehensive benchmark suite for graph databases"
+version = "0.2.0"
+description = "Extensive benchmark suite for graph databases"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = ["networkx>=3.0"]
-authors = [{ name = "Steven Grond" }]
+dependencies = ["networkx>=3.0", "psutil>=5.9"]
+authors = [{ name = "S.T. Grond" }]
 license = { text = "Apache-2.0" }
 keywords = [
     "benchmark",
@@ -40,7 +40,7 @@ dev = [
     "pytest-cov>=7.0.0",
     "ruff>=0.15.0",
     "prek>=0.3.1",
-    "ty>=0.0.14",
+    "ty>=0.0.15",
 ]
 cli = ["typer>=0.15.0"]
 neo4j = ["neo4j>=5.0"]
@@ -55,10 +55,10 @@ nebula = ["nebula3-python>=3.0"]
 datasets = ["faker>=20.0"]
 reporting = ["matplotlib>=3.8", "pandas>=2.0"]
 all-adapters = [
-    "neo4j>=6.1.0",
+    "neo4j>=5.0",
     "real_ladybug>=0.14.1",
     "python-arango>=8.2.6",
-    "grafeo>=0.2.5",
+    "grafeo>=0.2.7",
     "duckdb>=1.4.4",
     "FalkorDB>=1.4.0",
     "nebula3-python>=3.8.3",

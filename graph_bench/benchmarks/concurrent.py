@@ -271,7 +271,7 @@ class ReadAfterWriteBenchmark(ConcurrentSnbBenchmarkBase):
 # =============================================================================
 
 
-@BenchmarkRegistry.register("mixed_workload", category="concurrent")
+@BenchmarkRegistry.register("concurrent_mixed", category="concurrent")
 class MixedWorkloadBenchmark(ConcurrentSnbBenchmarkBase):
     """Test concurrent mixed read/write workload.
 
@@ -281,7 +281,7 @@ class MixedWorkloadBenchmark(ConcurrentSnbBenchmarkBase):
 
     @property
     def name(self) -> str:
-        return "mixed_workload"
+        return "concurrent_mixed"
 
     def run_iteration(self, adapter: GraphDatabaseAdapter, scale: ScaleConfig) -> int:
         """Run mixed read/write workload."""

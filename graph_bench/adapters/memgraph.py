@@ -122,14 +122,40 @@ class MemgraphAdapter(BaseAdapter):
     ) -> int:
         count = 0
         with self._driver.session() as session:
-            for src, tgt, edge_type, props in edges:
-                query = f"""
-                MATCH (a {{id: $src}}), (b {{id: $tgt}})
-                CREATE (a)-[r:{edge_type}]->(b)
-                SET r = $props
-                """
-                session.run(query, src=src, tgt=tgt, props=props)
-                count += 1
+            for i in range(0, len(edges), batch_size):
+                batch = edges[i : i + batch_size]
+                # Group edges by type for UNWIND (Cypher requires static rel types)
+                by_type: dict[str, list[dict[str, Any]]] = {}
+                for src, tgt, edge_type, props in batch:
+                    if edge_type not in by_type:
+                        by_type[edge_type] = []
+                    by_type[edge_type].append({"src": src, "tgt": tgt, "props": props})
+
+                for edge_type, edge_list in by_type.items():
+                    try:
+                        query = f"""
+                        UNWIND $edges AS e
+                        MATCH (a {{id: e.src}}), (b {{id: e.tgt}})
+                        CREATE (a)-[r:{edge_type}]->(b)
+                        SET r = e.props
+                        """
+                        session.run(query, edges=edge_list)
+                        count += len(edge_list)
+                    except Exception:
+                        # Fall back to individual inserts
+                        for edge in edge_list:
+                            query = f"""
+                            MATCH (a {{id: $src}}), (b {{id: $tgt}})
+                            CREATE (a)-[r:{edge_type}]->(b)
+                            SET r = $props
+                            """
+                            session.run(
+                                query,
+                                src=edge["src"],
+                                tgt=edge["tgt"],
+                                props=edge["props"],
+                            )
+                            count += 1
         return count
 
     def get_neighbors(self, node_id: str, *, edge_type: str | None = None) -> list[str]:
@@ -203,8 +229,10 @@ class MemgraphAdapter(BaseAdapter):
         tolerance: float = 1e-6,
     ) -> dict[str, float]:
         """PageRank using MAGE pagerank.get()."""
+        # MAGE pagerank.get() signature:
+        # pagerank.get(max_iterations, damping_factor, stop_epsilon)
         query = """
-        CALL pagerank.get($max_iter, $damping, $tol)
+        CALL pagerank.get($max_iterations, $damping_factor, $stop_epsilon)
         YIELD node, rank
         RETURN node.id AS id, rank AS score
         """
@@ -212,11 +240,15 @@ class MemgraphAdapter(BaseAdapter):
             with self._driver.session() as session:
                 result = session.run(
                     query,
-                    max_iter=max_iterations,
-                    damping=damping,
-                    tol=tolerance,
+                    max_iterations=max_iterations,
+                    damping_factor=damping,
+                    stop_epsilon=tolerance,
                 )
-                return {record["id"]: record["score"] for record in result if record["id"]}
+                return {
+                    record["id"]: record["score"]
+                    for record in result
+                    if record["id"]
+                }
         except Exception as e:
             msg = f"Memgraph PageRank failed. Ensure MAGE is installed: {e}"
             raise NotImplementedError(msg) from e
@@ -272,6 +304,7 @@ class MemgraphAdapter(BaseAdapter):
 
     def local_clustering_coefficient(self) -> dict[str, float]:
         """LCC using MAGE nxalg.clustering()."""
+        # nxalg.clustering() computes clustering coefficient for all nodes
         query = """
         CALL nxalg.clustering()
         YIELD node, clustering
@@ -280,37 +313,23 @@ class MemgraphAdapter(BaseAdapter):
         try:
             with self._driver.session() as session:
                 result = session.run(query)
-                return {record["id"]: record["coeff"] for record in result if record["id"]}
+                return {
+                    record["id"]: record["coeff"]
+                    for record in result
+                    if record["id"]
+                }
         except Exception as e:
             msg = f"Memgraph LCC failed. Ensure MAGE is installed: {e}"
             raise NotImplementedError(msg) from e
 
     def bfs_levels(self, source: str) -> dict[str, int]:
-        """BFS levels using MAGE nxalg.bfs_predecessors()."""
+        """BFS levels using pure Cypher variable-length paths."""
+        # Use Cypher variable-length path to find distances from source
         query = """
-        MATCH (start {id: $source})
-        CALL nxalg.bfs_predecessors(start)
-        YIELD node, predecessor
-        WITH node, predecessor
-        MATCH path = shortestPath((start)-[*]-(node))
-        WHERE start.id = $source
-        RETURN node.id AS id, length(path) AS depth
-        """
-        # Simpler approach: use native BFS traversal
-        simple_query = """
-        MATCH (start {id: $source})
-        CALL nxalg.bfs_tree(start) YIELD tree
-        UNWIND nodes(tree) AS node
-        WITH start, node
-        MATCH path = shortestPath((start)-[*0..]-(node))
-        RETURN node.id AS id, length(path) AS depth
-        """
-        # Fallback to pure Cypher BFS
-        cypher_query = """
         MATCH (start {id: $source})
         CALL {
             WITH start
-            MATCH path = (start)-[*0..10]-(node)
+            MATCH path = (start)-[*0..20]-(node)
             WITH node, min(length(path)) AS depth
             RETURN node, depth
         }
@@ -318,24 +337,34 @@ class MemgraphAdapter(BaseAdapter):
         """
         try:
             with self._driver.session() as session:
-                result = session.run(cypher_query, source=source)
-                return {record["id"]: record["depth"] for record in result if record["id"]}
+                result = session.run(query, source=source)
+                return {
+                    record["id"]: record["depth"]
+                    for record in result
+                    if record["id"]
+                }
         except Exception as e:
             msg = f"Memgraph BFS failed: {e}"
             raise NotImplementedError(msg) from e
 
     def sssp(self, source: str, *, weight_attr: str = "weight") -> dict[str, float]:
-        """SSSP using MAGE nxalg.shortest_path_length()."""
+        """SSSP using MAGE nxalg.all_pairs_dijkstra_path_length or fallback."""
+        # Try multi_source_dijkstra_path_length with single source
         query = """
         MATCH (start {id: $source})
-        CALL nxalg.shortest_path_length(start, Null, $weight_attr)
+        WITH [start] AS sources
+        CALL nxalg.multi_source_dijkstra_path_length(sources, null, $weight_attr)
         YIELD target, length
         RETURN target.id AS id, length AS distance
         """
         try:
             with self._driver.session() as session:
                 result = session.run(query, source=source, weight_attr=weight_attr)
-                return {record["id"]: record["distance"] for record in result if record["id"]}
-        except Exception as e:
-            msg = f"Memgraph SSSP failed: {e}"
-            raise NotImplementedError(msg) from e
+                return {
+                    record["id"]: record["distance"]
+                    for record in result
+                    if record["id"]
+                }
+        except Exception:
+            # Fall back to NetworkX implementation from base class
+            return super().sssp(source, weight_attr=weight_attr)

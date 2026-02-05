@@ -43,16 +43,30 @@ if typer is not None:
         scale: Annotated[str, typer.Option("-s", "--scale", help="Scale: small, medium, large")] = "medium",
         output: Annotated[Path, typer.Option("-o", "--output", help="Output directory")] = Path("./results"),
         format_: Annotated[
-            str, typer.Option("-f", "--format", help="Output format: json, csv, markdown, all")
+            str, typer.Option("-f", "--format", help="Output format: json, csv, markdown, template, all")
         ] = "json",
         verbose: Annotated[bool, typer.Option("-v", "--verbose", help="Verbose output")] = False,
         dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would run")] = False,
+        sequential: Annotated[
+            bool, typer.Option("--sequential", help="Run each database separately and aggregate results")
+        ] = False,
+        timeout: Annotated[
+            int | None, typer.Option("--timeout", help="Timeout in seconds per benchmark")
+        ] = None,
+        all_benchmarks: Annotated[
+            bool,
+            typer.Option(
+                "--all",
+                help="Run comprehensive suite: SNB (small/medium/large), Graph Analytics (medium), Concurrent (small)",
+            ),
+        ] = False,
     ) -> None:
         """Run benchmarks on graph databases."""
         from graph_bench.adapters import AdapterRegistry
         from graph_bench.benchmarks import BenchmarkRegistry
         from graph_bench.config import get_scale
         from graph_bench.reporting import CsvExporter, JsonExporter, MarkdownExporter, ResultCollector
+        from graph_bench.reporting.template import TemplateExporter
         from graph_bench.runner import BenchmarkOrchestrator, OrchestratorConfig
 
         db_list = databases.split(",") if databases else AdapterRegistry.list()
@@ -66,14 +80,27 @@ if typer is not None:
 
         if dry_run:
             typer.echo("\n[DRY RUN] Would run:")
-            for db in db_list:
-                bench_names = bench_list or BenchmarkRegistry.list()
-                if categories:
-                    bench_names = [
-                        b for b in bench_names
-                        if BenchmarkRegistry.get(b) and BenchmarkRegistry.get(b).category in categories  # type: ignore
-                    ]
-                typer.echo(f"  {db}: {', '.join(bench_names)}")
+            if all_benchmarks:
+                typer.echo("  Comprehensive benchmark suite (--all):")
+                benchmark_plan = [
+                    ("ldbc_snb", ["small", "medium", "large"]),
+                    ("ldbc_graphanalytics", ["medium"]),
+                    ("concurrent", ["small"]),
+                ]
+                for cat, scales in benchmark_plan:
+                    cat_benches = BenchmarkRegistry.by_category(cat)
+                    typer.echo(f"    {cat} @ {', '.join(scales)}: {', '.join(cat_benches)}")
+                typer.echo(f"  Databases: {', '.join(db_list)}")
+            else:
+                for db in db_list:
+                    bench_names = bench_list or BenchmarkRegistry.list()
+                    if categories:
+                        bench_names = [
+                            b for b in bench_names
+                            if BenchmarkRegistry.get(b)
+                            and BenchmarkRegistry.get(b).category in categories  # type: ignore
+                        ]
+                    typer.echo(f"  {db}: {', '.join(bench_names)}")
             return
 
         adapters = []
@@ -92,23 +119,73 @@ if typer is not None:
             raise typer.Exit(1)
 
         scale_config = get_scale(scale)
-        config = OrchestratorConfig(scale=scale_config, benchmarks=bench_list, categories=categories, verbose=verbose)
+        config = OrchestratorConfig(
+            scale=scale_config,
+            benchmarks=bench_list,
+            categories=categories,
+            verbose=verbose,
+            timeout_override=timeout,
+        )
 
         orchestrator = BenchmarkOrchestrator(config=config)
 
-        if verbose:
-
-            def progress(db: str, bench: str, status: str) -> None:
+        # Define progress callback
+        def progress(db: str, bench: str, status: str) -> None:
+            if verbose:
                 typer.echo(f"  [{db}] {bench}: {status}")
 
+        if verbose:
             orchestrator.set_progress_callback(progress)
-
-        typer.echo(f"\nRunning benchmarks at scale '{scale}'...")
-        result = orchestrator.run(adapters, scale=scale_config)
 
         collector = ResultCollector()
         collector.start_session(scale=scale, databases=[a.name for a in adapters])
-        collector.add_results(result.results)
+
+        if all_benchmarks:
+            # Comprehensive benchmark suite
+            typer.echo("\n=== Running comprehensive benchmark suite ===")
+
+            # Define the benchmark plan: (category, scales)
+            benchmark_plan = [
+                ("ldbc_snb", ["small", "medium", "large"]),
+                ("ldbc_graphanalytics", ["medium"]),
+                ("concurrent", ["small"]),
+            ]
+
+            for cat, scales in benchmark_plan:
+                for s in scales:
+                    typer.echo(f"\n--- {cat} @ {s} ---")
+                    s_config = get_scale(s)
+                    cat_config = OrchestratorConfig(
+                        scale=s_config,
+                        categories=[cat],
+                        verbose=verbose,
+                        timeout_override=timeout,
+                    )
+                    cat_orchestrator = BenchmarkOrchestrator(config=cat_config)
+                    if verbose:
+                        cat_orchestrator.set_progress_callback(progress)
+
+                    if sequential and len(adapters) > 1:
+                        for adapter in adapters:
+                            single_result = cat_orchestrator.run([adapter], scale=s_config)
+                            collector.add_results(single_result.results)
+                    else:
+                        cat_result = cat_orchestrator.run(adapters, scale=s_config)
+                        collector.add_results(cat_result.results)
+        else:
+            typer.echo(f"\nRunning benchmarks at scale '{scale}'...")
+
+            if sequential and len(adapters) > 1:
+                # Run each database separately for better isolation
+                for adapter in adapters:
+                    typer.echo(f"\n--- Running {adapter.name} ---")
+                    single_result = orchestrator.run([adapter], scale=scale_config)
+                    collector.add_results(single_result.results)
+                    typer.echo(f"Completed {adapter.name}: {single_result.success_count} passed")
+            else:
+                result = orchestrator.run(adapters, scale=scale_config)
+                collector.add_results(result.results)
+
         collector.end_session()
 
         output.mkdir(parents=True, exist_ok=True)
@@ -116,7 +193,7 @@ if typer is not None:
 
         formats_to_export = format_.split(",") if "," in format_ else [format_]
         if "all" in formats_to_export:
-            formats_to_export = ["json", "csv", "markdown"]
+            formats_to_export = ["json", "csv", "markdown", "template"]
 
         for fmt in formats_to_export:
             fmt = fmt.strip()
@@ -132,12 +209,16 @@ if typer is not None:
                 path = output / f"{session_id}.md"
                 MarkdownExporter().export(collector, path)
                 typer.echo(f"Exported Markdown: {path}")
+            elif fmt == "template":
+                path = output / f"{session_id}_RESULTS.md"
+                TemplateExporter().export(collector, path)
+                typer.echo(f"Exported Template: {path}")
 
         for adapter in adapters:
             adapter.disconnect()
 
-        success = result.success_count
-        failed = result.failure_count
+        success = sum(1 for r in collector.results if r.ok)
+        failed = sum(1 for r in collector.results if not r.ok)
         typer.echo(f"\nCompleted: {success} successful, {failed} failed")
 
     @app.command()

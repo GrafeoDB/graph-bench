@@ -57,6 +57,10 @@ class DuckDBAdapter(BaseAdapter):
         except Exception:
             return "unknown"
 
+    @property
+    def is_embedded(self) -> bool:
+        return True
+
     def connect(self, *, uri: str | None = None, **kwargs: Any) -> None:
         try:
             import duckdb  # noqa: F401

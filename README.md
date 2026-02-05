@@ -27,11 +27,11 @@ uv run graph-bench run -d grafeo -s small --verbose
 # Compare embedded databases
 uv run graph-bench run -d grafeo,ladybug,duckdb -s small --verbose
 
-# Run all 25 benchmarks
+# Run core benchmarks
 uv run graph-bench run -d grafeo -s medium
 ```
 
-## Benchmarks (25 total)
+## Benchmarks (59 total)
 
 ### Storage (4)
 | Benchmark | What it measures |
@@ -85,6 +85,42 @@ uv run graph-bench run -d grafeo -s medium
 | `property_update` | Update node properties |
 | `edge_add_existing` | Add edges between existing nodes |
 | `mixed_workload` | 80% read / 20% write mix |
+
+### LDBC SNB Interactive (11)
+| Benchmark | What it measures |
+|-----------|------------------|
+| `snb_is1` - `snb_is7` | Short read queries (profile, posts, friends, content) |
+| `snb_ic1` - `snb_ic3`, `snb_ic6` | Complex read queries (multi-hop friends, messages, tags) |
+
+### LDBC GraphAnalytics (6)
+| Benchmark | What it measures |
+|-----------|------------------|
+| `ldbc_bfs` | Breadth-first search (vertex depths) |
+| `ldbc_pagerank` | PageRank centrality |
+| `ldbc_wcc` | Weakly connected components |
+| `ldbc_cdlp` | Community detection (label propagation) |
+| `ldbc_lcc` | Local clustering coefficient |
+| `ldbc_sssp` | Single-source shortest paths |
+
+### LDBC ACID (12)
+| Benchmark | What it measures |
+|-----------|------------------|
+| `acid_atomicity_c` | Commit visibility |
+| `acid_atomicity_rb` | Rollback correctness |
+| `acid_g0` | Dirty write detection |
+| `acid_g1a` - `acid_g1c` | Read anomalies (aborted, intermediate, circular) |
+| `acid_imp`, `acid_pmp` | Item/predicate many-preceders |
+| `acid_otv`, `acid_fr` | Observed transaction vanishes, fractured read |
+| `acid_lu`, `acid_ws` | Lost update, write skew |
+
+### Concurrent (5)
+| Benchmark | What it measures |
+|-----------|------------------|
+| `throughput_scaling` | Multi-threaded throughput |
+| `lost_update` | Lost update under concurrency |
+| `read_after_write` | Read-your-writes consistency |
+| `concurrent_mixed` | Concurrent 80/20 read-write mix |
+| `concurrent_acid` | ACID under concurrent load |
 
 ## Scales
 

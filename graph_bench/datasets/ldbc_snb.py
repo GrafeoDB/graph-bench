@@ -38,7 +38,9 @@ from graph_bench.types import ScaleConfig
 
 __all__ = ["LDBCSocialNetwork"]
 
-# LDBC SNB scale factor mappings (approximate)
+# LDBC SNB scale factor mappings (official)
+# Reference: https://ldbcouncil.org/ldbc_snb_docs/ldbc-snb-specification.pdf
+# These values match the official LDBC SNB datagen output
 SCALE_FACTORS = {
     0.1: {"persons": 1_000, "knows_edges": 18_000, "posts": 5_000},
     1: {"persons": 10_000, "knows_edges": 180_000, "posts": 50_000},

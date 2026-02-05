@@ -48,6 +48,10 @@ class LadybugAdapter(BaseAdapter):
         except Exception:
             return "unknown"
 
+    @property
+    def is_embedded(self) -> bool:
+        return True
+
     def connect(self, *, uri: str | None = None, **kwargs: Any) -> None:
         try:
             from real_ladybug import Connection, Database
@@ -108,25 +112,45 @@ class LadybugAdapter(BaseAdapter):
         nodes: Sequence[dict[str, Any]],
         *,
         label: str = "Node",
-        batch_size: int = 1000,
+        batch_size: int = 500,
     ) -> int:
         import json
 
         count = 0
+        # Process in batches using UNWIND for better performance
         for i in range(0, len(nodes), batch_size):
             batch = nodes[i : i + batch_size]
-            for node in batch:
-                node_id = str(node.get("id", count))
-                props = json.dumps({k: v for k, v in node.items() if k not in ("id", "label")})
-                node_label = node.get("label", label)
-                try:
-                    self._conn.execute(
-                        "CREATE (:Node {id: $id, label: $label, props: $props})",
-                        {"id": node_id, "label": node_label, "props": props},
-                    )
-                    count += 1
-                except Exception:
-                    pass
+            node_data = [
+                {
+                    "id": str(node.get("id", i + j)),
+                    "label": node.get("label", label),
+                    "props": json.dumps({k: v for k, v in node.items() if k not in ("id", "label")}),
+                }
+                for j, node in enumerate(batch)
+            ]
+            try:
+                self._conn.execute(
+                    """
+                    UNWIND $nodes AS n
+                    CREATE (:Node {id: n.id, label: n.label, props: n.props})
+                    """,
+                    {"nodes": node_data},
+                )
+                count += len(batch)
+            except Exception:
+                # Fall back to individual inserts if UNWIND fails
+                for j, node in enumerate(batch):
+                    node_id = str(node.get("id", i + j))
+                    props = json.dumps({k: v for k, v in node.items() if k not in ("id", "label")})
+                    node_label = node.get("label", label)
+                    try:
+                        self._conn.execute(
+                            "CREATE (:Node {id: $id, label: $label, props: $props})",
+                            {"id": node_id, "label": node_label, "props": props},
+                        )
+                        count += 1
+                    except Exception:
+                        pass
         return count
 
     def get_node(self, node_id: str) -> dict[str, Any] | None:
@@ -190,24 +214,48 @@ class LadybugAdapter(BaseAdapter):
         self,
         edges: Sequence[tuple[str, str, str, dict[str, Any]]],
         *,
-        batch_size: int = 1000,
+        batch_size: int = 500,
     ) -> int:
         import json
 
         count = 0
-        for src, tgt, edge_type, props in edges:
-            props_json = json.dumps(props)
+        # Process in batches using UNWIND for better performance
+        for i in range(0, len(edges), batch_size):
+            batch = edges[i : i + batch_size]
+            edge_data = [
+                {
+                    "src": src,
+                    "tgt": tgt,
+                    "type": edge_type,
+                    "props": json.dumps(props),
+                }
+                for src, tgt, edge_type, props in batch
+            ]
             try:
                 self._conn.execute(
                     """
-                    MATCH (a:Node {id: $src}), (b:Node {id: $tgt})
-                    CREATE (a)-[:Edge {edge_type: $type, props: $props}]->(b)
+                    UNWIND $edges AS e
+                    MATCH (a:Node {id: e.src}), (b:Node {id: e.tgt})
+                    CREATE (a)-[:Edge {edge_type: e.type, props: e.props}]->(b)
                     """,
-                    {"src": src, "tgt": tgt, "type": edge_type, "props": props_json},
+                    {"edges": edge_data},
                 )
-                count += 1
+                count += len(batch)
             except Exception:
-                pass
+                # Fall back to individual inserts if UNWIND fails
+                for src, tgt, edge_type, props in batch:
+                    props_json = json.dumps(props)
+                    try:
+                        self._conn.execute(
+                            """
+                            MATCH (a:Node {id: $src}), (b:Node {id: $tgt})
+                            CREATE (a)-[:Edge {edge_type: $type, props: $props}]->(b)
+                            """,
+                            {"src": src, "tgt": tgt, "type": edge_type, "props": props_json},
+                        )
+                        count += 1
+                    except Exception:
+                        pass
         return count
 
     def get_neighbors(self, node_id: str, *, edge_type: str | None = None) -> list[str]:

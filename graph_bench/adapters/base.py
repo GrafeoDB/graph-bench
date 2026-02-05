@@ -80,6 +80,17 @@ class BaseAdapter(ABC):
         """Whether adapter is currently connected."""
         return self._connected
 
+    @property
+    def is_embedded(self) -> bool:
+        """Whether this is an embedded (in-process) database.
+
+        Embedded databases measure Python process memory.
+        Server databases measure Docker container memory.
+
+        Override in subclasses. Defaults to False (server).
+        """
+        return False
+
     @abstractmethod
     def connect(self, *, uri: str | None = None, **kwargs: Any) -> None:
         """Establish connection to the database."""

@@ -9,6 +9,7 @@ Benchmarks are organized by category:
 - pattern: Triangle counting, common neighbors
 - structure: Connected components, degree distribution
 - write: Property updates, mixed workloads
+- ldbc_acid: LDBC ACID tests (atomicity, isolation anomalies G0-WS)
 - ldbc_graphanalytics: LDBC Graphanalytics standard benchmarks (BFS, PR, WCC, CDLP, LCC, SSSP)
 - ldbc_snb: LDBC SNB Interactive workload benchmarks (IS1, IS3, IC1, IC2, IC3, IC6)
 - concurrent: Concurrent ACID tests (throughput scaling, lost updates, read-after-write)
@@ -66,7 +67,12 @@ from graph_bench.benchmarks.snb_interactive import (
     SnbIC3Benchmark,
     SnbIC6Benchmark,
     SnbIS1Benchmark,
+    SnbIS2Benchmark,
     SnbIS3Benchmark,
+    SnbIS4Benchmark,
+    SnbIS5Benchmark,
+    SnbIS6Benchmark,
+    SnbIS7Benchmark,
 )
 from graph_bench.benchmarks.concurrent import (
     ConcurrentAcidBenchmark,
@@ -74,6 +80,20 @@ from graph_bench.benchmarks.concurrent import (
     ReadAfterWriteBenchmark,
     ThroughputScalingBenchmark,
     MixedWorkloadBenchmark as ConcurrentMixedWorkloadBenchmark,
+)
+from graph_bench.benchmarks.ldbc_acid import (
+    AtomicityCommitTest,
+    AtomicityRollbackTest,
+    G0DirtyWriteTest,
+    G1aAbortedReadTest,
+    G1bIntermediateReadTest,
+    G1cCircularInfoFlowTest,
+    IMPItemManyPrecedersTest,
+    PMPPredicateManyPrecedersTest,
+    OTVObservedTxnVanishesTest,
+    FRFracturedReadTest,
+    LULostUpdateTest,
+    WSWriteSkewTest,
 )
 
 __all__ = [
@@ -125,11 +145,29 @@ __all__ = [
     "SnbIC3Benchmark",
     "SnbIC6Benchmark",
     "SnbIS1Benchmark",
+    "SnbIS2Benchmark",
     "SnbIS3Benchmark",
+    "SnbIS4Benchmark",
+    "SnbIS5Benchmark",
+    "SnbIS6Benchmark",
+    "SnbIS7Benchmark",
     # Concurrent ACID
     "ConcurrentAcidBenchmark",
     "LostUpdateBenchmark",
     "ReadAfterWriteBenchmark",
     "ThroughputScalingBenchmark",
     "ConcurrentMixedWorkloadBenchmark",
+    # LDBC ACID
+    "AtomicityCommitTest",
+    "AtomicityRollbackTest",
+    "G0DirtyWriteTest",
+    "G1aAbortedReadTest",
+    "G1bIntermediateReadTest",
+    "G1cCircularInfoFlowTest",
+    "IMPItemManyPrecedersTest",
+    "PMPPredicateManyPrecedersTest",
+    "OTVObservedTxnVanishesTest",
+    "FRFracturedReadTest",
+    "LULostUpdateTest",
+    "WSWriteSkewTest",
 ]

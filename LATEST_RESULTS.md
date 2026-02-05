@@ -1,239 +1,350 @@
-# Latest Benchmark Results
+# Benchmark Results
 
-Run: 2026-02-04 | Scale: small (10K nodes, 50K edges) | Platform: Windows
+## Test Matrix
 
-## LDBC Graph Analytics (Native Implementations Only)
+| Scale | Nodes | Edges | Timeout | SNB Interactive | LDBC ACID | Graph Analytics |
+|-------|------:|------:|--------:|-----------------|-----------|-----------------|
+| sf01 | 10K | 50K | 60s | All databases | All databases | Native only¹ |
+| sf3 | 300K | 1.5M | 300s | Top 5² | Top 5² | Native only¹ |
+| sf100 | 10M | 50M | 600s | Top 2³ | Top 2³ | — |
 
-Only databases with native in-database algorithm implementations are shown. Databases using NetworkX fallback (which extracts the graph to Python memory) are excluded as they measure extraction overhead, not database performance.
+¹ Graph Analytics for databases with native implementations: Grafeo, Memgraph, Neo4j
+² Top 5 by sf01 total time: Grafeo, NebulaGraph, LadybugDB, FalkorDB, Memgraph
+³ Top 2 by sf3 total time (ACID-compliant only): Grafeo, LadybugDB
 
-| Benchmark | Grafeo* | Neo4j | Memgraph |
-|-----------|---------|-------|----------|
-| BFS | **0.12ms** | 115ms | 5.9ms |
-| PageRank | **0.25ms** | 64ms | 13.7ms |
-| WCC | **0.55ms** | 30ms | 13.1ms |
-| CDLP | **0.51ms** | 43ms | 15.7ms |
-| LCC | **0.31ms** | - | 53.1ms |
-| SSSP | **2.69ms** | 52ms | 6.4ms |
-| **Total** | **4.43ms** | 304ms+ | 108ms+ |
-
-Grafeo's algorithm performance comes from its vectorized execution engine and native Rust implementations that operate directly on columnar storage, avoiding any data movement or serialization.
-
-## Write Operations
-
-| Benchmark | Grafeo* | LadybugDB* | DuckDB* | Neo4j | Memgraph | FalkorDB | ArangoDB | NebulaGraph⁶ |
-|-----------|---------|------------|---------|-------|----------|----------|----------|--------------|
-| node_insertion | 3.3ms | 255ms | 6773ms | 60ms | 62ms | 522ms | 53ms | **1.8ms**⁶ |
-| edge_insertion | 7.0ms | 270ms | 4269ms | 1865ms | 1822ms | 334ms | **49ms** | **1.3ms**⁶ |
-| **Total** | **10.3ms** | 525ms | 11042ms | 1925ms | 1884ms | 856ms | 102ms | 3.1ms⁶ |
-
-Grafeo uses chunked columnar storage with delta buffers for writes, allowing batch inserts without rebuilding indexes. NebulaGraph's speed reflects async writes with eventual consistency, not durable commits. Among ACID-compliant databases, **Grafeo is fastest** for node insertion and **ArangoDB** for edge insertion.
-
-## Read Operations
-
-| Benchmark | Grafeo* | LadybugDB* | DuckDB* | Neo4j | Memgraph | FalkorDB | ArangoDB | NebulaGraph |
-|-----------|---------|------------|---------|-------|----------|----------|----------|-------------|
-| single_read | **0.6ms** | 30ms | 74ms | 283ms | 269ms | 113ms | 98ms | 70ms |
-| batch_read | 5.7ms | 2.9ms | 2.8ms | 24ms | 25ms | 10ms | 45ms | **0.8ms** |
-| **Total** | **6.3ms** | 32.9ms | 76.8ms | 307ms | 294ms | 123ms | 143ms | 70.8ms |
-
-Grafeo's single_read uses O(1) hash index lookups with lock-free concurrent access (DashMap). Batch reads benefit from vectorized execution and zone map filtering.
-
-## Traversals
-
-| Benchmark | Grafeo* | LadybugDB* | DuckDB* | Neo4j | Memgraph | FalkorDB | ArangoDB | NebulaGraph |
-|-----------|---------|------------|---------|-------|----------|----------|----------|-------------|
-| bfs | **0.3ms** | 50ms | 25ms | 36ms | 36ms | 20ms | 439ms | 7.4ms |
-| dfs | **0.3ms** | 64ms | 32ms | 49ms | 48ms | 25ms | 439ms | 7.5ms |
-| hop_1 | **0.8ms** | 81ms | 40ms | 65ms | 61ms | 31ms | 2211ms | 35ms |
-| hop_2 | **0.5ms** | 65ms | 34ms | 49ms | 49ms | 26ms | 879ms | 15ms |
-| triangle_count | **0.5ms** | 190ms | 46ms | 356ms | 346ms | 31ms | 13226ms | 35ms |
-| common_neighbors | **0.7ms** | 38ms | 48ms | 71ms | 70ms | 37ms | 2648ms | 41ms |
-| **Total** | **3.1ms** | 488ms | 225ms | 626ms | 610ms | 170ms | 19842ms | 140.9ms |
-
-Grafeo's traversal performance comes from chunked adjacency lists with cache-friendly memory layout and worst-case optimal join algorithms (Leapfrog TrieJoin) for pattern matching.
-
-## LDBC SNB Interactive
-
-| Benchmark | Grafeo* | LadybugDB* | DuckDB* | Neo4j | Memgraph | FalkorDB | ArangoDB | NebulaGraph |
-|-----------|---------|------------|---------|-------|----------|----------|----------|-------------|
-| snb_is1 (profile lookup) | **1.11ms** | 30ms | 73ms | 223ms | 161ms | 116ms | 94ms | 69ms |
-| snb_is3 (friends) | **0.62ms** | 51ms | 81ms | 117ms | 84ms | 60ms | 2207ms | 34ms |
-| snb_ic1 (friends 3-hop) | **0.25ms** | 1041ms | 2045ms | 2265ms | 1704ms | 1203ms | 46449ms | 7ms |
-| snb_ic2 (recent posts) | **0.36ms** | 20ms | 39ms | 44ms | 34ms | 24ms | 879ms | 15ms |
-| snb_ic3 (friends in cities) | **0.44ms** | 184ms | 378ms | 496ms | 360ms | 254ms | 9046ms | 14ms |
-| snb_ic6 (tag co-occurrence) | **0.62ms** | 100ms | 202ms | 261ms | 187ms | 138ms | 5072ms | 28ms |
-| **Total** | **3.4ms** | 1426ms | 2818ms | 3406ms | 2530ms | 1795ms | 63747ms | 167ms |
-
-Grafeo's complex query performance benefits from cost-based optimization with cardinality estimation, query plan caching (5-10x speedup for repeated queries), and factorized query processing that avoids Cartesian products in multi-hop traversals.
-
-## Concurrent ACID
-
-Tests parallel throughput and consistency under concurrent workloads using LDBC SNB dataset.
-
-| Benchmark | Grafeo* | LadybugDB* | DuckDB* | Neo4j | Memgraph | FalkorDB | ArangoDB | NebulaGraph |
-|-----------|---------|------------|---------|-------|----------|----------|----------|-------------|
-| mixed_workload (80/20 r/w) | **6.6ms** | 192ms | 229ms | 161ms | 96ms | 89ms | 2210ms | 118ms |
-| throughput_scaling (1-8 workers) | **12.2ms** | 797ms | 980ms | 597ms | 474ms | 270ms | 8859ms | 327ms |
-| lost_update (counter increment) | **1.4ms** | 93ms | FAILED⁹ | 171ms | FAILED¹⁰ | 114ms | 1179ms | 140ms |
-| read_after_write (visibility) | **2.3ms** | 96ms | 239ms | 190ms | 112ms | 109ms | 1135ms | 132ms |
-| concurrent_acid (aggregate) | **28.5ms** | 1210ms | FAILED⁹ | 1103ms | FAILED¹⁰ | 561ms | 13373ms | 697ms |
-
-⁹ DuckDB: Optimistic concurrency, fails on conflicting updates instead of serializing ("Conflict on update!").
-¹⁰ Memgraph: Transaction conflicts not auto-retried ("Cannot resolve conflicting transactions").
-⁶ NebulaGraph: Results obtained with `replica_factor=1` (single-node); distributed deployments with multiple replicas may exhibit different behavior due to eventual consistency.
-
-**What these benchmarks measure:**
-
-- **mixed_workload**: 80% reads, 20% writes running concurrently across 4 workers
-- **throughput_scaling**: Read throughput scaling from 1→2→4→8 parallel workers
-- **lost_update**: 4 threads incrementing same counter 25 times each (tests atomicity)
-- **read_after_write**: Write then immediate read-back (tests visibility/consistency)
-- **concurrent_acid**: Aggregate of all tests
-
-Grafeo's concurrent performance benefits from lock-free reads (DashMap) and optimistic concurrency control that minimizes contention.
+All times in milliseconds. Best result per benchmark in **bold**. Memory in MB.
 
 ---
 
-\* Embedded databases run in-process without network overhead. Server databases include network latency inherent to their architecture, making direct timing comparisons not entirely apples-to-apples.
+## Summary
 
-"-" indicates the algorithm is not supported natively.
+### SNB Interactive (total ms)
 
----
+| Database | Type | sf01 | sf3 | sf100 |
+|----------|------|-----:|----:|------:|
+| **Grafeo** | Embedded | **3.4** | **245** | **149** |
+| NebulaGraph² | Distributed | 167 | 12,876 | — |
+| LadybugDB | Embedded | 1,426 | — | — |
+| FalkorDB | Server | 1,795 | — | — |
+| Memgraph | Server | 2,530 | 3,169³ | — |
+| Neo4j | Server | 3,406 | — | — |
+| ArangoDB | Server | 63,747 | — | — |
 
-## Feature Availability
+### Graph Analytics (native only, total ms)
 
-| Feature | Grafeo* | LadybugDB* | DuckDB* | Neo4j | Memgraph | FalkorDB | ArangoDB | NebulaGraph |
-|---------|---------|------------|---------|-------|----------|----------|----------|-------------|
-| Native PageRank | ✅ | ❌ | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ |
-| Native WCC | ✅ | ❌ | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ |
-| Native CDLP | ✅ | ❌ | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ |
-| Native LCC | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ |
-| Native SSSP | ✅ | ❌ | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ |
-| Native BFS | ✅ | ❌ | ❌ | ✅ | ✅ | ❌ | ✅ | ❌ |
-| Deployment | Embedded | Embedded | Embedded | Server | Server | Server | Server | Distributed |
+| Database | Type | sf01 | sf3 |
+|----------|------|-----:|----:|
+| **Grafeo** | Embedded | **4.4** | **5.8** |
+| Memgraph | Server | 108 | 260 |
+| Neo4j | Server | 304 | 260¹ |
 
----
+¹ Neo4j LCC failed at sf3 (requires UNDIRECTED relationships)
 
-## Data Models and Query Languages
+### LDBC ACID (total ms)
 
-| Feature | Grafeo* | LadybugDB* | DuckDB* | Neo4j | Memgraph | FalkorDB | ArangoDB | NebulaGraph |
-|---------|---------|------------|---------|-------|----------|----------|----------|-------------|
-| **Data Model** | LPG + RDF | LPG | Relational | LPG | LPG | LPG | Multi-model⁸ | LPG |
-| **LPG Support** | ✅ | ✅ | Via SQL/PGQ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **RDF Support** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| **GQL (ISO)** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| **Cypher** | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | ❌ | ❌ |
-| **Gremlin** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ |
-| **GraphQL** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ |
-| **SPARQL** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| **SQL/PGQ** | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| **AQL** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ |
-| **nGQL** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
+| Database | Type | sf01 | sf3 | Notes |
+|----------|------|-----:|----:|-------|
+| **Grafeo** | Embedded | **39** | **39** | |
+| FalkorDB | Server | 90 | 91 | |
+| LadybugDB | Embedded | 106 | 112 | |
+| Neo4j | Server | 237 | — | |
+| ArangoDB | Server | 2,123 | — | |
+| Memgraph | Server | ❌ | ❌ | G0, LU failures |
+| NebulaGraph | Distributed | N/A | — | Eventual consistency |
 
-⁸ ArangoDB is multi-model: document, key-value, and graph in one database.
+² NebulaGraph uses eventual consistency (`replica_factor=1`), not comparable to ACID databases.
+³ Memgraph sf3: 3 timeouts (IS6, IC1, IC3). Total excludes timed-out benchmarks.
 
-**Data Model Definitions:**
+### Reading the results
 
-- **LPG (Labeled Property Graph)**: Nodes have labels and properties, edges have types and properties. Used by most graph databases.
-- **RDF (Resource Description Framework)**: Triple-based model (subject-predicate-object). W3C standard for linked data and knowledge graphs.
-- **Multi-model**: Combines multiple data models (document, graph, key-value) in one database.
-
-**Grafeo's Query Language Support:**
-
-Grafeo supports 5 query languages through a unified translation pipeline:
-
-1. **GQL** (ISO/IEC 39075) - The new international standard for graph queries
-2. **Cypher** (openCypher 9.0) - Neo4j-compatible ASCII-art syntax
-3. **Gremlin** (Apache TinkerPop) - Traversal-based DSL
-4. **GraphQL** - Schema-driven queries for both LPG and RDF
-5. **SPARQL** (W3C 1.1) - Full RDF query support with REGEX, EXISTS, functions
-
-All languages compile to the same logical plan, so performance is consistent regardless of syntax choice.
+- **Embedded vs. server.** Grafeo and LadybugDB run in-process, so no network overhead. Server databases pay ~0.1–1ms per round-trip.
+- **Consistency model.** NebulaGraph uses eventual consistency. Its speeds are not comparable to ACID databases.
+- **Memory model.** Memgraph is in-memory first. FalkorDB inherits Redis persistence semantics.
+- **Scale factor.** sf01 (10K nodes) fits in cache. sf3/sf100 reveal storage engine and query planner differences.
 
 ---
 
-## Database Characteristics
+## Per-Database Results
 
-Understanding these differences is critical for fair benchmark interpretation.
+<details>
+<summary><h3>Grafeo</h3> Embedded (Rust) | LPG + RDF | GQL, Cypher, Gremlin, GraphQL, SPARQL | Full ACID</summary>
 
-| Characteristic | Grafeo* | LadybugDB* | DuckDB* | Neo4j | Memgraph | FalkorDB | ArangoDB | NebulaGraph |
-|----------------|---------|------------|---------|-------|----------|----------|----------|-------------|
-| **ACID Transactions** | ✅ Full | ✅ Full | ✅ Full | ✅ Full | ✅⁴ | ⚠️⁵ | ✅ Full | ⚠️⁶ |
-| **Consistency Model** | Strong | Strong | Strong | Strong | Strong | Strong | Strong | Eventual |
-| **Default Durability** | WAL | Configurable | WAL | Sync | Optional WAL | AOF/RDB | RocksDB | Async |
-| **Write Guarantee** | Durable | Durable | Durable | Durable | In-memory⁴ | Redis-level | Durable | Eventual |
-| **Isolation Level** | Snapshot | Snapshot | Snapshot | Read Committed | Snapshot | None | Read Committed | None |
-| **Network Overhead** | None | None | None | Bolt RPC | Bolt RPC | Redis protocol | HTTP/TCP | Thrift RPC |
-| **Clustering** | Single | Single | Single | Causal⁷ | Single⁴ | Redis Cluster | Multi-model | Native sharding |
-| **License** | Apache 2.0 | MIT | MIT | GPL/Commercial | BSL/Enterprise | SSPL | Apache 2.0 | Apache 2.0 |
+**Why fast:** Columnar storage • Vectorized execution • Lock-free reads • Worst-case optimal joins • Query caching • Zone maps
 
-⁴ Memgraph is in-memory first, WAL persistence is optional. ACID applies to single-node only.
-⁵ FalkorDB inherits Redis persistence semantics (AOF fsync policy determines durability).
-⁶ NebulaGraph uses eventual consistency with tunable replica factor. Benchmark uses `replica_factor=1` (no redundancy).
-⁷ Neo4j Enterprise supports causal clustering, Community Edition is single-node.
+| Benchmark | sf01 | sf3 | sf100 |
+|-----------|-----:|----:|------:|
+| **SNB Interactive** ||||
+| IS1 — profile lookup | 1.11ms | 0.93ms | 0.88ms |
+| IS2 — recent posts | — | 6.71ms | 5.6ms |
+| IS3 — friends | 0.62ms | 14.46ms | 11.9ms |
+| IS4 — content | — | 0.69ms | 0.63ms |
+| IS5 — creator posts | — | 48.43ms | 29.8ms |
+| IS6 — forum | — | 13.03ms | 5.9ms |
+| IS7 — replies | — | 41.66ms | 22.7ms |
+| IC1 — friends 3-hop | 0.25ms | 14.48ms | 8.6ms |
+| IC2 — recent messages | 0.36ms | 39.01ms | 19.6ms |
+| IC3 — friends in cities | 0.44ms | 13.91ms | 15.1ms |
+| IC6 — tag co-occurrence | 0.62ms | 52.33ms | 30.9ms |
+| *Total* | *3.4ms* | *245ms* | *149ms* |
+| *Memory* | *337MB* | *1,339MB* | *1,320MB* |
+| **Graph Analytics** ||||
+| BFS | 0.12ms | 0.03ms | — |
+| PageRank | 0.25ms | 0.61ms | — |
+| WCC | 0.55ms | 1.06ms | — |
+| CDLP | 0.51ms | 1.05ms | — |
+| LCC | 0.31ms | 0.85ms | — |
+| SSSP | 2.69ms | 2.17ms | — |
+| *Total* | *4.4ms* | *5.8ms* | — |
+| *Memory* | *79MB* | *93MB* | — |
+| **LDBC ACID** ||||
+| Atomicity-C | ✅ 0.06ms | — | — |
+| Atomicity-RB | ✅ 0.04ms | — | — |
+| G0 (dirty write) | ✅ 1.8ms | — | — |
+| G1a-c (read anomalies) | ✅ 7.2ms | — | — |
+| LU (lost update) | ✅ 1.6ms | — | — |
+| WS (write skew) | ✅ 0.6ms | — | — |
+| *Total* | *39ms* | — | — |
+
+</details>
+
+<details>
+<summary><h3>NebulaGraph</h3> Distributed (Thrift) | LPG | nGQL | Eventual consistency</summary>
+
+Results use `replica_factor=1`. Writes are async, data may not be immediately durable.
+
+| Benchmark | sf01 | sf3 | sf100 |
+|-----------|-----:|----:|------:|
+| **SNB Interactive** ||||
+| IS1 — profile lookup | 69ms | 131ms | — |
+| IS2 — recent posts | — | 197ms | — |
+| IS3 — friends | 34ms | 191ms | — |
+| IS4 — content | — | 132ms | — |
+| IS5 — creator posts | — | 516ms | — |
+| IS6 — forum | — | 134ms | — |
+| IS7 — replies | — | 586ms | — |
+| IC1 — friends 3-hop | 7ms | 8,293ms | — |
+| IC2 — recent posts | 15ms | 392ms | — |
+| IC3 — friends in cities | 14ms | 1,929ms | — |
+| IC6 — tag co-occurrence | 28ms | 375ms | — |
+| *Total* | *167ms* | *12,876ms* | — |
+| *Memory* | *154MB* | *390MB* | — |
+| **LDBC ACID** ||||
+| *Result* | N/A | — | — |
+
+</details>
+
+<details>
+<summary><h3>LadybugDB</h3> Embedded | LPG | Cypher | Full ACID</summary>
+
+| Benchmark | sf01 | sf3 | sf100 |
+|-----------|-----:|----:|------:|
+| **SNB Interactive** ||||
+| IS1 — profile lookup | 30ms | — | — |
+| IS3 — friends | 51ms | — | — |
+| IC1 — friends 3-hop | 1,041ms | — | — |
+| IC2 — recent posts | 20ms | — | — |
+| IC3 — friends in cities | 184ms | — | — |
+| IC6 — tag co-occurrence | 100ms | — | — |
+| *Total* | *1,426ms* | — | — |
+| *Memory* | — | — | — |
+| **LDBC ACID** ||||
+| Atomicity-C | ✅ 1.6ms | — | — |
+| Atomicity-RB | ✅ 1.6ms | — | — |
+| G0 (dirty write) | ✅ 4.9ms | — | — |
+| G1a-c (read anomalies) | ✅ 15.8ms | — | — |
+| LU (lost update) | ✅ 36.6ms | — | — |
+| WS (write skew) | ✅ 4.7ms | — | — |
+| *Total* | *106ms* | — | — |
+
+</details>
+
+<details>
+<summary><h3>FalkorDB</h3> Server (Redis) | LPG | Cypher | Partial ACID</summary>
+
+| Benchmark | sf01 | sf3 | sf100 |
+|-----------|-----:|----:|------:|
+| **SNB Interactive** ||||
+| IS1 — profile lookup | 116ms | — | — |
+| IS3 — friends | 60ms | — | — |
+| IC1 — friends 3-hop | 1,203ms | — | — |
+| IC2 — recent posts | 24ms | — | — |
+| IC3 — friends in cities | 254ms | — | — |
+| IC6 — tag co-occurrence | 138ms | — | — |
+| *Total* | *1,795ms* | — | — |
+| *Memory* | *157MB* | — | — |
+| **LDBC ACID** ||||
+| Atomicity-C | ✅ 2.3ms | — | — |
+| Atomicity-RB | ✅ 2.7ms | — | — |
+| G0 (dirty write) | ✅ 4.5ms | — | — |
+| G1a-c (read anomalies) | ✅ 16.2ms | — | — |
+| LU (lost update) | ✅ 15.9ms | — | — |
+| WS (write skew) | ✅ 5.1ms | — | — |
+| *Total* | *90ms* | — | — |
+
+</details>
+
+<details>
+<summary><h3>Memgraph</h3> Server (Bolt) | LPG | Cypher | ACID (conflicts not auto-retried)</summary>
+
+| Benchmark | sf01 | sf3 | sf100 |
+|-----------|-----:|----:|------:|
+| **SNB Interactive** ||||
+| IS1 — profile lookup | 161ms | 164ms | — |
+| IS2 — recent posts | — | 302ms | — |
+| IS3 — friends | 84ms | 33ms | — |
+| IS4 — content | — | 56ms | — |
+| IS5 — creator posts | — | 773ms | — |
+| IS6 — forum | — | ⏱️ | — |
+| IS7 — replies | — | 795ms | — |
+| IC1 — friends 3-hop | 1,704ms | ⏱️ | — |
+| IC2 — recent messages | 34ms | 529ms | — |
+| IC3 — friends in cities | 360ms | ⏱️ | — |
+| IC6 — tag co-occurrence | 187ms | 517ms | — |
+| *Total* | *2,530ms* | *3,169ms*¹ | — |
+| *Memory* | *627MB* | *682MB* | — |
+| **Graph Analytics** ||||
+| BFS | 5.9ms | 2.3ms | — |
+| PageRank | 13.7ms | 35.7ms | — |
+| WCC | 13.1ms | 36.4ms | — |
+| CDLP | 15.7ms | 41.1ms | — |
+| LCC | 53.1ms | 141ms | — |
+| SSSP | 6.4ms | 3.2ms | — |
+| *Total* | *108ms* | *260ms* | — |
+| *Memory* | *631MB* | *630MB* | — |
+| **LDBC ACID** ||||
+| Atomicity-C | ✅ 2.3ms | ✅ 3.3ms | — |
+| Atomicity-RB | ✅ 2.7ms | ✅ 4.0ms | — |
+| G0 (dirty write) | ❌ | ❌ | — |
+| G1a-c (read anomalies) | ✅ 18.6ms | ✅ 24.2ms | — |
+| LU (lost update) | ❌ | ❌ | — |
+| WS (write skew) | ✅ 7.5ms | ✅ 6.2ms | — |
+| *Total* | ❌ | ❌ | — |
+
+¹ 3 timeouts at sf3: IS6, IC1, IC3. Total excludes timed-out benchmarks.
+
+</details>
+
+<details>
+<summary><h3>Neo4j</h3> Server (Bolt) | LPG | Cypher | Full ACID</summary>
+
+| Benchmark | sf01 | sf3 | sf100 |
+|-----------|-----:|----:|------:|
+| **SNB Interactive** ||||
+| IS1 — profile lookup | 223ms | — | — |
+| IS3 — friends | 117ms | — | — |
+| IC1 — friends 3-hop | 2,265ms | — | — |
+| IC2 — recent posts | 44ms | — | — |
+| IC3 — friends in cities | 496ms | — | — |
+| IC6 — tag co-occurrence | 261ms | — | — |
+| *Total* | *3,406ms* | — | — |
+| *Memory* | — | — | — |
+| **Graph Analytics** ||||
+| BFS | 115ms | 19.6ms | — |
+| PageRank | 64ms | 91.9ms | — |
+| WCC | 30ms | 56.9ms | — |
+| CDLP | 43ms | 76.2ms | — |
+| LCC | — | ❌¹ | — |
+| SSSP | 52ms | 14.9ms | — |
+| *Total* | *304ms* | *260ms*¹ | — |
+| *Memory* | *1,960MB* | *2,500MB* | — |
+| **LDBC ACID** ||||
+| Atomicity-C | ✅ 8.5ms | — | — |
+| Atomicity-RB | ✅ 6.4ms | — | — |
+| G0 (dirty write) | ✅ 17.4ms | — | — |
+| G1a-c (read anomalies) | ✅ 48.2ms | — | — |
+| LU (lost update) | ✅ 55.3ms | — | — |
+| WS (write skew) | ✅ 17.5ms | — | — |
+| *Total* | *237ms* | — | — |
+
+¹ LCC failed: requires UNDIRECTED relationships
+
+</details>
+
+<details>
+<summary><h3>ArangoDB</h3> Server (HTTP) | Multi-model | AQL | Full ACID</summary>
+
+| Benchmark | sf01 | sf3 | sf100 |
+|-----------|-----:|----:|------:|
+| **SNB Interactive** ||||
+| IS1 — profile lookup | 94ms | — | — |
+| IS3 — friends | 2,207ms | — | — |
+| IC1 — friends 3-hop | 46,449ms | — | — |
+| IC2 — recent posts | 879ms | — | — |
+| IC3 — friends in cities | 9,046ms | — | — |
+| IC6 — tag co-occurrence | 5,072ms | — | — |
+| *Total* | *63,747ms* | — | — |
+| *Memory* | *433MB* | — | — |
+| **LDBC ACID** ||||
+| Atomicity-C | ✅ 89ms | — | — |
+| Atomicity-RB | ✅ 89ms | — | — |
+| G0 (dirty write) | ✅ 170ms | — | — |
+| G1a-c (read anomalies) | ✅ 411ms | — | — |
+| LU (lost update) | ✅ 518ms | — | — |
+| WS (write skew) | ✅ 138ms | — | — |
+| *Total* | *2,123ms* | — | — |
+
+</details>
 
 ---
 
-## How Grafeo Compares
+## Methodology
 
-### Unique Capabilities
+- **Warmup:** 3 runs discarded before measurement (1 for sf100)
+- **Iterations:** 10 measured runs, median reported (1 for sf100)
+- **Isolation:** Each database gets a clean dataset load before benchmarking
+- **Memory:** Peak RSS measured during benchmark execution
 
-Grafeo is the only database in this benchmark that supports:
+> **Ain't nobody got time for that:** sf100 uses 1 warmup + 1 measurement iteration, which I changed after running Grafeo and getting stuck with FalkorDB. At this scale, queries can take minutes per run, making 10 iterations very time consuming for the other databases.
 
-- **Dual data models** (LPG and RDF) with optimized storage for each
-- **5 query languages** (GQL, Cypher, Gremlin, GraphQL, SPARQL) through a unified execution engine
-- **ISO GQL** (ISO/IEC 39075), the new international standard for graph queries
+### Hardware used
 
-This flexibility means you can use Cypher for property graph queries, SPARQL for RDF/knowledge graph queries, and GQL for standards-compliant code, all on the same database.
+**Run:** 2026-02-05 | **Platform:** Windows | **CPU:** AMD Ryzen 7 7800X3D | **RAM:** 64GB
+**Benchmark suite:** [graph-bench](https://github.com/GrafeoDB/graph-bench)
 
-### Why Grafeo is Fast
 
-Grafeo combines several modern database techniques:
+### Benchmark categories
 
-- **Columnar storage** with type-specific compression (dictionary encoding for strings, delta encoding for integers, bit-packing for booleans)
-- **Vectorized push-based execution** inspired by DuckDB, processing data in cache-friendly chunks
-- **Lock-free concurrent reads** using DashMap for hash indexes
-- **Worst-case optimal joins** (Leapfrog TrieJoin) for pattern matching, O(N^1.5) for triangles vs O(N²) with naive joins
-- **Query plan caching** that provides 5-10x speedup for repeated queries
-- **Zone maps** for predicate pushdown, skipping irrelevant data chunks
-- **Ring Index** for RDF data, using wavelet trees for 3x space reduction
+**SNB Interactive** implements a subset of the [LDBC Social Network Benchmark](https://ldbcouncil.org/benchmarks/snb/) Interactive workload: profile lookups, friend traversals, multi-hop path queries, temporal filtering, and tag co-occurrence.
 
-### Embedded vs Server Trade-offs
+**Graph Analytics** implements core algorithms from [LDBC Graphalytics](https://ldbcouncil.org/benchmarks/graphalytics/): BFS, PageRank, WCC (weakly connected components), CDLP (community detection via label propagation), LCC (local clustering coefficient), and SSSP (single-source shortest path).
 
-Grafeo is embedded, meaning it runs in-process with your application. This eliminates network overhead but limits it to single-node deployments. For comparison:
+**LDBC ACID** implements the [LDBC ACID test suite](https://github.com/ldbc/ldbc_acid) for transactional consistency: atomicity tests (commit visibility, rollback correctness) and isolation anomaly detection (G0 dirty write, G1a-c read anomalies, IMP/PMP multi-preceders, OTV observed transaction vanishes, FR fractured read, LU lost update, WS write skew).
 
-| Scenario | Grafeo (Embedded) | Neo4j (Server) |
-|----------|-------------------|----------------|
-| Single read | **~0.6ms** (direct memory) | ~283ms (network + disk) |
-| Best for | Analytics, local apps, edge | Multi-user, distributed |
+### Datasets
+
+| Scale | Source | Nodes | Edges | Description |
+|-------|--------|------:|------:|-------------|
+| sf01 | LDBC SNB SF0.1 | 10K | 50K | Cache-friendly, baseline comparison |
+| sf3 | LDBC SNB SF3 | 300K | 1.5M | Medium scale, reveals optimizer differences |
+| sf100 | LDBC SNB SF100 | 10M | 50M | Production scale, stress test |
 
 ---
 
-## Benchmark Caveats
+## Query Languages & Data Models
 
-### Write Operations
-
-- **NebulaGraph's fast writes** (1.8ms node, 1.3ms edge) use async replication with eventual consistency, writes may not be immediately durable or visible on all replicas
-- **Memgraph** runs in-memory by default, persistence adds latency
-- **Embedded databases** avoid serialization and network overhead entirely
-
-### Algorithm Benchmarks
-
-- Only native implementations are shown in the LDBC Graph Analytics table
-- Databases without native support would need to extract the graph to Python/NetworkX, which measures extraction overhead rather than database performance
-- This extraction can add 100-1000x overhead
-
-### Server vs Embedded
-
-- Server databases include ~0.1-1ms network round-trip per operation
-- For single-operation benchmarks (single_read), network latency dominates
-- For batch operations, network overhead is amortized
+| | Grafeo | LadybugDB | Neo4j | Memgraph | FalkorDB | ArangoDB | NebulaGraph |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| **LPG** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **RDF** | ✅ | | | | | | |
+| **GQL (ISO)** | ✅ | | | | | | |
+| **Cypher** | ✅ | ✅ | ✅ | ✅ | ✅ | | |
+| **Gremlin** | ✅ | | | | | ✅ | |
+| **GraphQL** | ✅ | | | | | ✅ | |
+| **SPARQL** | ✅ | | | | | | |
+| **AQL** | | | | | | ✅ | |
+| **nGQL** | | | | | | | ✅ |
 
 ---
 
-Full results:
+## Native Algorithm Support
 
-- Main benchmarks: [results/bench_20260204_054918.json](results/bench_20260204_054918.json)
-- Concurrent ACID: [results/bench_20260204_201035.json](results/bench_20260204_201035.json)
-- Concurrent (DuckDB fix): [results/bench_20260204_225828.json](results/bench_20260204_225828.json)
-- Concurrent (NebulaGraph fix): [results/bench_20260204_222424.json](results/bench_20260204_222424.json)
+| | Grafeo | Neo4j | Memgraph |
+|---|:---:|:---:|:---:|
+| BFS | ✅ | ✅ | ✅ |
+| PageRank | ✅ | ✅ | ✅ |
+| WCC | ✅ | ✅ | ✅ |
+| CDLP | ✅ | ✅ | ✅ |
+| LCC | ✅ | | ✅ |
+| SSSP | ✅ | ✅ | ✅ |
+
+Other databases (LadybugDB, FalkorDB, ArangoDB, NebulaGraph) do not ship native implementations of LDBC Graph Analytics algorithms.
