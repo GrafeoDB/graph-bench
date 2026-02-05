@@ -72,15 +72,15 @@ Tests parallel throughput and consistency under concurrent workloads using LDBC 
 
 | Benchmark | Grafeo* | LadybugDB* | DuckDB* | Neo4j | Memgraph | FalkorDB | ArangoDB | NebulaGraph |
 |-----------|---------|------------|---------|-------|----------|----------|----------|-------------|
-| mixed_workload (80/20 r/w) | **6.6ms** | 192ms | FAILED⁹ | 161ms | 96ms | 89ms | 2210ms | FAILED¹⁰ |
-| throughput_scaling (1-8 workers) | **12.2ms** | 797ms | FAILED⁹ | 597ms | 474ms | 270ms | 8859ms | FAILED¹⁰ |
-| lost_update (counter increment) | **1.4ms** | 93ms | 275ms | 171ms | FAILED¹¹ | 114ms | 1179ms | FAILED¹⁰ |
-| read_after_write (visibility) | **2.3ms** | 96ms | 206ms | 190ms | 112ms | 109ms | 1135ms | FAILED¹⁰ |
-| concurrent_acid (aggregate) | **28.5ms** | 1210ms | FAILED⁹ | 1103ms | FAILED¹¹ | 561ms | 13373ms | FAILED¹⁰ |
+| mixed_workload (80/20 r/w) | **6.6ms** | 192ms | 229ms | 161ms | 96ms | 89ms | 2210ms | 118ms |
+| throughput_scaling (1-8 workers) | **12.2ms** | 797ms | 980ms | 597ms | 474ms | 270ms | 8859ms | 327ms |
+| lost_update (counter increment) | **1.4ms** | 93ms | FAILED⁹ | 171ms | FAILED¹⁰ | 114ms | 1179ms | 140ms |
+| read_after_write (visibility) | **2.3ms** | 96ms | 239ms | 190ms | 112ms | 109ms | 1135ms | 132ms |
+| concurrent_acid (aggregate) | **28.5ms** | 1210ms | FAILED⁹ | 1103ms | FAILED¹⁰ | 561ms | 13373ms | 697ms |
 
-⁹ DuckDB: Thread-safety issues with concurrent result set access ("No open result set" errors).
-¹⁰ NebulaGraph: Connection pooling errors under concurrent load ("Unknown client type").
-¹¹ Memgraph: Transaction conflicts not auto-retried ("Cannot resolve conflicting transactions").
+⁹ DuckDB: Optimistic concurrency, fails on conflicting updates instead of serializing ("Conflict on update!").
+¹⁰ Memgraph: Transaction conflicts not auto-retried ("Cannot resolve conflicting transactions").
+⁶ NebulaGraph: Results obtained with `replica_factor=1` (single-node); distributed deployments with multiple replicas may exhibit different behavior due to eventual consistency.
 
 **What these benchmarks measure:**
 
@@ -235,3 +235,5 @@ Full results:
 
 - Main benchmarks: [results/bench_20260204_054918.json](results/bench_20260204_054918.json)
 - Concurrent ACID: [results/bench_20260204_201035.json](results/bench_20260204_201035.json)
+- Concurrent (DuckDB fix): [results/bench_20260204_225828.json](results/bench_20260204_225828.json)
+- Concurrent (NebulaGraph fix): [results/bench_20260204_222424.json](results/bench_20260204_222424.json)

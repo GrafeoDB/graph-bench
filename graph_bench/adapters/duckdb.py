@@ -15,6 +15,7 @@ Environment variables:
     adapter.connect()  # In-memory by default
 """
 
+import threading
 from collections import deque
 from collections.abc import Sequence
 from typing import Any
@@ -30,9 +31,18 @@ class DuckDBAdapter(BaseAdapter):
     """DuckDB embedded database adapter with SQL/PGQ graph extension."""
 
     def __init__(self) -> None:
-        self._conn: Any = None
+        self._path: str | None = None
+        self._local = threading.local()  # Thread-local connections
         self._connected = False
         self._graph_name = "benchmark_graph"
+
+    @property
+    def _conn(self) -> Any:
+        """Get thread-local connection."""
+        if not hasattr(self._local, "conn") or self._local.conn is None:
+            import duckdb
+            self._local.conn = duckdb.connect(self._path)
+        return self._local.conn
 
     @property
     def name(self) -> str:
@@ -49,14 +59,18 @@ class DuckDBAdapter(BaseAdapter):
 
     def connect(self, *, uri: str | None = None, **kwargs: Any) -> None:
         try:
-            import duckdb
+            import duckdb  # noqa: F401
         except ImportError as e:
             msg = "duckdb package not installed. Install with: pip install duckdb"
             raise ImportError(msg) from e
 
         path = uri or kwargs.get("path") or get_env("DUCKDB_PATH", default=":memory:")
 
-        self._conn = duckdb.connect(path)
+        # For in-memory, use named database so threads can share catalogs
+        if path == ":memory:":
+            path = ":memory:benchmark"
+
+        self._path = path
         self._connected = True
         self._setup_schema()
 
@@ -115,9 +129,9 @@ class DuckDBAdapter(BaseAdapter):
             pass
 
     def disconnect(self) -> None:
-        if self._conn:
-            self._conn.close()
-            self._conn = None
+        if hasattr(self._local, "conn") and self._local.conn:
+            self._local.conn.close()
+            self._local.conn = None
         self._connected = False
 
     def clear(self) -> None:

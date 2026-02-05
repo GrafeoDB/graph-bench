@@ -17,6 +17,7 @@ Environment variables:
     adapter.connect(host="localhost", port=9669)
 """
 
+import threading
 from collections.abc import Sequence
 from typing import Any
 
@@ -32,9 +33,19 @@ class NebulaGraphAdapter(BaseAdapter):
 
     def __init__(self) -> None:
         self._pool: Any = None
-        self._session: Any = None
+        self._local = threading.local()  # Thread-local sessions
+        self._user: str = "root"
+        self._password: str = "nebula"
         self._connected = False
         self._space = "benchmark"
+
+    @property
+    def _session(self) -> Any:
+        """Get thread-local session from pool."""
+        if not hasattr(self._local, "session") or self._local.session is None:
+            self._local.session = self._pool.get_session(self._user, self._password)
+            self._local.session.execute(f"USE {self._space}")
+        return self._local.session
 
     @property
     def name(self) -> str:
@@ -42,7 +53,7 @@ class NebulaGraphAdapter(BaseAdapter):
 
     @property
     def version(self) -> str:
-        if not self._connected or self._session is None:
+        if not self._connected or self._pool is None:
             return "unknown"
         try:
             result = self._session.execute("SHOW HOSTS")
@@ -71,11 +82,16 @@ class NebulaGraphAdapter(BaseAdapter):
             msg = f"Failed to connect to NebulaGraph at {host}:{port}"
             raise ConnectionError(msg)
 
-        self._session = self._pool.get_session(user, password)
-        self._ensure_space()
+        self._user = user
+        self._password = password
+
+        # Create initial session for setup
+        init_session = self._pool.get_session(user, password)
+        self._ensure_space(init_session)
+        init_session.release()
         self._connected = True
 
-    def _ensure_space(self) -> None:
+    def _ensure_space(self, session: Any) -> None:
         """Create space if not exists and use it."""
         import time
 
@@ -84,34 +100,34 @@ class NebulaGraphAdapter(BaseAdapter):
         CREATE SPACE IF NOT EXISTS {self._space}
         (vid_type=FIXED_STRING(64), partition_num=1, replica_factor=1)
         """
-        self._session.execute(create_space)
+        session.execute(create_space)
 
         # Use space - may need to wait for space creation
         time.sleep(1)
-        self._session.execute(f"USE {self._space}")
+        session.execute(f"USE {self._space}")
 
         # Create common tags (node labels) - use backticks for reserved words
         time.sleep(1)
         for tag in ["Node", "`Vertex`", "Person"]:
-            self._session.execute(
+            session.execute(
                 f"CREATE TAG IF NOT EXISTS {tag}(id string, name string, value int)"
             )
 
         # Create edge types - use backticks for reserved words
-        self._session.execute(
+        session.execute(
             "CREATE EDGE IF NOT EXISTS CONNECTS(weight double)"
         )
-        self._session.execute(
+        session.execute(
             "CREATE EDGE IF NOT EXISTS `EDGE`(weight double)"
         )
         time.sleep(1)  # Wait for schema propagation
 
     def disconnect(self) -> None:
-        if self._session:
-            self._session.release()
+        if hasattr(self._local, "session") and self._local.session:
+            self._local.session.release()
+            self._local.session = None
         if self._pool:
             self._pool.close()
-        self._session = None
         self._pool = None
         self._connected = False
 
