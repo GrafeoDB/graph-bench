@@ -4,13 +4,13 @@
 
 | Scale | Nodes | Edges | Timeout | SNB Interactive | LDBC ACID | Graph Analytics |
 |-------|------:|------:|--------:|-----------------|-----------|-----------------|
-| sf01 | 10K | 50K | 60s | All databases | All databases | Native only¹ |
-| sf3 | 300K | 1.5M | 300s | Top 5² | Top 5² | Native only¹ |
-| sf100 | 10M | 50M | 600s | Top 2³ | Top 2³ | — |
+| sf01 | 1K | 18K | 60s | All databases | All databases | Native only¹ |
+| sf1 | 10K | 180K | 120s | Top 5² | Top 5² | Native only¹ |
+| sf100 | 280K | 18M | 600s | Top 2³ | Top 2³ | — |
 
 ¹ Graph Analytics for databases with native implementations: Grafeo, Memgraph, Neo4j
 ² Top 5 by sf01 total time: Grafeo, NebulaGraph, LadybugDB, FalkorDB, Memgraph
-³ Top 2 by sf3 total time (ACID-compliant only): Grafeo, LadybugDB
+³ Top 2 by sf1 total time (ACID-compliant only): Grafeo, LadybugDB
 
 All times in milliseconds. Best result per benchmark in **bold**. Memory in MB.
 
@@ -20,47 +20,50 @@ All times in milliseconds. Best result per benchmark in **bold**. Memory in MB.
 
 ### SNB Interactive (total ms)
 
-| Database | Type | sf01 | sf3 | sf100 |
+| Database | Type | sf01 | sf1 | sf100 |
 |----------|------|-----:|----:|------:|
 | **Grafeo** | Embedded | **3.4** | **245** | **149** |
-| NebulaGraph² | Distributed | 167 | 12,876 | — |
 | LadybugDB | Embedded | 1,426 | — | — |
 | FalkorDB | Server | 1,795 | — | — |
+| NebulaGraph² | Distributed | 167 | 12,876 | — |
+| TuGraph⁴ | Server | 3,401⁴ | — | — |
 | Memgraph | Server | 2,530 | 3,169³ | — |
 | Neo4j | Server | 3,406 | — | — |
 | ArangoDB | Server | 63,747 | — | — |
 
 ### Graph Analytics (native only, total ms)
 
-| Database | Type | sf01 | sf3 |
+| Database | Type | sf01 | sf1 |
 |----------|------|-----:|----:|
 | **Grafeo** | Embedded | **4.4** | **5.8** |
 | Memgraph | Server | 108 | 260 |
 | Neo4j | Server | 304 | 260¹ |
 
-¹ Neo4j LCC failed at sf3 (requires UNDIRECTED relationships)
+¹ Neo4j LCC failed at sf1 (requires UNDIRECTED relationships)
 
 ### LDBC ACID (total ms)
 
-| Database | Type | sf01 | sf3 | Notes |
+| Database | Type | sf01 | sf1 | Notes |
 |----------|------|-----:|----:|-------|
 | **Grafeo** | Embedded | **39** | **39** | |
-| FalkorDB | Server | 90 | 91 | |
 | LadybugDB | Embedded | 106 | 112 | |
+| FalkorDB | Server | 90 | 91 | |
+| NebulaGraph | Distributed | N/A | — | Eventual consistency |
+| TuGraph | Server | 120 | — | |
+| Memgraph | Server | ❌ | ❌ | G0, LU failures |
 | Neo4j | Server | 237 | — | |
 | ArangoDB | Server | 2,123 | — | |
-| Memgraph | Server | ❌ | ❌ | G0, LU failures |
-| NebulaGraph | Distributed | N/A | — | Eventual consistency |
 
 ² NebulaGraph uses eventual consistency (`replica_factor=1`), not comparable to ACID databases.
-³ Memgraph sf3: 3 timeouts (IS6, IC1, IC3). Total excludes timed-out benchmarks.
+³ Memgraph sf1: 3 timeouts (IS6, IC1, IC3). Total excludes timed-out benchmarks.
+⁴ TuGraph IC1 timed out. Total excludes timed-out benchmarks.
 
 ### Reading the results
 
 - **Embedded vs. server.** Grafeo and LadybugDB run in-process, so no network overhead. Server databases pay ~0.1–1ms per round-trip.
 - **Consistency model.** NebulaGraph uses eventual consistency. Its speeds are not comparable to ACID databases.
 - **Memory model.** Memgraph is in-memory first. FalkorDB inherits Redis persistence semantics.
-- **Scale factor.** sf01 (10K nodes) fits in cache. sf3/sf100 reveal storage engine and query planner differences.
+- **Scale factor.** sf01 (1K nodes) fits in cache. sf1/sf100 reveal storage engine and query planner differences.
 
 ---
 
@@ -71,7 +74,7 @@ All times in milliseconds. Best result per benchmark in **bold**. Memory in MB.
 
 **Why fast:** Columnar storage • Vectorized execution • Lock-free reads • Worst-case optimal joins • Query caching • Zone maps
 
-| Benchmark | sf01 | sf3 | sf100 |
+| Benchmark | sf01 | sf1 | sf100 |
 |-----------|-----:|----:|------:|
 | **SNB Interactive** ||||
 | IS1 — profile lookup | 1.11ms | 0.93ms | 0.88ms |
@@ -112,7 +115,7 @@ All times in milliseconds. Best result per benchmark in **bold**. Memory in MB.
 
 Results use `replica_factor=1`. Writes are async, data may not be immediately durable.
 
-| Benchmark | sf01 | sf3 | sf100 |
+| Benchmark | sf01 | sf1 | sf100 |
 |-----------|-----:|----:|------:|
 | **SNB Interactive** ||||
 | IS1 — profile lookup | 69ms | 131ms | — |
@@ -136,7 +139,7 @@ Results use `replica_factor=1`. Writes are async, data may not be immediately du
 <details>
 <summary><h3>LadybugDB</h3> Embedded | LPG | Cypher | Full ACID</summary>
 
-| Benchmark | sf01 | sf3 | sf100 |
+| Benchmark | sf01 | sf1 | sf100 |
 |-----------|-----:|----:|------:|
 | **SNB Interactive** ||||
 | IS1 — profile lookup | 30ms | — | — |
@@ -161,7 +164,7 @@ Results use `replica_factor=1`. Writes are async, data may not be immediately du
 <details>
 <summary><h3>FalkorDB</h3> Server (Redis) | LPG | Cypher | Partial ACID</summary>
 
-| Benchmark | sf01 | sf3 | sf100 |
+| Benchmark | sf01 | sf1 | sf100 |
 |-----------|-----:|----:|------:|
 | **SNB Interactive** ||||
 | IS1 — profile lookup | 116ms | — | — |
@@ -186,7 +189,7 @@ Results use `replica_factor=1`. Writes are async, data may not be immediately du
 <details>
 <summary><h3>Memgraph</h3> Server (Bolt) | LPG | Cypher | ACID (conflicts not auto-retried)</summary>
 
-| Benchmark | sf01 | sf3 | sf100 |
+| Benchmark | sf01 | sf1 | sf100 |
 |-----------|-----:|----:|------:|
 | **SNB Interactive** ||||
 | IS1 — profile lookup | 161ms | 164ms | — |
@@ -220,14 +223,14 @@ Results use `replica_factor=1`. Writes are async, data may not be immediately du
 | WS (write skew) | ✅ 7.5ms | ✅ 6.2ms | — |
 | *Total* | ❌ | ❌ | — |
 
-¹ 3 timeouts at sf3: IS6, IC1, IC3. Total excludes timed-out benchmarks.
+¹ 3 timeouts at sf1: IS6, IC1, IC3. Total excludes timed-out benchmarks.
 
 </details>
 
 <details>
 <summary><h3>Neo4j</h3> Server (Bolt) | LPG | Cypher | Full ACID</summary>
 
-| Benchmark | sf01 | sf3 | sf100 |
+| Benchmark | sf01 | sf1 | sf100 |
 |-----------|-----:|----:|------:|
 | **SNB Interactive** ||||
 | IS1 — profile lookup | 223ms | — | — |
@@ -263,7 +266,7 @@ Results use `replica_factor=1`. Writes are async, data may not be immediately du
 <details>
 <summary><h3>ArangoDB</h3> Server (HTTP) | Multi-model | AQL | Full ACID</summary>
 
-| Benchmark | sf01 | sf3 | sf100 |
+| Benchmark | sf01 | sf1 | sf100 |
 |-----------|-----:|----:|------:|
 | **SNB Interactive** ||||
 | IS1 — profile lookup | 94ms | — | — |
@@ -282,6 +285,53 @@ Results use `replica_factor=1`. Writes are async, data may not be immediately du
 | LU (lost update) | ✅ 518ms | — | — |
 | WS (write skew) | ✅ 138ms | — | — |
 | *Total* | *2,123ms* | — | — |
+
+</details>
+
+<details>
+<summary><h3>TuGraph</h3> Server (Bolt) | LPG | Cypher | Full ACID</summary>
+
+**Note:** TuGraph ships 34+ native graph algorithms via stored procedures (`algo.*`), but the current benchmark adapter falls back to NetworkX for graph analytics (native procedure signatures differ). IC1 timed out. PageRank failed (numpy not installed for NetworkX fallback). 5 concurrent benchmarks failed (schema field mismatch).
+
+| Benchmark | sf01 |
+|-----------|-----:|
+| **SNB Interactive** ||
+| IS1 — profile lookup | 81ms |
+| IS2 — recent posts | 85ms |
+| IS3 — friends | 85ms |
+| IS4 — content | 81ms |
+| IS5 — creator posts | 281ms |
+| IS6 — forum | 83ms |
+| IS7 — replies | 669ms |
+| IC1 — friends 3-hop | ⏱️ |
+| IC2 — recent messages | 455ms |
+| IC3 — friends in cities | 1,337ms |
+| IC6 — tag co-occurrence | 244ms |
+| *Total* | *3,401ms*¹ |
+| **Graph Analytics** (NetworkX fallback) ||
+| BFS | 86ms |
+| PageRank | ❌² |
+| WCC | 88ms |
+| CDLP | 90ms |
+| LCC | 86ms |
+| SSSP | 86ms |
+| *Total* | *436ms*³ |
+| **LDBC ACID** ||
+| Atomicity-C | ✅ 2.7ms |
+| Atomicity-RB | ✅ 3.3ms |
+| G0 (dirty write) | ✅ 5.9ms |
+| G1a-c (read anomalies) | ✅ 19.9ms |
+| IMP (item-many-preceders) | ✅ 13.6ms |
+| PMP (pred-many-preceders) | ✅ 23.7ms |
+| OTV (observed txn vanishes) | ✅ 5.1ms |
+| FR (fractured read) | ✅ 9.4ms |
+| LU (lost update) | ✅ 28.9ms |
+| WS (write skew) | ✅ 7.0ms |
+| *Total* | *120ms* |
+
+¹ IC1 timed out, excluded from total
+² PageRank: numpy not installed for NetworkX fallback
+³ Using NetworkX fallback (native stored procedures not yet wired); excludes PageRank
 
 </details>
 
@@ -315,36 +365,38 @@ Results use `replica_factor=1`. Writes are async, data may not be immediately du
 | Scale | Source | Nodes | Edges | Description |
 |-------|--------|------:|------:|-------------|
 | sf01 | LDBC SNB SF0.1 | 10K | 50K | Cache-friendly, baseline comparison |
-| sf3 | LDBC SNB SF3 | 300K | 1.5M | Medium scale, reveals optimizer differences |
+| sf1 | LDBC SNB SF1 | 10K | 180K | Standard scale, reveals optimizer differences |
 | sf100 | LDBC SNB SF100 | 10M | 50M | Production scale, stress test |
 
 ---
 
 ## Query Languages & Data Models
 
-| | Grafeo | LadybugDB | Neo4j | Memgraph | FalkorDB | ArangoDB | NebulaGraph |
-|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| **LPG** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **RDF** | ✅ | | | | | | |
-| **GQL (ISO)** | ✅ | | | | | | |
-| **Cypher** | ✅ | ✅ | ✅ | ✅ | ✅ | | |
-| **Gremlin** | ✅ | | | | | ✅ | |
-| **GraphQL** | ✅ | | | | | ✅ | |
-| **SPARQL** | ✅ | | | | | | |
-| **AQL** | | | | | | ✅ | |
-| **nGQL** | | | | | | | ✅ |
+| | Grafeo | LadybugDB | Neo4j | Memgraph | FalkorDB | ArangoDB | TuGraph | NebulaGraph |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| **LPG** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **RDF** | ✅ | | | | | | | |
+| **GQL (ISO)** | ✅ | | | | | | | |
+| **Cypher** | ✅ | ✅ | ✅ | ✅ | ✅ | | ✅ | |
+| **Gremlin** | ✅ | | | | | ✅ | | |
+| **GraphQL** | ✅ | | | | | ✅ | | |
+| **SPARQL** | ✅ | | | | | | | |
+| **AQL** | | | | | | ✅ | | |
+| **nGQL** | | | | | | | | ✅ |
 
 ---
 
 ## Native Algorithm Support
 
-| | Grafeo | Neo4j | Memgraph |
-|---|:---:|:---:|:---:|
-| BFS | ✅ | ✅ | ✅ |
-| PageRank | ✅ | ✅ | ✅ |
-| WCC | ✅ | ✅ | ✅ |
-| CDLP | ✅ | ✅ | ✅ |
-| LCC | ✅ | | ✅ |
-| SSSP | ✅ | ✅ | ✅ |
+| | Grafeo | Neo4j | Memgraph | TuGraph¹ |
+|---|:---:|:---:|:---:|:---:|
+| BFS | ✅ | ✅ | ✅ | ✅ |
+| PageRank | ✅ | ✅ | ✅ | ✅ |
+| WCC | ✅ | ✅ | ✅ | ✅ |
+| CDLP | ✅ | ✅ | ✅ | ✅ |
+| LCC | ✅ | | ✅ | ✅ |
+| SSSP | ✅ | ✅ | ✅ | ✅ |
+
+¹ TuGraph ships 34+ native algorithms, but the current benchmark adapter uses NetworkX fallback (native stored procedure signatures differ).
 
 Other databases (LadybugDB, FalkorDB, ArangoDB, NebulaGraph) do not ship native implementations of LDBC Graph Analytics algorithms.
