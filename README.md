@@ -24,7 +24,7 @@ uv sync --all-extras
 uv run graph-bench run -d grafeo -s small --verbose
 
 # Compare embedded databases
-uv run graph-bench run -d grafeo,ladybug,duckdb -s small --verbose
+uv run graph-bench run -d grafeo,ladybug,neo4j -s small --verbose
 
 # Run core benchmarks
 uv run graph-bench run -d grafeo -s medium
