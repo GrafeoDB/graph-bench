@@ -8,7 +8,6 @@ Benchmark suite for graph databases. Built to compare Grafeo against other optio
 |----------|------|----------------|--------|
 | **Grafeo** | Embedded | GQL (ISO) | Ready |
 | **LadybugDB** | Embedded | Cypher | Ready |
-| **DuckDB** | Embedded | SQL/PGQ | Ready |
 | **Neo4j** | Server | Cypher | Ready |
 | **Memgraph** | Server | Cypher | Ready |
 | **ArangoDB** | Server | AQL | Ready |
