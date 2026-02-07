@@ -24,7 +24,7 @@ uv sync --all-extras
 uv run graph-bench run -d grafeo -s small --verbose
 
 # Compare embedded databases
-uv run graph-bench run -d grafeo,ladybug -s small --verbose
+uv run graph-bench run -d grafeo,ladybug,duckdb -s small --verbose
 
 # Run core benchmarks
 uv run graph-bench run -d grafeo -s medium
@@ -127,7 +127,7 @@ uv run graph-bench run -d grafeo -s medium
 |-------|-------|-------|--------|------------|
 | small | 10K | 50K | 2 | 5 |
 | medium | 100K | 500K | 3 | 10 |
-| large | 1M | 5M | 5 | 10 |
+| large | 1M | 5M | 1 | 1 |
 
 ## Installation
 
