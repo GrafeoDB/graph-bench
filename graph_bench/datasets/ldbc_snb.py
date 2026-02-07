@@ -4,20 +4,34 @@ LDBC Social Network Benchmark (SNB) dataset.
 The LDBC SNB is the industry standard benchmark for graph databases.
 It models a social network with realistic data distributions and correlations.
 
-Schema (simplified):
+Schema:
     Person -[KNOWS]-> Person
     Person -[LIVES_IN]-> City
     Person -[HAS_INTEREST]-> Tag
-    Person -[STUDY_AT]-> University
-    Person -[WORK_AT]-> Company
-    Post/Comment -[HAS_CREATOR]-> Person
-    Post/Comment -[HAS_TAG]-> Tag
+    Person -[STUDY_AT]-> University     (props: classYear)
+    Person -[WORK_AT]-> Company         (props: workFrom)
+    Person -[CREATED]-> Post/Comment    (reverse helper for forward traversal)
+    City -[IS_PART_OF]-> Country
+    Post -[HAS_CREATOR]-> Person
+    Post -[HAS_TAG]-> Tag
+    Post -[IS_LOCATED_IN]-> Country
+    Post -[IN_FORUM]-> Forum            (reverse helper)
+    Comment -[HAS_CREATOR]-> Person
+    Comment -[HAS_TAG]-> Tag
+    Comment -[IS_LOCATED_IN]-> Country
+    Comment -[REPLY_OF]-> Post/Comment
+    Forum -[CONTAINER_OF]-> Post
+    Forum -[HAS_MODERATOR]-> Person
+    Forum -[HAS_MEMBER]-> Person        (props: joinDate)
+    University -[IS_LOCATED_IN]-> City
+    Company -[IS_LOCATED_IN]-> Country
+    Message -[HAS_REPLY]-> Comment      (reverse helper)
 
 Scale Factors:
-    SF0.1: ~10K persons, ~180K knows edges
-    SF1:   ~10K persons, ~180K knows edges (standard)
-    SF10:  ~73K persons, ~2M knows edges
-    SF100: ~280K persons, ~18M knows edges
+    SF0.1: ~1K persons, ~18K knows, ~5K posts
+    SF1:   ~10K persons, ~180K knows, ~50K posts
+    SF10:  ~73K persons, ~2M knows, ~500K posts
+    SF100: ~280K persons, ~18M knows, ~5M posts
 
 References:
     - https://ldbcouncil.org/benchmarks/snb/
@@ -36,7 +50,7 @@ from typing import Any
 from graph_bench.datasets.base import BaseDatasetLoader
 from graph_bench.types import ScaleConfig
 
-__all__ = ["LDBCSocialNetwork"]
+__all__ = ["LDBCSocialNetwork", "scale_name_to_factor"]
 
 # LDBC SNB scale factor mappings (official)
 # Reference: https://ldbcouncil.org/ldbc_snb_docs/ldbc-snb-specification.pdf
@@ -49,6 +63,21 @@ SCALE_FACTORS = {
     30: {"persons": 180_000, "knows_edges": 6_500_000, "posts": 1_500_000},
     100: {"persons": 280_000, "knows_edges": 18_000_000, "posts": 5_000_000},
 }
+
+# Map scale config names to LDBC scale factors
+_SCALE_NAME_TO_FACTOR: dict[str, float] = {
+    "sf01": 0.1,
+    "sf1": 1,
+    "sf3": 3,
+    "sf10": 10,
+    "sf30": 30,
+    "sf100": 100,
+}
+
+
+def scale_name_to_factor(name: str) -> float:
+    """Convert a scale config name (e.g. 'sf3') to an LDBC scale factor (e.g. 3)."""
+    return _SCALE_NAME_TO_FACTOR.get(name, 1)
 
 # Realistic first names (gender-specific for LDBC)
 FIRST_NAMES_MALE = [
@@ -103,12 +132,45 @@ COMPANIES = [
 # Browsers (LDBC tracks this)
 BROWSERS = ["Firefox", "Chrome", "Safari", "Edge", "Opera", "Internet Explorer"]
 
+# Sample content for Posts and Comments
+POST_CONTENT = [
+    "Just visited an amazing new restaurant downtown!",
+    "Excited to start my new project at work today.",
+    "The weather is beautiful this morning.",
+    "Check out this incredible photo I took yesterday.",
+    "Thinking about switching careers, any advice?",
+    "Happy birthday to my best friend!",
+    "Just finished reading an incredible book.",
+    "Anyone else watching the game tonight?",
+    "New blog post about technology trends.",
+    "Can't believe how fast this year is going.",
+]
+
+COMMENT_CONTENT = [
+    "Great post! Totally agree.",
+    "Thanks for sharing this!",
+    "I had a similar experience.",
+    "Interesting perspective.",
+    "That's awesome, congrats!",
+    "I disagree, but respect your opinion.",
+    "Love this! More please.",
+    "Where was this? Looks amazing!",
+]
+
+FORUM_TITLES = [
+    "Wall of {name}", "Group: Photography Enthusiasts", "Group: Tech News",
+    "Group: Travel Stories", "Group: Sports Fans", "Group: Book Club",
+    "Group: Music Lovers", "Group: Foodies", "Group: Science Forum",
+    "Group: Art Gallery", "Group: Fitness Tips", "Group: Movie Reviews",
+]
+
 
 class LDBCSocialNetwork(BaseDatasetLoader):
     """LDBC Social Network Benchmark dataset generator.
 
-    Generates a social network graph following LDBC SNB schema and
-    data distributions. Includes persons, posts, comments, and relationships.
+    Generates a social network graph following the full LDBC SNB schema
+    with Person, Post, Comment, Forum, Country, University, Company entities
+    and all relationships defined in the specification.
     """
 
     def __init__(
@@ -116,21 +178,9 @@ class LDBCSocialNetwork(BaseDatasetLoader):
         *,
         scale_factor: float = 1,
         seed: int | None = None,
-        include_posts: bool = False,
-        include_comments: bool = False,
     ) -> None:
-        """Initialize LDBC SNB dataset generator.
-
-        Args:
-            scale_factor: LDBC scale factor (0.1, 1, 3, 10, 30, 100).
-            seed: Random seed for reproducibility.
-            include_posts: Include Post nodes and relationships.
-            include_comments: Include Comment nodes and relationships.
-        """
         self._scale_factor = scale_factor
         self._seed = seed
-        self._include_posts = include_posts
-        self._include_comments = include_comments
 
     @property
     def name(self) -> str:
@@ -145,51 +195,98 @@ class LDBCSocialNetwork(BaseDatasetLoader):
     def generate(
         self, scale: ScaleConfig
     ) -> tuple[list[dict[str, Any]], list[tuple[str, str, str, dict[str, Any]]]]:
-        """Generate LDBC SNB dataset.
+        """Generate full LDBC SNB dataset.
 
-        Respects the scale config's node/edge counts while maintaining
-        LDBC-like data distributions.
+        Generates all entity types and relationships per the LDBC SNB spec.
+        Respects scale config node/edge counts while maintaining LDBC distributions.
         """
         if self._seed is not None:
             random.seed(self._seed)
 
         sf_params = self._get_sf_params()
 
-        # Use scale config to determine actual counts
+        # Use scale config to determine actual counts.
+        # Posts/comments scale 1:1 with persons (not 5:1 LDBC ratio)
+        # to keep setup time reasonable for adapter-based benchmarks.
         person_count = min(scale.nodes, sf_params["persons"])
         knows_count = min(scale.edges, sf_params["knows_edges"])
+        post_count = min(person_count, sf_params["posts"])
+        comment_count = post_count * 2
+        forum_count = max(10, person_count // 10)
 
-        # Generate nodes
+        # ── Nodes ──
         nodes: list[dict[str, Any]] = []
 
-        # Generate Person nodes
         persons = self._generate_persons(person_count)
         nodes.extend(persons)
 
-        # Generate City nodes
         cities = self._generate_cities()
         nodes.extend(cities)
 
-        # Generate Tag nodes
         tags = self._generate_tags()
         nodes.extend(tags)
 
-        # Generate edges
+        countries = self._generate_countries()
+        nodes.extend(countries)
+
+        universities = self._generate_universities()
+        nodes.extend(universities)
+
+        companies = self._generate_companies()
+        nodes.extend(companies)
+
+        forums = self._generate_forums(forum_count, person_count)
+        nodes.extend(forums)
+
+        posts = self._generate_posts(post_count, person_count, len(countries))
+        nodes.extend(posts)
+
+        comments = self._generate_comments(comment_count, person_count, post_count, len(countries))
+        nodes.extend(comments)
+
+        # ── Edges ──
         edges: list[tuple[str, str, str, dict[str, Any]]] = []
 
-        # KNOWS edges (person-person with power-law distribution)
-        knows_edges = self._generate_knows_edges(person_count, knows_count)
-        edges.extend(knows_edges)
+        # Person-Person: KNOWS (power-law)
+        edges.extend(self._generate_knows_edges(person_count, knows_count))
 
-        # LIVES_IN edges (person-city)
-        lives_in = self._generate_lives_in_edges(person_count, len(cities))
-        edges.extend(lives_in)
+        # Person-City: LIVES_IN
+        edges.extend(self._generate_lives_in_edges(person_count, len(cities)))
 
-        # HAS_INTEREST edges (person-tag)
-        interests = self._generate_interest_edges(person_count, len(tags))
-        edges.extend(interests)
+        # Person-Tag: HAS_INTEREST
+        edges.extend(self._generate_interest_edges(person_count, len(tags)))
+
+        # City-Country: IS_PART_OF
+        edges.extend(self._generate_city_country_edges())
+
+        # Person-University: STUDY_AT (with classYear)
+        edges.extend(self._generate_study_at_edges(person_count, len(universities)))
+
+        # Person-Company: WORK_AT (with workFrom)
+        edges.extend(self._generate_work_at_edges(person_count, len(companies)))
+
+        # University-City: IS_LOCATED_IN
+        edges.extend(self._generate_university_location_edges(len(universities), len(cities)))
+
+        # Company-Country: IS_LOCATED_IN
+        edges.extend(self._generate_company_location_edges(len(companies), len(countries)))
+
+        # Post edges: HAS_CREATOR, HAS_TAG, IS_LOCATED_IN, CONTAINER_OF, reverse helpers
+        edges.extend(self._generate_post_edges(
+            post_count, person_count, len(tags), len(countries), forum_count,
+        ))
+
+        # Comment edges: HAS_CREATOR, REPLY_OF, HAS_TAG, IS_LOCATED_IN, reverse helpers
+        edges.extend(self._generate_comment_edges(
+            comment_count, person_count, post_count, len(tags), len(countries),
+        ))
+
+        # Forum edges: HAS_MODERATOR, HAS_MEMBER
+        edges.extend(self._generate_forum_membership_edges(forum_count, person_count))
 
         return nodes, edges
+
+    # ─── Node generators ───────────────────────────────────────────────
 
     def _generate_persons(self, count: int) -> list[dict[str, Any]]:
         """Generate Person nodes with LDBC-realistic properties."""
@@ -201,10 +298,7 @@ class LDBCSocialNetwork(BaseDatasetLoader):
             gender = "male" if random.random() < 0.5 else "female"
             first_names = FIRST_NAMES_MALE if gender == "male" else FIRST_NAMES_FEMALE
 
-            # Birthday with realistic age distribution (18-80)
             birthday = base_date + timedelta(days=random.randint(0, 30000))
-
-            # Creation date (when joined the network)
             creation_days = random.randint(0, 4000)
             creation_date = creation_start + timedelta(days=creation_days)
 
@@ -247,18 +341,113 @@ class LDBCSocialNetwork(BaseDatasetLoader):
             })
         return tags
 
+    def _generate_countries(self) -> list[dict[str, Any]]:
+        """Generate Country nodes (derived from CITIES list)."""
+        seen: dict[str, int] = {}
+        countries = []
+        for _, country_name in CITIES:
+            if country_name not in seen:
+                idx = len(seen)
+                seen[country_name] = idx
+                countries.append({
+                    "id": f"country_{idx}",
+                    "label": "Country",
+                    "name": country_name,
+                })
+        return countries
+
+    def _generate_universities(self) -> list[dict[str, Any]]:
+        """Generate University nodes."""
+        return [
+            {"id": f"university_{i}", "label": "University", "name": name}
+            for i, name in enumerate(UNIVERSITIES)
+        ]
+
+    def _generate_companies(self) -> list[dict[str, Any]]:
+        """Generate Company nodes."""
+        return [
+            {"id": f"company_{i}", "label": "Company", "name": name}
+            for i, name in enumerate(COMPANIES)
+        ]
+
+    def _generate_forums(self, count: int, person_count: int) -> list[dict[str, Any]]:
+        """Generate Forum nodes."""
+        creation_start = datetime(2010, 1, 1)
+        forums = []
+        for i in range(count):
+            creation_date = creation_start + timedelta(days=random.randint(0, 4000))
+            title_template = random.choice(FORUM_TITLES)
+            if "{name}" in title_template:
+                person_idx = random.randint(0, person_count - 1)
+                title = title_template.format(name=f"Person_{person_idx}")
+            else:
+                title = title_template
+            forums.append({
+                "id": f"forum_{i}",
+                "label": "Forum",
+                "title": title,
+                "creationDate": creation_date.isoformat(),
+            })
+        return forums
+
+    def _generate_posts(
+        self, count: int, person_count: int, country_count: int,
+    ) -> list[dict[str, Any]]:
+        """Generate Post nodes with LDBC properties."""
+        creation_start = datetime(2010, 1, 1)
+        posts = []
+        for i in range(count):
+            creation_date = creation_start + timedelta(days=random.randint(0, 4000))
+            has_image = random.random() < 0.3
+            content = "" if has_image else random.choice(POST_CONTENT)
+            image_file = f"photo{random.randint(1, 1000)}.jpg" if has_image else ""
+            posts.append({
+                "id": f"post_{i}",
+                "label": "Post",
+                "content": content,
+                "imageFile": image_file,
+                "creationDate": creation_date.isoformat(),
+                "length": len(content),
+                "creatorId": f"person_{random.randint(0, person_count - 1)}",
+                "countryId": f"country_{random.randint(0, country_count - 1)}",
+            })
+        return posts
+
+    def _generate_comments(
+        self, count: int, person_count: int, post_count: int, country_count: int,
+    ) -> list[dict[str, Any]]:
+        """Generate Comment nodes with LDBC properties."""
+        creation_start = datetime(2010, 6, 1)  # comments start after posts
+        comments = []
+        for i in range(count):
+            creation_date = creation_start + timedelta(days=random.randint(0, 4000))
+            content = random.choice(COMMENT_CONTENT)
+            # 70% reply to a post, 30% reply to another comment
+            if i > 0 and random.random() < 0.3:
+                reply_to = f"comment_{random.randint(0, max(0, i - 1))}"
+            else:
+                reply_to = f"post_{random.randint(0, post_count - 1)}"
+            comments.append({
+                "id": f"comment_{i}",
+                "label": "Comment",
+                "content": content,
+                "creationDate": creation_date.isoformat(),
+                "length": len(content),
+                "creatorId": f"person_{random.randint(0, person_count - 1)}",
+                "countryId": f"country_{random.randint(0, country_count - 1)}",
+                "replyOf": reply_to,
+            })
+        return comments
+
+    # ─── Edge generators ───────────────────────────────────────────────
+
     def _generate_knows_edges(
         self, person_count: int, edge_count: int
     ) -> list[tuple[str, str, str, dict[str, Any]]]:
-        """Generate KNOWS edges with power-law distribution.
-
-        LDBC SNB uses a correlated power-law distribution where
-        some people have many more connections than others.
-        """
+        """Generate KNOWS edges with power-law distribution."""
         edges: list[tuple[str, str, str, dict[str, Any]]] = []
-        edge_set: set[tuple[str, str]] = set()
+        edge_set: set[tuple[int, int]] = set()
 
-        # Power-law: some nodes are "influencers" with many connections
         influencer_count = max(10, person_count // 100)
         influencers = list(range(influencer_count))
 
@@ -269,7 +458,6 @@ class LDBCSocialNetwork(BaseDatasetLoader):
         while len(edges) < edge_count and attempts < max_attempts:
             attempts += 1
 
-            # 40% chance to connect to/from an influencer
             if random.random() < 0.4 and influencers:
                 if random.random() < 0.5:
                     src = random.choice(influencers)
@@ -278,21 +466,18 @@ class LDBCSocialNetwork(BaseDatasetLoader):
                     src = random.randint(0, person_count - 1)
                     tgt = random.choice(influencers)
             else:
-                # Random connection
                 src = random.randint(0, person_count - 1)
                 tgt = random.randint(0, person_count - 1)
 
             if src == tgt:
                 continue
 
-            # Ensure undirected uniqueness (both directions)
             edge_key = (min(src, tgt), max(src, tgt))
             if edge_key in edge_set:
                 continue
 
             edge_set.add(edge_key)
 
-            # Creation date for the friendship
             creation_days = random.randint(0, 4000)
             creation_date = creation_start + timedelta(days=creation_days)
 
@@ -309,7 +494,7 @@ class LDBCSocialNetwork(BaseDatasetLoader):
         self, person_count: int, city_count: int
     ) -> list[tuple[str, str, str, dict[str, Any]]]:
         """Generate LIVES_IN edges (each person lives in one city)."""
-        edges = []
+        edges: list[tuple[str, str, str, dict[str, Any]]] = []
         for i in range(person_count):
             city_idx = random.randint(0, city_count - 1)
             edges.append((f"person_{i}", f"city_{city_idx}", "LIVES_IN", {}))
@@ -319,11 +504,205 @@ class LDBCSocialNetwork(BaseDatasetLoader):
         self, person_count: int, tag_count: int
     ) -> list[tuple[str, str, str, dict[str, Any]]]:
         """Generate HAS_INTEREST edges (persons have multiple interests)."""
-        edges = []
+        edges: list[tuple[str, str, str, dict[str, Any]]] = []
         for i in range(person_count):
-            # Each person has 1-5 interests
             interest_count = random.randint(1, 5)
             interests = random.sample(range(tag_count), min(interest_count, tag_count))
             for tag_idx in interests:
                 edges.append((f"person_{i}", f"tag_{tag_idx}", "HAS_INTEREST", {}))
+        return edges
+
+    def _generate_city_country_edges(self) -> list[tuple[str, str, str, dict[str, Any]]]:
+        """Generate IS_PART_OF edges (City -> Country)."""
+        country_map: dict[str, int] = {}
+        edges: list[tuple[str, str, str, dict[str, Any]]] = []
+        for i, (_, country_name) in enumerate(CITIES):
+            if country_name not in country_map:
+                country_map[country_name] = len(country_map)
+            edges.append((f"city_{i}", f"country_{country_map[country_name]}", "IS_PART_OF", {}))
+        return edges
+
+    def _generate_study_at_edges(
+        self, person_count: int, university_count: int,
+    ) -> list[tuple[str, str, str, dict[str, Any]]]:
+        """Generate STUDY_AT edges (0-1 per person, with classYear)."""
+        edges: list[tuple[str, str, str, dict[str, Any]]] = []
+        for i in range(person_count):
+            if random.random() < 0.4:  # 40% of persons studied at a university
+                uni_idx = random.randint(0, university_count - 1)
+                class_year = random.randint(1990, 2020)
+                edges.append((
+                    f"person_{i}", f"university_{uni_idx}", "STUDY_AT",
+                    {"classYear": class_year},
+                ))
+        return edges
+
+    def _generate_work_at_edges(
+        self, person_count: int, company_count: int,
+    ) -> list[tuple[str, str, str, dict[str, Any]]]:
+        """Generate WORK_AT edges (0-2 per person, with workFrom year)."""
+        edges: list[tuple[str, str, str, dict[str, Any]]] = []
+        for i in range(person_count):
+            job_count = random.choices([0, 1, 2], weights=[0.3, 0.5, 0.2])[0]
+            companies_chosen = random.sample(
+                range(company_count), min(job_count, company_count),
+            )
+            for comp_idx in companies_chosen:
+                work_from = random.randint(2000, 2024)
+                edges.append((
+                    f"person_{i}", f"company_{comp_idx}", "WORK_AT",
+                    {"workFrom": work_from},
+                ))
+        return edges
+
+    def _generate_university_location_edges(
+        self, university_count: int, city_count: int,
+    ) -> list[tuple[str, str, str, dict[str, Any]]]:
+        """Generate IS_LOCATED_IN edges (University -> City)."""
+        edges: list[tuple[str, str, str, dict[str, Any]]] = []
+        for i in range(university_count):
+            city_idx = i % city_count
+            edges.append((f"university_{i}", f"city_{city_idx}", "IS_LOCATED_IN", {}))
+        return edges
+
+    def _generate_company_location_edges(
+        self, company_count: int, country_count: int,
+    ) -> list[tuple[str, str, str, dict[str, Any]]]:
+        """Generate IS_LOCATED_IN edges (Company -> Country)."""
+        edges: list[tuple[str, str, str, dict[str, Any]]] = []
+        for i in range(company_count):
+            country_idx = i % country_count
+            edges.append((f"company_{i}", f"country_{country_idx}", "IS_LOCATED_IN", {}))
+        return edges
+
+    def _generate_post_edges(
+        self,
+        post_count: int,
+        person_count: int,
+        tag_count: int,
+        country_count: int,
+        forum_count: int,
+    ) -> list[tuple[str, str, str, dict[str, Any]]]:
+        """Generate all Post-related edges.
+
+        Spec-direction edges:
+          Post -[HAS_CREATOR]-> Person
+          Post -[HAS_TAG]-> Tag (1-3 per post)
+          Post -[IS_LOCATED_IN]-> Country
+          Forum -[CONTAINER_OF]-> Post
+
+        Reverse helper edges (for efficient forward traversal):
+          Person -[CREATED]-> Post
+          Post -[IN_FORUM]-> Forum
+        """
+        edges: list[tuple[str, str, str, dict[str, Any]]] = []
+
+        for i in range(post_count):
+            post_id = f"post_{i}"
+            creator_idx = random.randint(0, person_count - 1)
+            creator_id = f"person_{creator_idx}"
+            country_idx = random.randint(0, country_count - 1)
+            forum_idx = i % forum_count
+
+            # Spec-direction: Post -> Person
+            edges.append((post_id, creator_id, "HAS_CREATOR", {}))
+            # Reverse helper: Person -> Post
+            edges.append((creator_id, post_id, "CREATED", {}))
+
+            # Post -> Tag (1-3 tags)
+            num_tags = random.randint(1, 3)
+            chosen_tags = random.sample(range(tag_count), min(num_tags, tag_count))
+            for tag_idx in chosen_tags:
+                edges.append((post_id, f"tag_{tag_idx}", "HAS_TAG", {}))
+
+            # Post -> Country
+            edges.append((post_id, f"country_{country_idx}", "IS_LOCATED_IN", {}))
+
+            # Forum -> Post (CONTAINER_OF)
+            edges.append((f"forum_{forum_idx}", post_id, "CONTAINER_OF", {}))
+            # Reverse helper: Post -> Forum
+            edges.append((post_id, f"forum_{forum_idx}", "IN_FORUM", {}))
+
+        return edges
+
+    def _generate_comment_edges(
+        self,
+        comment_count: int,
+        person_count: int,
+        post_count: int,
+        tag_count: int,
+        country_count: int,
+    ) -> list[tuple[str, str, str, dict[str, Any]]]:
+        """Generate all Comment-related edges.
+
+        Spec-direction edges:
+          Comment -[HAS_CREATOR]-> Person
+          Comment -[REPLY_OF]-> Post or Comment
+          Comment -[HAS_TAG]-> Tag (0-2 per comment)
+          Comment -[IS_LOCATED_IN]-> Country
+
+        Reverse helper edges:
+          Person -[CREATED]-> Comment
+          Post/Comment -[HAS_REPLY]-> Comment
+        """
+        edges: list[tuple[str, str, str, dict[str, Any]]] = []
+
+        for i in range(comment_count):
+            comment_id = f"comment_{i}"
+            creator_idx = random.randint(0, person_count - 1)
+            creator_id = f"person_{creator_idx}"
+            country_idx = random.randint(0, country_count - 1)
+
+            # Comment -> Person (HAS_CREATOR)
+            edges.append((comment_id, creator_id, "HAS_CREATOR", {}))
+            # Reverse: Person -> Comment (CREATED)
+            edges.append((creator_id, comment_id, "CREATED", {}))
+
+            # Comment -> Post or Comment (REPLY_OF)
+            if i > 0 and random.random() < 0.3:
+                parent_id = f"comment_{random.randint(0, max(0, i - 1))}"
+            else:
+                parent_id = f"post_{random.randint(0, post_count - 1)}"
+            edges.append((comment_id, parent_id, "REPLY_OF", {}))
+            # Reverse: parent -> Comment (HAS_REPLY)
+            edges.append((parent_id, comment_id, "HAS_REPLY", {}))
+
+            # Comment -> Tag (0-2 tags)
+            num_tags = random.randint(0, 2)
+            if num_tags > 0:
+                chosen_tags = random.sample(range(tag_count), min(num_tags, tag_count))
+                for tag_idx in chosen_tags:
+                    edges.append((comment_id, f"tag_{tag_idx}", "HAS_TAG", {}))
+
+            # Comment -> Country
+            edges.append((comment_id, f"country_{country_idx}", "IS_LOCATED_IN", {}))
+
+        return edges
+
+    def _generate_forum_membership_edges(
+        self, forum_count: int, person_count: int,
+    ) -> list[tuple[str, str, str, dict[str, Any]]]:
+        """Generate Forum HAS_MODERATOR and HAS_MEMBER edges."""
+        edges: list[tuple[str, str, str, dict[str, Any]]] = []
+        creation_start = datetime(2010, 1, 1)
+
+        for i in range(forum_count):
+            forum_id = f"forum_{i}"
+
+            # Each forum has one moderator
+            moderator_idx = random.randint(0, person_count - 1)
+            edges.append((forum_id, f"person_{moderator_idx}", "HAS_MODERATOR", {}))
+
+            # Each forum has 5-20 members (including the moderator)
+            member_count = random.randint(5, min(20, person_count))
+            members = set([moderator_idx])
+            while len(members) < member_count:
+                members.add(random.randint(0, person_count - 1))
+            for member_idx in members:
+                join_date = creation_start + timedelta(days=random.randint(0, 4000))
+                edges.append((
+                    forum_id, f"person_{member_idx}", "HAS_MEMBER",
+                    {"joinDate": join_date.isoformat()},
+                ))
+
         return edges

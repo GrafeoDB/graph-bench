@@ -1,57 +1,44 @@
-# Environment
+# ── OS ────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ── IDE / Editor ──────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── Environment ───────────────────────────────────────────────────────
 .env
 .env.local
 
-# Python
+# ── Python ────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
 *.egg-info/
-.installed.cfg
 *.egg
-
-# Virtual environments
+dist/
+build/
+.eggs/
 .venv/
 venv/
-ENV/
+.mypy_cache/
+.ruff_cache/
+.ty/
 
-# Testing
+# ── Testing & coverage ───────────────────────────────────────────────
 .pytest_cache/
 .coverage
 htmlcov/
 .tox/
 .nox/
 
-# Type checking
-.mypy_cache/
-.pytype/
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# Embedded database data
+# ── Embedded database data ───────────────────────────────────────────
 data/
 
-# OS
-.DS_Store
-Thumbs.db
-
-*.cl*/
-results/* 
+# ── Results ───────────────────────────────────────────────────────────
+results/*

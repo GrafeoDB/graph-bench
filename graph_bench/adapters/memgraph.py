@@ -90,6 +90,11 @@ class MemgraphAdapter(BaseAdapter):
                 query = f"UNWIND $nodes AS node CREATE (n:{label}) SET n = node"
                 session.run(query, nodes=batch)
                 count += len(batch)
+            # Create index on id for this label to speed up MATCH in insert_edges
+            try:
+                session.run(f"CREATE INDEX ON :{label}(id)")
+            except Exception:
+                pass  # Index may already exist
         return count
 
     def get_node(self, node_id: str) -> dict[str, Any] | None:

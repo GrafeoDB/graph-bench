@@ -91,6 +91,11 @@ class Neo4jAdapter(BaseAdapter):
                 query = f"UNWIND $nodes AS node CREATE (n:{label}) SET n = node"
                 session.run(query, nodes=batch)
                 count += len(batch)
+            # Create index on id for this label to speed up MATCH in insert_edges
+            try:
+                session.run(f"CREATE INDEX IF NOT EXISTS FOR (n:{label}) ON (n.id)")
+            except Exception:
+                pass
         return count
 
     def get_node(self, node_id: str) -> dict[str, Any] | None:

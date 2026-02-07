@@ -14,9 +14,9 @@ keywords = [
     "memgraph",
     "ladybug",
     "arangodb",
-    "duckdb",
     "falkordb",
     "nebula",
+    "tugraph",
     "grafeo",
     "performance",
 ]
@@ -39,7 +39,7 @@ dev = [
     "pytest>=9.0.2",
     "pytest-cov>=7.0.0",
     "ruff>=0.15.0",
-    "prek>=0.3.1",
+    "prek>=0.3.2",
     "ty>=0.0.15",
 ]
 cli = ["typer>=0.15.0"]
@@ -49,17 +49,16 @@ ladybug = ["real_ladybug>=0.14"]
 arangodb = ["python-arango>=7.0"]
 grafeo = ["grafeo>=0.2.5"]
 # grafeo-local: cd H:\GrafeoDB\grafeo && maturin develop --release
-duckdb = ["duckdb>=1.0"]
 falkordb = ["FalkorDB>=1.0"]
 nebula = ["nebula3-python>=3.0"]
+tugraph = ["neo4j>=5.0"]
 datasets = ["faker>=20.0"]
 reporting = ["matplotlib>=3.8", "pandas>=2.0"]
 all-adapters = [
     "neo4j>=5.0",
     "real_ladybug>=0.14.1",
     "python-arango>=8.2.6",
-    "grafeo>=0.2.7",
-    "duckdb>=1.4.4",
+    "grafeo>=0.3.4",
     "FalkorDB>=1.4.0",
     "nebula3-python>=3.8.3",
 ]
@@ -94,8 +93,8 @@ markers = [
     "memgraph: requires Memgraph",
     "kuzu: requires Kuzu",
     "arangodb: requires ArangoDB",
+    "tugraph: requires TuGraph",
     "grafeo: requires Grafeo",
-    "duckdb: requires DuckDB",
 ]
 
 [tool.coverage.run]

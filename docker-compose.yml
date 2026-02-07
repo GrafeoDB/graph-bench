@@ -60,6 +60,21 @@ services:
       timeout: 5s
       retries: 5
 
+  # TuGraph - High-performance graph DB with 34+ built-in algorithms
+  tugraph:
+    image: tugraph/tugraph-runtime-centos7:latest
+    container_name: graph-bench-tugraph
+    ports:
+      - "7070:7070"  # HTTP UI
+      - "7689:7687"  # Bolt (remapped to avoid Neo4j/Memgraph conflict)
+      - "9090:9090"  # RPC
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/7687"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
   # NebulaGraph - Distributed graph database (fresh each run)
   nebula-metad:
     image: vesoft/nebula-metad:v3.6.0

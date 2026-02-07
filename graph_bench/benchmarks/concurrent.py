@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from graph_bench.benchmarks.base import BaseBenchmark, BenchmarkRegistry
-from graph_bench.datasets.ldbc_snb import LDBCSocialNetwork
+from graph_bench.datasets.ldbc_snb import LDBCSocialNetwork, scale_name_to_factor
 from graph_bench.protocols import GraphDatabaseAdapter
 from graph_bench.types import Metrics, ScaleConfig, TimingStats
 
@@ -65,7 +65,7 @@ class ConcurrentSnbBenchmarkBase(BaseBenchmark):
         adapter.clear()
 
         # Generate SNB data
-        dataset = LDBCSocialNetwork(scale_factor=1, seed=42)
+        dataset = LDBCSocialNetwork(scale_factor=scale_name_to_factor(scale.name), seed=42)
         nodes, edges = dataset.generate(scale)
 
         # Insert nodes by label

@@ -8,7 +8,6 @@ Benchmark suite for graph databases. Built to compare Grafeo against other optio
 |----------|------|----------------|--------|
 | **Grafeo** | Embedded | GQL (ISO) | Ready |
 | **LadybugDB** | Embedded | Cypher | Ready |
-| **DuckDB** | Embedded | SQL/PGQ | Ready |
 | **Neo4j** | Server | Cypher | Ready |
 | **Memgraph** | Server | Cypher | Ready |
 | **ArangoDB** | Server | AQL | Ready |
@@ -25,13 +24,13 @@ uv sync --all-extras
 uv run graph-bench run -d grafeo -s small --verbose
 
 # Compare embedded databases
-uv run graph-bench run -d grafeo,ladybug,duckdb -s small --verbose
+uv run graph-bench run -d grafeo,ladybug -s small --verbose
 
 # Run core benchmarks
 uv run graph-bench run -d grafeo -s medium
 ```
 
-## Benchmarks (59 total)
+## Benchmarks
 
 ### Storage (4)
 | Benchmark | What it measures |
@@ -133,7 +132,7 @@ uv run graph-bench run -d grafeo -s medium
 ## Installation
 
 ```bash
-git clone https://github.com/StevenBtw/graph-bench
+git clone https://github.com/GrafeoDB/graph-bench
 cd graph-bench
 
 # Install everything
@@ -192,7 +191,6 @@ Create a `.env` file (copy from `.env.example`):
 # Embedded (no server needed)
 GRAPH_BENCH_GRAFEO_PATH=:memory:
 GRAPH_BENCH_LADYBUG_PATH=:memory:
-GRAPH_BENCH_DUCKDB_PATH=:memory:
 
 # Server databases (needs Docker or local install)
 GRAPH_BENCH_NEO4J_URI=bolt://localhost:7687
@@ -253,6 +251,11 @@ uv run ruff format graph_bench/
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for adding benchmarks or adapters.
+
+## Related
+
+- [Grafeo](https://github.com/GrafeoDB/grafeo), the graph database being benchmarked
+- [anywidget-graph](https://github.com/GrafeoDB/anywidget-graph), interactive graph visualization for notebooks
 
 ## License
 

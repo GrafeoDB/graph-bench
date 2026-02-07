@@ -7,7 +7,6 @@ from graph_bench.adapters import AdapterRegistry
 CONFIGS = {
     # Embedded databases (no server needed)
     "ladybug": {"uri": ":memory:"},
-    "duckdb": {"uri": ":memory:"},
     "grafeo": {},  # In-memory by default
 
     # Docker databases
@@ -16,7 +15,7 @@ CONFIGS = {
     "arangodb": {"uri": "http://localhost:8529", "user": "root", "password": "benchmark"},
 }
 
-DATABASE_ORDER = ["ladybug", "duckdb", "grafeo", "neo4j", "memgraph", "arangodb"]
+DATABASE_ORDER = ["ladybug", "grafeo", "neo4j", "memgraph", "arangodb"]
 
 
 def test_adapter(name: str) -> tuple[bool, str]:

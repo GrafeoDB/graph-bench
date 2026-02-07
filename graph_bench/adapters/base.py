@@ -309,9 +309,13 @@ class BaseAdapter(ABC):
 
         Default uses NetworkX fallback (extracts graph from database).
         Override for native database support.
+
+        For label_propagation: uses LDBC-compliant synchronous algorithm
+        where all nodes update based on previous iteration's labels
+        (not NetworkX's asynchronous variant).
         """
         import networkx as nx
-        from networkx.algorithms.community import label_propagation_communities, louvain_communities
+        from networkx.algorithms.community import louvain_communities
 
         G = self._build_networkx_graph()
         if len(G) == 0:
@@ -322,13 +326,52 @@ class BaseAdapter(ABC):
 
         if algorithm == "louvain":
             communities = louvain_communities(G_undirected)
+            return [set(str(n) for n in c) for c in communities]
         elif algorithm == "label_propagation":
-            communities = label_propagation_communities(G_undirected)
+            return self._synchronous_label_propagation(G_undirected)
         else:
             msg = f"Unknown community detection algorithm: {algorithm}"
             raise ValueError(msg)
 
-        return [set(str(n) for n in c) for c in communities]
+    @staticmethod
+    def _synchronous_label_propagation(
+        G: Any, max_iterations: int = 10,
+    ) -> list[set[str]]:
+        """LDBC-compliant synchronous Community Detection Label Propagation.
+
+        Per LDBC Graphanalytics spec: all nodes update simultaneously
+        based on the previous iteration's labels. Ties broken by
+        selecting the smallest label.
+        """
+        # Initialize: each node's label = its own id
+        labels: dict[Any, Any] = {node: node for node in G.nodes()}
+
+        for _ in range(max_iterations):
+            new_labels: dict[Any, Any] = {}
+            for node in G.nodes():
+                neighbor_labels = [labels[n] for n in G.neighbors(node)]
+                if not neighbor_labels:
+                    new_labels[node] = labels[node]
+                    continue
+                # Count label frequencies
+                freq: dict[Any, int] = {}
+                for lbl in neighbor_labels:
+                    freq[lbl] = freq.get(lbl, 0) + 1
+                max_freq = max(freq.values())
+                # Break ties by smallest label
+                candidates = [
+                    lbl for lbl, cnt in freq.items() if cnt == max_freq
+                ]
+                new_labels[node] = min(candidates)
+            if new_labels == labels:
+                break  # converged
+            labels = new_labels
+
+        # Group nodes by label
+        communities: dict[Any, set[str]] = {}
+        for node, lbl in labels.items():
+            communities.setdefault(lbl, set()).add(str(node))
+        return list(communities.values())
 
     def local_clustering_coefficient(self) -> dict[str, float]:
         """Compute Local Clustering Coefficient for all vertices.
@@ -372,7 +415,7 @@ class BaseAdapter(ABC):
         """Single-Source Shortest Paths with weights.
 
         LDBC Graphanalytics SSSP: shortest path distances from source to all vertices.
-        Returns dict mapping vertex ID to distance (infinity if unreachable).
+        Unreachable vertices get infinity per spec.
 
         Default uses NetworkX fallback (extracts graph from database).
         Override for native database support.
@@ -384,34 +427,96 @@ class BaseAdapter(ABC):
             return {}
 
         try:
-            # Use Dijkstra for weighted shortest paths
-            distances = nx.single_source_dijkstra_path_length(G, source, weight=weight_attr)
-            return {str(k): float(v) for k, v in distances.items()}
+            distances = nx.single_source_dijkstra_path_length(
+                G, source, weight=weight_attr,
+            )
+            # Include all vertices; unreachable ones get infinity
+            result: dict[str, float] = {}
+            for node in G.nodes():
+                result[str(node)] = float(distances.get(node, float("inf")))
+            return result
         except nx.NetworkXError:
-            # Source not in graph
             return {}
 
     def bfs_levels(self, source: str) -> dict[str, int]:
         """BFS with level/depth tracking.
 
         LDBC Graphanalytics BFS: assigns each vertex its distance from source.
-        Unreachable vertices get infinity (represented as -1 here).
+        Unreachable vertices get LDBC_INFINITY (2^63 - 1) per spec.
 
         Default uses NetworkX fallback (extracts graph from database).
         Override for native database support.
         """
         import networkx as nx
 
+        LDBC_INFINITY = 9223372036854775807
+
         G = self._build_networkx_graph()
         if len(G) == 0:
             return {}
 
         try:
-            # BFS returns dict of node -> distance
             distances = dict(nx.single_source_shortest_path_length(G, source))
-            return {str(k): int(v) for k, v in distances.items()}
+            # Include all vertices; unreachable ones get LDBC_INFINITY
+            result: dict[str, int] = {}
+            for node in G.nodes():
+                result[str(node)] = distances.get(node, LDBC_INFINITY)
+            return result
         except nx.NetworkXError:
             return {}
+
+    def create_vector_index(
+        self,
+        label: str,
+        property_name: str,
+        *,
+        dimensions: int = 128,
+        metric: str = "cosine",
+    ) -> None:
+        """Create a vector similarity index on a node property.
+
+        Default is a no-op (brute-force search requires no index).
+        Override for native database support (e.g. HNSW).
+        """
+
+    @staticmethod
+    def _cosine_similarity(a: list[float], b: list[float]) -> float:
+        """Compute cosine similarity between two vectors."""
+        import math
+
+        dot = sum(x * y for x, y in zip(a, b))
+        norm_a = math.sqrt(sum(x * x for x in a))
+        norm_b = math.sqrt(sum(x * x for x in b))
+        if norm_a == 0 or norm_b == 0:
+            return 0.0
+        return dot / (norm_a * norm_b)
+
+    def vector_search(
+        self,
+        query_vector: list[float],
+        *,
+        label: str = "VectorNode",
+        property_name: str = "embedding",
+        k: int = 10,
+        metric: str = "cosine",
+    ) -> list[tuple[str, float]]:
+        """Find k nearest neighbors to a query vector.
+
+        Default uses brute-force scan (extracts nodes from database).
+        The scan overhead is included in benchmark timing,
+        representing the real cost of not having native support.
+        Override for native database support.
+        """
+        nodes = self.get_nodes_by_label(label, limit=100_000)
+        scored: list[tuple[str, float]] = []
+        for node in nodes:
+            node_id = node.get("id")
+            vec = node.get(property_name)
+            if node_id is not None and isinstance(vec, list):
+                score = self._cosine_similarity(query_vector, vec)
+                scored.append((str(node_id), score))
+        scored.sort(key=lambda x: x[1], reverse=True)
+        return scored[:k]
 
     def __enter__(self) -> "BaseAdapter":
         """Context manager entry."""

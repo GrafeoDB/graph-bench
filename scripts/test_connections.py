@@ -7,13 +7,13 @@ from graph_bench.adapters import AdapterRegistry
 CONFIGS = {
     # Embedded databases (no server needed)
     "ladybug": {"uri": ":memory:"},
-    "duckdb": {"uri": ":memory:"},
     "grafeo": {},  # In-memory by default
 
     # Docker databases
     "neo4j": {"uri": "bolt://localhost:7687", "user": "neo4j", "password": "benchmark"},
     "memgraph": {"uri": "bolt://localhost:7688"},
     "arangodb": {"uri": "http://localhost:8529", "user": "root", "password": "benchmark"},
+    "tugraph": {"uri": "bolt://localhost:7689", "user": "admin", "password": "73@TuGraph"},
 }
 
 
@@ -41,7 +41,7 @@ def main():
     # Test embedded first (don't need Docker)
     print("EMBEDDED DATABASES (no Docker needed)")
     print("-" * 40)
-    for name in ["ladybug", "duckdb", "grafeo"]:
+    for name in ["ladybug", "grafeo"]:
         ok, msg = test_connection(name)
         status = "[OK]" if ok else "[FAIL]"
         print(f"  {status:6} {name:12} {msg}")
@@ -49,7 +49,7 @@ def main():
     print()
     print("DOCKER DATABASES (need docker compose up)")
     print("-" * 40)
-    for name in ["neo4j", "memgraph", "arangodb"]:
+    for name in ["neo4j", "memgraph", "arangodb", "tugraph"]:
         ok, msg = test_connection(name)
         status = "[OK]" if ok else "[FAIL]"
         print(f"  {status:6} {name:12} {msg}")

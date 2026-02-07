@@ -55,8 +55,8 @@ SCALES: dict[str, ScaleConfig] = {
         name="sf01",
         nodes=1_000,
         edges=18_000,
-        warmup_iterations=2,
-        measurement_iterations=5,
+        warmup_iterations=1,
+        measurement_iterations=3,
         timeout_seconds=60,
     ),
     # SF1 - Standard benchmark (default)
@@ -64,8 +64,8 @@ SCALES: dict[str, ScaleConfig] = {
         name="sf1",
         nodes=10_000,
         edges=180_000,
-        warmup_iterations=3,
-        measurement_iterations=10,
+        warmup_iterations=1,
+        measurement_iterations=3,
         timeout_seconds=120,
     ),
     # SF3

@@ -36,6 +36,8 @@ class GrafeoAdapter(BaseAdapter):
         self._db: Any = None
         self._connected = False
         self._id_index_created = False
+        # Cache string ID -> internal node ID for fast edge insertion
+        self._nid_cache: dict[str, int] = {}
 
     @property
     def name(self) -> str:
@@ -78,6 +80,8 @@ class GrafeoAdapter(BaseAdapter):
 
     def clear(self) -> None:
         self._db.execute("MATCH (n) DETACH DELETE n")
+        self._nid_cache.clear()
+        self._id_index_created = False
 
     def insert_nodes(
         self,
@@ -86,18 +90,24 @@ class GrafeoAdapter(BaseAdapter):
         label: str = "Node",
         batch_size: int = 1000,
     ) -> int:
-        # Grafeo's native Python API is most efficient for batch inserts
-        # GQL UNWIND has limitations with property setting from variables
         count = 0
         for i in range(0, len(nodes), batch_size):
             batch = nodes[i : i + batch_size]
             for node in batch:
                 props = dict(node)
-                self._db.create_node([label], props)
+                node_obj = self._db.create_node([label], props)
+                # Cache string id -> internal node id for fast edge insertion
+                str_id = props.get("id")
+                if str_id is not None and node_obj is not None:
+                    self._nid_cache[str_id] = node_obj.id
                 count += 1
 
-        # Create property index on "id" for O(1) lookups
-        if not self._id_index_created and hasattr(self._db, "create_property_index"):
+        # Rebuild property index on "id" after each insert batch.
+        # Grafeo's property index is a snapshot — nodes added after index
+        # creation are not automatically indexed. Drop+recreate fixes this.
+        if hasattr(self._db, "create_property_index"):
+            if self._id_index_created:
+                self._db.drop_property_index("id")
             self._db.create_property_index("id")
             self._id_index_created = True
 
@@ -142,23 +152,27 @@ class GrafeoAdapter(BaseAdapter):
         *,
         batch_size: int = 1000,
     ) -> int:
-        # Grafeo's native Python API is most efficient
-        # GQL UNWIND has limitations with property access from variables
         count = 0
         for src, tgt, edge_type, props in edges:
-            src_result = self._db.execute(
-                "MATCH (n {id: $id}) RETURN id(n) as nid", {"id": src}
-            )
-            tgt_result = self._db.execute(
-                "MATCH (n {id: $id}) RETURN id(n) as nid", {"id": tgt}
-            )
+            # Use cached node IDs when available (avoids 2 MATCH queries per edge)
+            src_id = self._nid_cache.get(src)
+            tgt_id = self._nid_cache.get(tgt)
 
-            src_id = None
-            tgt_id = None
-            for row in src_result:
-                src_id = row["nid"]
-            for row in tgt_result:
-                tgt_id = row["nid"]
+            # Fallback to query for uncached nodes
+            if src_id is None:
+                r = self._db.execute(
+                    "MATCH (n {id: $id}) RETURN id(n) as nid",
+                    {"id": src},
+                )
+                for row in r:
+                    src_id = row["nid"]
+            if tgt_id is None:
+                r = self._db.execute(
+                    "MATCH (n {id: $id}) RETURN id(n) as nid",
+                    {"id": tgt},
+                )
+                for row in r:
+                    tgt_id = row["nid"]
 
             if src_id is not None and tgt_id is not None:
                 self._db.create_edge(src_id, tgt_id, edge_type, props)
@@ -380,3 +394,10 @@ class GrafeoAdapter(BaseAdapter):
             result = self._db.algorithms.local_clustering_coefficient()
             return {str(k): float(v) for k, v in result.items()}
         return super().local_clustering_coefficient()
+
+    # NOTE: create_vector_index() and vector_search() use the brute-force
+    # fallback from BaseAdapter. Grafeo has native HNSW vector support in
+    # Rust, but the Python bindings don't yet expose vector type conversion
+    # or CREATE VECTOR INDEX DDL. Once the bindings are updated (see
+    # grafeo/.claude/todo/4_language_bindings/improve-vector-support.md),
+    # override these methods with native GQL implementations.

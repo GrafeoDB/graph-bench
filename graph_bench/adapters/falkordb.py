@@ -98,6 +98,11 @@ class FalkorDBAdapter(BaseAdapter):
                     query = f"CREATE (n:{label} {{{props}}})"
                     self._graph.query(query, node)
                     count += 1
+        # Create index on id for this label to speed up MATCH in insert_edges
+        try:
+            self._graph.query(f"CREATE INDEX FOR (n:{label}) ON (n.id)")
+        except Exception:
+            pass  # Index may already exist
         return count
 
     def get_node(self, node_id: str) -> dict[str, Any] | None:

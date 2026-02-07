@@ -25,8 +25,8 @@ docker compose down
 | ArangoDB | Server (Docker) | AQL | 8529 | Multi-model |
 | FalkorDB | Server (Docker) | Cypher | 6379 | Redis-based graph DB |
 | NebulaGraph | Server (Docker) | nGQL | 9669 | Distributed graph DB |
+| TuGraph | Server (Docker) | Cypher | 7689 | 34+ built-in algorithms |
 | LadybugDB | Embedded | Cypher | N/A | `pip install real_ladybug` |
-| DuckDB | Embedded | SQL/PGQ | N/A | `pip install duckdb` |
 | Grafeo | Embedded | GQL (ISO) | N/A | `pip install grafeo` |
 
 ## Server Databases (Docker)
@@ -38,6 +38,7 @@ docker compose down
 | ArangoDB | `arangodb:latest` | 8529 | http://localhost:8529 |
 | FalkorDB | `falkordb/falkordb` | 6379 | N/A |
 | NebulaGraph | `vesoft/nebula-*` | 9669 | N/A |
+| TuGraph | `tugraph/tugraph-runtime-centos7` | 7689 (bolt), 7070 (http), 9090 (rpc) | http://localhost:7070 |
 
 ### Credentials
 
@@ -47,6 +48,7 @@ docker compose down
 | Memgraph | (none) | (none) |
 | ArangoDB | `root` | `benchmark` |
 | NebulaGraph | `root` | `nebula` |
+| TuGraph | `admin` | `73@TuGraph` |
 
 ## Embedded Databases (No Docker)
 
@@ -54,11 +56,10 @@ These run directly in Python - no server needed:
 
 ```bash
 # Install embedded adapters
-pip install ladybug duckdb grafeo
+pip install ladybug grafeo
 ```
 
 - **ladybug**: Cypher queries, stored in `./data/ladybug`
-- **DuckDB**: SQL queries, in-memory by default (`:memory:`)
 - **Grafeo**: Cypher-like queries, stored in `./data/grafeo`
 
 ## Fresh Containers
@@ -70,15 +71,15 @@ Docker containers start fresh each time (no persistent volumes). This ensures:
 
 ## Feature Availability
 
-| Feature | Neo4j+GDS | Memgraph+MAGE | ArangoDB | LadybugDB | DuckDB | Grafeo |
-|---------|-----------|---------------|----------|-----------|--------|--------|
+| Feature | Neo4j+GDS | Memgraph+MAGE | ArangoDB | LadybugDB | Grafeo | TuGraph |
+|---------|-----------|---------------|----------|-----------|--------|---------|
 | Basic CRUD | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Traversal (BFS/DFS) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Shortest Path | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| PageRank | ✅ | ✅ | ❌ | ❌* | ❌* | ✅ |
-| Community Detection | ✅ | ✅ | ❌ | ❌* | ❌* | ✅ |
-| WCC | ✅ | ✅ | ❌ | ❌* | ❌* | ✅ |
-| LCC | ✅ | ✅ | ❌ | ❌* | ❌* | ✅ |
+| PageRank | ✅ | ✅ | ❌ | ❌* | ✅ | ✅ |
+| Community Detection | ✅ | ✅ | ❌ | ❌* | ✅ | ✅ |
+| WCC | ✅ | ✅ | ❌ | ❌* | ✅ | ✅ |
+| LCC | ✅ | ✅ | ❌ | ❌* | ✅ | ✅ |
 | SSSP | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 **Legend:** ✅ Native | ❌ Not available | ❌* Uses NetworkX fallback

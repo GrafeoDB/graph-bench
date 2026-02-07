@@ -14,8 +14,8 @@ class TestAdapterRegistry:
         assert "memgraph" in adapters
         assert "arangodb" in adapters
         assert "grafeo" in adapters
-        assert "duckdb" in adapters
         assert "ladybug" in adapters
+        assert "tugraph" in adapters
 
     def test_get_adapter_class(self):
         adapter_cls = AdapterRegistry.get("neo4j")
@@ -75,6 +75,21 @@ class TestArangoDBAdapter:
         adapter = ArangoDBAdapter()
         assert adapter.name == "ArangoDB"
         assert adapter.connected is False
+
+
+class TestTuGraphAdapter:
+    def test_create_adapter(self):
+        from graph_bench.adapters.tugraph import TuGraphAdapter
+
+        adapter = TuGraphAdapter()
+        assert adapter.name == "TuGraph"
+        assert adapter.connected is False
+
+    def test_adapter_version_disconnected(self):
+        from graph_bench.adapters.tugraph import TuGraphAdapter
+
+        adapter = TuGraphAdapter()
+        assert adapter.version == "unknown"
 
 
 class TestGrafeoAdapter:

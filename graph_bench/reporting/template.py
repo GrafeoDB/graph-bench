@@ -33,24 +33,24 @@ __all__ = ["TemplateExporter"]
 DB_ORDER = [
     "Grafeo",
     "LadybugDB",
-    "DuckDB",
     "Neo4j",
     "Memgraph",
     "FalkorDB",
     "ArangoDB",
     "NebulaGraph",
+    "TuGraph",
 ]
 
 # Database types
 DB_TYPES = {
     "Grafeo": "Embedded",
     "LadybugDB": "Embedded",
-    "DuckDB": "Embedded",
     "Neo4j": "Server",
     "Memgraph": "Server",
     "FalkorDB": "Server",
     "ArangoDB": "Server",
     "NebulaGraph": "Distributed",
+    "TuGraph": "Server",
 }
 
 # Benchmark categories and their benchmarks (must match actual registered names)
@@ -131,6 +131,16 @@ CATEGORY_BENCHMARKS = {
         "read_after_write",
         "concurrent_acid",
     ],
+    "Vector Search": [
+        "vector_insert",
+        "vector_knn",
+        "vector_batch_search",
+        "vector_recall",
+    ],
+    "Hybrid Graph+Vector": [
+        "hybrid_graph_to_vector",
+        "hybrid_vector_to_graph",
+    ],
 }
 
 # Databases with native graph analytics support (not using NetworkX fallback)
@@ -141,6 +151,18 @@ NATIVE_ANALYTICS = {
     "Neo4j": ["ldbc_bfs", "ldbc_pagerank", "ldbc_wcc", "ldbc_cdlp", "ldbc_sssp"],
     "Memgraph": [
         "ldbc_bfs", "ldbc_pagerank", "ldbc_wcc", "ldbc_cdlp", "ldbc_lcc", "ldbc_sssp"
+    ],
+    "TuGraph": [
+        "ldbc_bfs", "ldbc_pagerank", "ldbc_wcc", "ldbc_cdlp", "ldbc_lcc", "ldbc_sssp"
+    ],
+}
+
+# Databases with native vector search support
+NATIVE_VECTOR = {
+    "Grafeo": [
+        "vector_insert", "vector_knn", "vector_batch_search",
+        "vector_recall", "hybrid_graph_to_vector",
+        "hybrid_vector_to_graph",
     ],
 }
 
@@ -158,14 +180,6 @@ DB_INFO = {
         "type": "Embedded",
         "data_model": "LPG",
         "query_languages": "Cypher",
-        "acid": "Full (snapshot isolation)",
-        "consistency": "Strong",
-        "license": "MIT",
-    },
-    "DuckDB": {
-        "type": "Embedded",
-        "data_model": "Relational (SQL/PGQ for graph queries)",
-        "query_languages": "SQL/PGQ",
         "acid": "Full (snapshot isolation)",
         "consistency": "Strong",
         "license": "MIT",
@@ -208,6 +222,14 @@ DB_INFO = {
         "query_languages": "nGQL",
         "acid": "Partial (eventual consistency)",
         "consistency": "Eventual (tunable replica factor)",
+        "license": "Apache 2.0",
+    },
+    "TuGraph": {
+        "type": "Server (Bolt RPC)",
+        "data_model": "LPG",
+        "query_languages": "Cypher, GQL (ISO)",
+        "acid": "Full (snapshot isolation)",
+        "consistency": "Strong",
         "license": "Apache 2.0",
     },
 }
@@ -473,7 +495,7 @@ class TemplateExporter(BaseExporter):
         )
         lines.append("")
         lines.append(
-            "- **Embedded vs. server.** Grafeo, LadybugDB, and DuckDB run in-process - "
+            "- **Embedded vs. server.** Grafeo and LadybugDB run in-process - "
             "no network serialization, no protocol overhead. Server databases pay ~0.1-1ms "
             "per round-trip."
         )
@@ -556,14 +578,13 @@ class TemplateExporter(BaseExporter):
         lines.append(sep)
 
         features = [
-            ("**LPG**", lambda db: db != "DuckDB"),
+            ("**LPG**", lambda db: True),
             ("**RDF**", lambda db: db == "Grafeo"),
             ("**GQL (ISO)**", lambda db: db == "Grafeo"),
-            ("**Cypher**", lambda db: db in ["Grafeo", "LadybugDB", "Neo4j", "Memgraph", "FalkorDB"]),
+            ("**Cypher**", lambda db: db in ["Grafeo", "LadybugDB", "Neo4j", "Memgraph", "FalkorDB", "TuGraph"]),
             ("**Gremlin**", lambda db: db in ["Grafeo", "ArangoDB"]),
             ("**GraphQL**", lambda db: db in ["Grafeo", "ArangoDB"]),
             ("**SPARQL**", lambda db: db == "Grafeo"),
-            ("**SQL/PGQ**", lambda db: db == "DuckDB"),
             ("**AQL**", lambda db: db == "ArangoDB"),
             ("**nGQL**", lambda db: db == "NebulaGraph"),
         ]

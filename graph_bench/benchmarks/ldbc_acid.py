@@ -27,7 +27,7 @@ import threading
 import time
 from abc import abstractmethod
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from graph_bench.benchmarks.base import BaseBenchmark, BenchmarkRegistry
@@ -80,8 +80,10 @@ class LdbcAcidTestBase(BaseBenchmark):
     """
 
     category = "ldbc_acid"
-    _person_ids: list[str] = []
-    _test_results: list[AcidTestResult] = field(default_factory=list)
+
+    def __init__(self, seed: int = 42) -> None:
+        self._person_ids: list[str] = []
+        self._test_results: list[AcidTestResult] = []
 
     def setup(self, adapter: GraphDatabaseAdapter, scale: ScaleConfig) -> None:
         """Setup minimal graph for ACID testing."""
@@ -213,36 +215,42 @@ class AtomicityRollbackTest(LdbcAcidTestBase):
         return "acid_atomicity_rb"
 
     def run_test(self, adapter: GraphDatabaseAdapter) -> AcidTestResult:
-        """Test that failed operations don't leave partial state."""
-        target = self._person_ids[0]
-        initial_version = 0
-        attempted_version = 999
+        """Test that failed operations don't corrupt prior committed state.
 
-        # Set to known initial state
-        adapter.update_node(target, {"version": initial_version, "numFriends": 0})
+        1. Set initial state (version=0, numFriends=0)
+        2. Do a valid update (version=1, numFriends=1) — committed
+        3. Attempt a failing update on a non-existent node
+        4. Verify the committed state (version=1, numFriends=1) is intact
+        """
+        target = self._person_ids[0]
+
+        # Set known initial state
+        adapter.update_node(target, {"version": 0, "numFriends": 0})
 
         start = time.perf_counter()
 
-        # Verify initial state
-        node_before = adapter.get_node(target)
-        if node_before is None or node_before.get("version") != initial_version:
+        # Commit a valid update
+        adapter.update_node(target, {"version": 1, "numFriends": 1})
+
+        # Verify the committed update
+        node_mid = adapter.get_node(target)
+        if node_mid is None or node_mid.get("version") != 1:
             return AcidTestResult(
                 test_name=self.name,
                 passed=False,
-                details="Could not establish initial state",
+                details="Valid update not visible",
                 execution_time_ms=0,
             )
 
-        # Try an operation that we'll consider "rolled back"
-        # Since most graph DBs auto-commit, we test by verifying
-        # that a non-existent node update doesn't corrupt state
+        # Attempt a failing operation (update non-existent node)
         try:
-            # Attempt update on non-existent node (should fail/no-op)
-            adapter.update_node("nonexistent_person_xyz", {"version": attempted_version})
+            adapter.update_node(
+                "nonexistent_person_xyz", {"version": 999},
+            )
         except Exception:
             pass  # Expected to fail
 
-        # Verify original node is unchanged
+        # Verify committed state is still intact
         node_after = adapter.get_node(target)
 
         end = time.perf_counter()
@@ -253,23 +261,30 @@ class AtomicityRollbackTest(LdbcAcidTestBase):
                 passed=False,
                 anomaly_detected=True,
                 violations=1,
-                details="Original node disappeared",
+                details="Node disappeared after failed operation",
                 execution_time_ms=(end - start) * 1000,
             )
 
-        if node_after.get("version") != initial_version:
+        version_ok = node_after.get("version") == 1
+        friends_ok = node_after.get("numFriends") == 1
+
+        if not version_ok or not friends_ok:
             return AcidTestResult(
                 test_name=self.name,
                 passed=False,
                 anomaly_detected=True,
                 violations=1,
-                details=f"State corrupted: version changed to {node_after.get('version')}",
+                details=(
+                    f"Committed state corrupted: version={node_after.get('version')}, "
+                    f"numFriends={node_after.get('numFriends')}"
+                ),
                 execution_time_ms=(end - start) * 1000,
             )
 
         return AcidTestResult(
             test_name=self.name,
             passed=True,
+            details="Committed state preserved after failed operation",
             execution_time_ms=(end - start) * 1000,
         )
 

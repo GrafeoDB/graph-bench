@@ -141,6 +141,29 @@ class GraphDatabaseAdapter(Protocol):
         """Detect communities in the graph."""
         ...
 
+    def create_vector_index(
+        self,
+        label: str,
+        property_name: str,
+        *,
+        dimensions: int = 128,
+        metric: str = "cosine",
+    ) -> None:
+        """Create a vector similarity index on a node property."""
+        ...
+
+    def vector_search(
+        self,
+        query_vector: list[float],
+        *,
+        label: str = "VectorNode",
+        property_name: str = "embedding",
+        k: int = 10,
+        metric: str = "cosine",
+    ) -> list[tuple[str, float]]:
+        """Find k nearest neighbors to a query vector."""
+        ...
+
 
 @runtime_checkable
 class Benchmark(Protocol):
