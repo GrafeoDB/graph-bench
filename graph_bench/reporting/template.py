@@ -32,6 +32,7 @@ __all__ = ["TemplateExporter"]
 # Database ordering for tables
 DB_ORDER = [
     "Grafeo",
+    "Grafeo Server",
     "LadybugDB",
     "Neo4j",
     "Memgraph",
@@ -44,6 +45,7 @@ DB_ORDER = [
 # Database types
 DB_TYPES = {
     "Grafeo": "Embedded",
+    "Grafeo Server": "Server",
     "LadybugDB": "Embedded",
     "Neo4j": "Server",
     "Memgraph": "Server",
@@ -146,7 +148,7 @@ CATEGORY_BENCHMARKS = {
 # Databases with native graph analytics support (not using NetworkX fallback)
 NATIVE_ANALYTICS = {
     "Grafeo": [
-        "ldbc_bfs", "ldbc_pagerank", "ldbc_wcc", "ldbc_cdlp", "ldbc_lcc", "ldbc_sssp"
+        "ldbc_bfs", "ldbc_pagerank", "ldbc_wcc", "ldbc_cdlp", "ldbc_lcc",
     ],
     "Neo4j": ["ldbc_bfs", "ldbc_pagerank", "ldbc_wcc", "ldbc_cdlp", "ldbc_sssp"],
     "Memgraph": [
@@ -158,13 +160,8 @@ NATIVE_ANALYTICS = {
 }
 
 # Databases with native vector search support
-NATIVE_VECTOR = {
-    "Grafeo": [
-        "vector_insert", "vector_knn", "vector_batch_search",
-        "vector_recall", "hybrid_graph_to_vector",
-        "hybrid_vector_to_graph",
-    ],
-}
+# (Grafeo has native HNSW in Rust but Python bindings don't expose it yet)
+NATIVE_VECTOR: dict[str, list[str]] = {}
 
 # Database info for detailed sections
 DB_INFO = {
@@ -172,6 +169,14 @@ DB_INFO = {
         "type": "Embedded (in-process, Rust)",
         "data_model": "LPG + RDF",
         "query_languages": "GQL (ISO), Cypher, Gremlin, GraphQL, SPARQL",
+        "acid": "Full (snapshot isolation, WAL)",
+        "consistency": "Strong",
+        "license": "Apache 2.0",
+    },
+    "Grafeo Server": {
+        "type": "Server (HTTP REST, GQL)",
+        "data_model": "LPG + RDF",
+        "query_languages": "GQL (ISO)",
         "acid": "Full (snapshot isolation, WAL)",
         "consistency": "Strong",
         "license": "Apache 2.0",

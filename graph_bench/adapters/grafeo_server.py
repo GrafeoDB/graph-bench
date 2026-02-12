@@ -1,8 +1,9 @@
 r"""
-Grafeo Server database adapter.
+Grafeo Server database adapter (GQL over HTTP).
 
-Grafeo Server is an HTTP-based graph database built on the Grafeo engine,
-supporting GQL, Cypher, GraphQL, Gremlin, SPARQL, and SQL/PGQ.
+Grafeo Server is an HTTP-based graph database built on the Grafeo engine.
+This adapter uses GQL (ISO/IEC 39075) via the /query endpoint, compatible
+with the minimal "lite" image (grafeo-server:lite) which only supports GQL.
 
 Requires: pip install requests
 
@@ -27,7 +28,7 @@ __all__ = ["GrafeoServerAdapter"]
 
 @AdapterRegistry.register("grafeo-server")
 class GrafeoServerAdapter(BaseAdapter):
-    """Grafeo Server graph database adapter (HTTP/Cypher)."""
+    """Grafeo Server graph database adapter (HTTP/GQL)."""
 
     def __init__(self) -> None:
         self._base_url: str = ""
@@ -54,16 +55,24 @@ class GrafeoServerAdapter(BaseAdapter):
         try:
             import requests
         except ImportError as e:
-            msg = "requests package not installed. Install with: pip install requests"
+            msg = (
+                "requests package not installed. "
+                "Install with: pip install requests"
+            )
             raise ImportError(msg) from e
 
+        default_uri = "http://localhost:7474"
         self._base_url = (
-            uri or get_env("GRAFEO_SERVER_URI", default="http://localhost:7474") or "http://localhost:7474"
+            uri
+            or get_env("GRAFEO_SERVER_URI", default=default_uri)
+            or default_uri
         )
         self._base_url = self._base_url.rstrip("/")
 
         self._session = requests.Session()
-        self._session.headers.update({"Content-Type": "application/json"})
+        self._session.headers.update(
+            {"Content-Type": "application/json"}
+        )
 
         # Verify connectivity
         resp = self._session.get(f"{self._base_url}/health")
@@ -73,7 +82,10 @@ class GrafeoServerAdapter(BaseAdapter):
         try:
             self._session.post(
                 f"{self._base_url}/db",
-                json={"name": self._db_name, "database_type": "Lpg"},
+                json={
+                    "name": self._db_name,
+                    "database_type": "Lpg",
+                },
             )
         except Exception:
             pass
@@ -86,25 +98,36 @@ class GrafeoServerAdapter(BaseAdapter):
             self._session = None
         self._connected = False
 
-    # ── Query helpers ─────────────────────────────────────────────
+    # ── Query helpers (GQL via /query) ────────────────────────────
 
-    def _query(self, cypher: str) -> list[dict[str, Any]]:
-        """Execute a Cypher query (auto-commit) and return rows as dicts."""
+    def _query(self, gql: str) -> list[dict[str, Any]]:
+        """Execute a GQL query (auto-commit) and return rows."""
         resp = self._session.post(
-            f"{self._base_url}/cypher",
-            json={"query": cypher, "database": self._db_name},
+            f"{self._base_url}/query",
+            json={
+                "query": gql,
+                "language": "gql",
+                "database": self._db_name,
+            },
         )
         resp.raise_for_status()
         data = resp.json()
         columns = data.get("columns", [])
         rows = data.get("rows", [])
-        return [{col: row[i] for i, col in enumerate(columns)} for row in rows]
+        return [
+            {col: row[i] for i, col in enumerate(columns)}
+            for row in rows
+        ]
 
-    def _exec(self, cypher: str) -> Any:
-        """Execute a Cypher query and return raw response JSON."""
+    def _exec(self, gql: str) -> Any:
+        """Execute a GQL query and return raw response JSON."""
         resp = self._session.post(
-            f"{self._base_url}/cypher",
-            json={"query": cypher, "database": self._db_name},
+            f"{self._base_url}/query",
+            json={
+                "query": gql,
+                "language": "gql",
+                "database": self._db_name,
+            },
         )
         resp.raise_for_status()
         return resp.json()
@@ -118,12 +141,12 @@ class GrafeoServerAdapter(BaseAdapter):
         resp.raise_for_status()
         return resp.json()["session_id"]
 
-    def _tx_query(self, session_id: str, cypher: str) -> Any:
+    def _tx_query(self, session_id: str, gql: str) -> Any:
         """Execute a query within a transaction."""
         resp = self._session.post(
             f"{self._base_url}/tx/query",
             headers={"X-Session-Id": session_id},
-            json={"query": cypher, "language": "cypher"},
+            json={"query": gql, "language": "gql"},
         )
         resp.raise_for_status()
         return resp.json()
@@ -136,44 +159,56 @@ class GrafeoServerAdapter(BaseAdapter):
         )
         resp.raise_for_status()
 
-    # ── Value formatting (no parameterized Cypher) ────────────────
+    # ── Value formatting (no parameterized GQL) ──────────────────
 
     @staticmethod
-    def _cypher_literal(value: Any) -> str:
-        """Convert a Python value to a Cypher literal string."""
+    def _gql_literal(value: Any) -> str:
+        """Convert a Python value to a GQL literal string."""
         if value is None:
             return "null"
         if isinstance(value, bool):
             return "true" if value else "false"
         if isinstance(value, (int, float)):
-            if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+            if isinstance(value, float) and (
+                math.isnan(value) or math.isinf(value)
+            ):
                 return "null"
             return repr(value)
         if isinstance(value, (list, tuple)):
-            return "[" + ", ".join(GrafeoServerAdapter._cypher_literal(v) for v in value) + "]"
+            inner = ", ".join(
+                GrafeoServerAdapter._gql_literal(v) for v in value
+            )
+            return "[" + inner + "]"
         s = str(value).replace("\\", "\\\\").replace("'", "\\'")
         return f"'{s}'"
 
     @staticmethod
     def _format_props(props: dict[str, Any]) -> str:
-        """Format a dict as a Cypher property map {key: value, ...}."""
+        """Format a dict as a GQL property map {key: value, ...}."""
         if not props:
             return ""
-        parts = [f"{k}: {GrafeoServerAdapter._cypher_literal(v)}" for k, v in props.items()]
+        parts = [
+            f"{k}: {GrafeoServerAdapter._gql_literal(v)}"
+            for k, v in props.items()
+        ]
         return "{" + ", ".join(parts) + "}"
 
-    # ── Core operations ───────────────────────────────────────────
+    # ── Core operations ──────────────────────────────────────────
 
     def clear(self) -> None:
-        # Drop and recreate the database for a clean slate
         try:
-            self._session.delete(f"{self._base_url}/db/{self._db_name}")
+            self._session.delete(
+                f"{self._base_url}/db/{self._db_name}"
+            )
         except Exception:
             pass
         try:
             self._session.post(
                 f"{self._base_url}/db",
-                json={"name": self._db_name, "database_type": "Lpg"},
+                json={
+                    "name": self._db_name,
+                    "database_type": "Lpg",
+                },
             )
         except Exception:
             pass
@@ -183,26 +218,31 @@ class GrafeoServerAdapter(BaseAdapter):
         nodes: Sequence[dict[str, Any]],
         *,
         label: str = "Node",
-        batch_size: int = 50,
+        batch_size: int = 200,
     ) -> int:
         count = 0
         sid = self._tx_begin()
         try:
             for i in range(0, len(nodes), batch_size):
                 batch = list(nodes[i : i + batch_size])
-                # Multi-pattern CREATE: CREATE (:L {p}), (:L {p}), ...
-                patterns = [f"(:{label} {self._format_props(node)})" for node in batch]
+                patterns = [
+                    f"(:{label} {self._format_props(node)})"
+                    for node in batch
+                ]
                 query = "CREATE " + ", ".join(patterns)
                 self._tx_query(sid, query)
                 count += len(batch)
             self._tx_commit(sid)
         except Exception:
             count = 0
-            # Retry one-by-one
             sid = self._tx_begin()
             for node in nodes:
                 try:
-                    self._tx_query(sid, f"CREATE (:{label} {self._format_props(node)})")
+                    self._tx_query(
+                        sid,
+                        f"CREATE (:{label} "
+                        f"{self._format_props(node)})",
+                    )
                     count += 1
                 except Exception:
                     pass
@@ -210,34 +250,59 @@ class GrafeoServerAdapter(BaseAdapter):
         return count
 
     def get_node(self, node_id: str) -> dict[str, Any] | None:
-        lit = self._cypher_literal(node_id)
-        rows = self._query(f"MATCH (n {{id: {lit}}}) RETURN n.id AS id")
+        lit = self._gql_literal(node_id)
+        rows = self._query(
+            f"MATCH (n {{id: {lit}}}) RETURN n"
+        )
         if rows:
+            node = rows[0].get("n")
+            if isinstance(node, dict):
+                return node
             return rows[0]
         return None
 
-    def update_node(self, node_id: str, properties: dict[str, Any]) -> bool:
-        lit = self._cypher_literal(node_id)
-        set_parts = [f"n.{k} = {self._cypher_literal(v)}" for k, v in properties.items()]
+    def update_node(
+        self, node_id: str, properties: dict[str, Any]
+    ) -> bool:
+        lit = self._gql_literal(node_id)
+        set_parts = [
+            f"n.{k} = {self._gql_literal(v)}"
+            for k, v in properties.items()
+        ]
         set_clause = ", ".join(set_parts)
         sid = self._tx_begin()
         try:
-            result = self._tx_query(sid, f"MATCH (n {{id: {lit}}}) SET {set_clause} RETURN n.id AS id")
+            result = self._tx_query(
+                sid,
+                f"MATCH (n {{id: {lit}}}) "
+                f"SET {set_clause} RETURN n.id AS id",
+            )
             self._tx_commit(sid)
             return bool(result.get("rows"))
         except Exception:
             return False
 
-    def get_nodes_by_label(self, label: str, *, limit: int = 100) -> list[dict[str, Any]]:
-        return self._query(f"MATCH (n:{label}) RETURN n.id AS id LIMIT {limit}")
+    def get_nodes_by_label(
+        self, label: str, *, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        rows = self._query(
+            f"MATCH (n:{label}) RETURN n LIMIT {limit}"
+        )
+        result = []
+        for row in rows:
+            node = row.get("n")
+            if isinstance(node, dict):
+                result.append(node)
+            else:
+                result.append(row)
+        return result
 
     def insert_edges(
         self,
         edges: Sequence[tuple[str, str, str, dict[str, Any]]],
         *,
-        batch_size: int = 15,
+        batch_size: int = 100,
     ) -> int:
-        # Group by type
         by_type: dict[str, list[tuple[str, str, dict[str, Any]]]] = {}
         for src, tgt, etype, props in edges:
             by_type.setdefault(etype, []).append((src, tgt, props))
@@ -251,27 +316,36 @@ class GrafeoServerAdapter(BaseAdapter):
             for i in range(0, len(type_edges), batch_size):
                 batch = type_edges[i : i + batch_size]
                 try:
-                    # Multi-MATCH batch
                     match_parts = []
                     create_parts = []
                     for j, (src, tgt, _props) in enumerate(batch):
-                        src_lit = self._cypher_literal(src)
-                        tgt_lit = self._cypher_literal(tgt)
-                        match_parts.append(f"(a{j} {{id: {src_lit}}}), (b{j} {{id: {tgt_lit}}})")
-                        create_parts.append(f"(a{j})-[:{etype}]->(b{j})")
-                    query = "MATCH " + ", ".join(match_parts) + " CREATE " + ", ".join(create_parts)
+                        src_lit = self._gql_literal(src)
+                        tgt_lit = self._gql_literal(tgt)
+                        match_parts.append(
+                            f"(a{j} {{id: {src_lit}}}), "
+                            f"(b{j} {{id: {tgt_lit}}})"
+                        )
+                        create_parts.append(
+                            f"(a{j})-[:{etype}]->(b{j})"
+                        )
+                    query = (
+                        "MATCH "
+                        + ", ".join(match_parts)
+                        + " CREATE "
+                        + ", ".join(create_parts)
+                    )
                     self._tx_query(sid, query)
                     count += len(batch)
                     edges_in_tx += len(batch)
                 except Exception:
-                    # Fallback to individual
                     for src, tgt, _props in batch:
-                        src_lit = self._cypher_literal(src)
-                        tgt_lit = self._cypher_literal(tgt)
+                        src_lit = self._gql_literal(src)
+                        tgt_lit = self._gql_literal(tgt)
                         try:
                             self._tx_query(
                                 sid,
-                                f"MATCH (a {{id: {src_lit}}}), (b {{id: {tgt_lit}}}) "
+                                f"MATCH (a {{id: {src_lit}}}), "
+                                f"(b {{id: {tgt_lit}}}) "
                                 f"CREATE (a)-[:{etype}]->(b)",
                             )
                             count += 1
@@ -287,14 +361,24 @@ class GrafeoServerAdapter(BaseAdapter):
         self._tx_commit(sid)
         return count
 
-    def get_neighbors(self, node_id: str, *, edge_type: str | None = None) -> list[str]:
-        lit = self._cypher_literal(node_id)
+    def get_neighbors(
+        self, node_id: str, *, edge_type: str | None = None
+    ) -> list[str]:
+        lit = self._gql_literal(node_id)
         if edge_type:
-            query = f"MATCH (n {{id: {lit}}})-[:{edge_type}]->(m) RETURN m.id AS id"
+            query = (
+                f"MATCH (n {{id: {lit}}})-[:{edge_type}]->(m) "
+                f"RETURN m.id AS id"
+            )
         else:
-            query = f"MATCH (n {{id: {lit}}})-[r]->(m) RETURN m.id AS id"
+            query = (
+                f"MATCH (n {{id: {lit}}})-[r]->(m) "
+                f"RETURN m.id AS id"
+            )
         rows = self._query(query)
-        return [str(r["id"]) for r in rows if r.get("id") is not None]
+        return [
+            str(r["id"]) for r in rows if r.get("id") is not None
+        ]
 
     def shortest_path(
         self,
@@ -304,12 +388,13 @@ class GrafeoServerAdapter(BaseAdapter):
         edge_type: str | None = None,
         weighted: bool = False,
     ) -> list[str] | None:
-        src_lit = self._cypher_literal(source)
-        tgt_lit = self._cypher_literal(target)
+        src_lit = self._gql_literal(source)
+        tgt_lit = self._gql_literal(target)
         rel = f":{edge_type}*" if edge_type else "*"
         try:
             rows = self._query(
-                f"MATCH (start {{id: {src_lit}}}), (end {{id: {tgt_lit}}}), "
+                f"MATCH (start {{id: {src_lit}}}), "
+                f"(end {{id: {tgt_lit}}}), "
                 f"path = shortestPath((start)-[{rel}]->(end)) "
                 f"RETURN [n IN nodes(path) | n.id] AS path"
             )
@@ -322,7 +407,9 @@ class GrafeoServerAdapter(BaseAdapter):
         from collections import deque
 
         visited: set[str] = set()
-        queue: deque[tuple[str, list[str]]] = deque([(source, [source])])
+        queue: deque[tuple[str, list[str]]] = deque(
+            [(source, [source])]
+        )
         while queue:
             current, path = queue.popleft()
             if current == target:
@@ -330,18 +417,31 @@ class GrafeoServerAdapter(BaseAdapter):
             if current in visited:
                 continue
             visited.add(current)
-            for neighbor in self.get_neighbors(current, edge_type=edge_type):
+            for neighbor in self.get_neighbors(
+                current, edge_type=edge_type
+            ):
                 if neighbor not in visited:
                     queue.append((neighbor, [*path, neighbor]))
         return None
 
-    def execute_query(self, query: str, *, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    def execute_query(
+        self, query: str, *, params: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
         if params:
-            for k, v in sorted(params.items(), key=lambda x: len(x[0]), reverse=True):
-                query = query.replace(f"${k}", self._cypher_literal(v))
+            for k, v in sorted(
+                params.items(),
+                key=lambda x: len(x[0]),
+                reverse=True,
+            ):
+                query = query.replace(
+                    f"${k}", self._gql_literal(v)
+                )
 
         q_upper = query.strip().upper()
-        is_write = any(kw in q_upper for kw in ["CREATE", "DELETE", "SET ", "REMOVE", "MERGE"])
+        is_write = any(
+            kw in q_upper
+            for kw in ["CREATE", "DELETE", "SET ", "REMOVE", "MERGE"]
+        )
         if is_write:
             sid = self._tx_begin()
             try:
@@ -349,7 +449,10 @@ class GrafeoServerAdapter(BaseAdapter):
                 self._tx_commit(sid)
                 columns = result.get("columns", [])
                 rows = result.get("rows", [])
-                return [{col: row[i] for i, col in enumerate(columns)} for row in rows]
+                return [
+                    {col: row[i] for i, col in enumerate(columns)}
+                    for row in rows
+                ]
             except Exception:
                 return []
         return self._query(query)
@@ -366,7 +469,10 @@ class GrafeoServerAdapter(BaseAdapter):
 
     def count_edges(self, *, edge_type: str | None = None) -> int:
         if edge_type:
-            query = f"MATCH ()-[r:{edge_type}]->() RETURN count(r) AS count"
+            query = (
+                f"MATCH ()-[r:{edge_type}]->() "
+                f"RETURN count(r) AS count"
+            )
         else:
             query = "MATCH ()-[r]->() RETURN count(r) AS count"
         rows = self._query(query)

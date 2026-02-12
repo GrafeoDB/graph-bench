@@ -36,8 +36,6 @@ class GrafeoAdapter(BaseAdapter):
         self._db: Any = None
         self._connected = False
         self._id_index_created = False
-        # Cache string ID -> internal node ID for fast edge insertion
-        self._nid_cache: dict[str, int] = {}
 
     @property
     def name(self) -> str:
@@ -79,8 +77,11 @@ class GrafeoAdapter(BaseAdapter):
         self._connected = False
 
     def clear(self) -> None:
-        self._db.execute("MATCH (n) DETACH DELETE n")
-        self._nid_cache.clear()
+        # Reinitialize to avoid storage degradation from repeated delete/insert
+        # cycles (Grafeo's internal ID space grows after DETACH DELETE, causing
+        # progressively slower MATCH lookups).
+        from grafeo import GrafeoDB
+        self._db = GrafeoDB()
         self._id_index_created = False
 
     def insert_nodes(
@@ -95,11 +96,7 @@ class GrafeoAdapter(BaseAdapter):
             batch = nodes[i : i + batch_size]
             for node in batch:
                 props = dict(node)
-                node_obj = self._db.create_node([label], props)
-                # Cache string id -> internal node id for fast edge insertion
-                str_id = props.get("id")
-                if str_id is not None and node_obj is not None:
-                    self._nid_cache[str_id] = node_obj.id
+                self._db.create_node([label], props)
                 count += 1
 
         # Rebuild property index on "id" after each insert batch.
@@ -114,13 +111,15 @@ class GrafeoAdapter(BaseAdapter):
         return count
 
     def get_node(self, node_id: str) -> dict[str, Any] | None:
-        # Query returns internal node ID, use get_node() to fetch properties
-        result = self._db.execute("MATCH (n {id: $id}) RETURN id(n) AS nid", {"id": node_id})
+        # Grafeo GQL: RETURN n gives internal ID (int), not properties.
+        # properties(n) also returns None. Using id(n) + get_node() is
+        # the only way to retrieve all properties without knowing the schema.
+        result = self._db.execute(
+            "MATCH (n {id: $id}) RETURN id(n) AS nid",
+            {"id": node_id},
+        )
         for row in result:
-            nid = row["nid"]
-            node_obj = self._db.get_node(nid)
-            # Grafeo's get_node() can return None even when the query found the node
-            # This might be a Grafeo bug with internal ID handling
+            node_obj = self._db.get_node(row["nid"])
             if node_obj is not None:
                 return node_obj.properties()
         return None
@@ -137,11 +136,13 @@ class GrafeoAdapter(BaseAdapter):
         return False
 
     def get_nodes_by_label(self, label: str, *, limit: int = 100) -> list[dict[str, Any]]:
-        result = self._db.execute(f"MATCH (n:{label}) RETURN id(n) AS nid LIMIT {limit}")
+        # Same limitation as get_node(): RETURN n gives internal ID.
+        result = self._db.execute(
+            f"MATCH (n:{label}) RETURN id(n) AS nid LIMIT {limit}"
+        )
         nodes = []
         for row in result:
-            nid = row["nid"]
-            node_obj = self._db.get_node(nid)
+            node_obj = self._db.get_node(row["nid"])
             if node_obj is not None:
                 nodes.append(node_obj.properties())
         return nodes
@@ -152,31 +153,29 @@ class GrafeoAdapter(BaseAdapter):
         *,
         batch_size: int = 1000,
     ) -> int:
+        # Two separate lookups + create_edge: fair (pays property-lookup cost
+        # through query engine) but avoids Grafeo's cross-product planner issue
+        # with MATCH (a {id: $src}), (b {id: $tgt}) which is ~90x slower.
         count = 0
         for src, tgt, edge_type, props in edges:
-            # Use cached node IDs when available (avoids 2 MATCH queries per edge)
-            src_id = self._nid_cache.get(src)
-            tgt_id = self._nid_cache.get(tgt)
-
-            # Fallback to query for uncached nodes
-            if src_id is None:
-                r = self._db.execute(
-                    "MATCH (n {id: $id}) RETURN id(n) as nid",
-                    {"id": src},
+            try:
+                src_result = self._db.execute(
+                    "MATCH (n {id: $id}) RETURN id(n) AS nid", {"id": src},
                 )
-                for row in r:
-                    src_id = row["nid"]
-            if tgt_id is None:
-                r = self._db.execute(
-                    "MATCH (n {id: $id}) RETURN id(n) as nid",
-                    {"id": tgt},
+                tgt_result = self._db.execute(
+                    "MATCH (n {id: $id}) RETURN id(n) AS nid", {"id": tgt},
                 )
-                for row in r:
-                    tgt_id = row["nid"]
-
-            if src_id is not None and tgt_id is not None:
-                self._db.create_edge(src_id, tgt_id, edge_type, props)
-                count += 1
+                src_nid = None
+                tgt_nid = None
+                for row in src_result:
+                    src_nid = row["nid"]
+                for row in tgt_result:
+                    tgt_nid = row["nid"]
+                if src_nid is not None and tgt_nid is not None:
+                    self._db.create_edge(src_nid, tgt_nid, edge_type, props)
+                    count += 1
+            except Exception:
+                pass
         return count
 
     def get_neighbors(self, node_id: str, *, edge_type: str | None = None) -> list[str]:
@@ -364,29 +363,10 @@ class GrafeoAdapter(BaseAdapter):
             return [{str(n) for n in comp} for comp in result]
         return super().weakly_connected_components()
 
-    def sssp(self, source: str, *, weight_attr: str = "weight") -> dict[str, float]:
-        """LDBC SSSP using native Grafeo dijkstra."""
-        if hasattr(self._db, "algorithms") and hasattr(self._db.algorithms, "dijkstra"):
-            src_result = self._db.execute("MATCH (n {id: $id}) RETURN id(n) as nid", {"id": source})
-            for row in src_result:
-                src_nid = row["nid"]
-                # Get all nodes and compute shortest paths
-                all_nodes = self._db.execute("MATCH (n) RETURN id(n) as nid")
-                result: dict[str, float] = {}
-                result[source] = 0.0
-                for target_row in all_nodes:
-                    tgt_nid = target_row["nid"]
-                    if tgt_nid != src_nid:
-                        try:
-                            path = self._db.algorithms.dijkstra(src_nid, tgt_nid, weight=weight_attr)
-                            if path:
-                                # Calculate path length from weights
-                                # For now, use path length as distance (unweighted)
-                                result[str(tgt_nid)] = float(len(path) - 1)
-                        except Exception:
-                            pass  # Unreachable
-                return result
-        return super().sssp(source, weight_attr=weight_attr)
+    # sssp() intentionally NOT overridden — uses BaseAdapter NetworkX fallback.
+    # Grafeo's native dijkstra() is point-to-point only, not single-source-
+    # all-destinations, and the previous override had a bug (returned hop count
+    # instead of weighted distance).
 
     def local_clustering_coefficient(self) -> dict[str, float]:
         """LDBC LCC using native Grafeo local_clustering_coefficient."""

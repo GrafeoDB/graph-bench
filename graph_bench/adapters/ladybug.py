@@ -2,7 +2,7 @@ r"""
 LadybugDB database adapter.
 
 LadybugDB is an embedded graph database built for query speed and scalability.
-Uses Cypher as its query language.
+Uses Cypher as its query language with a schema-rigid table model.
 
 Requires: pip install real_ladybug
 
@@ -15,6 +15,7 @@ Environment variables:
     adapter.connect()  # In-memory by default
 """
 
+import json
 from collections import deque
 from collections.abc import Sequence
 from pathlib import Path
@@ -24,6 +25,65 @@ from graph_bench.adapters.base import AdapterRegistry, BaseAdapter
 from graph_bench.config import get_env
 
 __all__ = ["LadybugAdapter"]
+
+# Properties stored as dedicated columns (not JSON overflow).
+# These cover the most common benchmark properties across all categories.
+_KNOWN_NODE_COLS = {"id", "label", "name", "age", "city", "score",
+                    "firstName", "lastName"}
+_KNOWN_EDGE_COLS = {"edge_type", "weight"}
+
+
+def _node_to_row(node: dict[str, Any], idx: int, label: str) -> dict[str, Any]:
+    """Extract a node dict into dedicated columns + JSON overflow."""
+    overflow = {
+        k: v for k, v in node.items()
+        if k not in _KNOWN_NODE_COLS
+    }
+    return {
+        "id": str(node.get("id", idx)),
+        "label": node.get("label", label),
+        "name": node.get("name", ""),
+        "age": int(node["age"]) if "age" in node else 0,
+        "city": node.get("city", ""),
+        "score": int(node["score"]) if "score" in node else 0,
+        "firstName": node.get("firstName", ""),
+        "lastName": node.get("lastName", ""),
+        "props": json.dumps(overflow) if overflow else "",
+    }
+
+
+def _row_to_node(row: tuple) -> dict[str, Any]:
+    """Convert a query row back to a node dict, merging overflow."""
+    # Expected column order:
+    #   n.id, n.label, n.name, n.age, n.city, n.score,
+    #   n.firstName, n.lastName, n.props
+    node: dict[str, Any] = {"id": row[0]}
+    if row[1]:
+        node["label"] = row[1]
+    if row[2]:
+        node["name"] = row[2]
+    if row[3]:
+        node["age"] = row[3]
+    if row[4]:
+        node["city"] = row[4]
+    if row[5]:
+        node["score"] = row[5]
+    if row[6]:
+        node["firstName"] = row[6]
+    if row[7]:
+        node["lastName"] = row[7]
+    if row[8]:
+        try:
+            node.update(json.loads(row[8]))
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return node
+
+
+_NODE_RETURN = (
+    "n.id, n.label, n.name, n.age, n.city, n.score, "
+    "n.firstName, n.lastName, n.props"
+)
 
 
 @AdapterRegistry.register("ladybug")
@@ -56,12 +116,18 @@ class LadybugAdapter(BaseAdapter):
         try:
             from real_ladybug import Connection, Database
         except ImportError as e:
-            msg = "real_ladybug package not installed. Install with: pip install real_ladybug"
+            msg = (
+                "real_ladybug package not installed. "
+                "Install with: pip install real_ladybug"
+            )
             raise ImportError(msg) from e
 
-        path = uri or kwargs.get("path") or get_env("LADYBUG_PATH", default=":memory:")
+        path = (
+            uri
+            or kwargs.get("path")
+            or get_env("LADYBUG_PATH", default=":memory:")
+        )
 
-        # LadybugDB uses :memory: or a path
         if path == ":memory:" or path is None:
             self._db = Database()
         else:
@@ -73,21 +139,26 @@ class LadybugAdapter(BaseAdapter):
         self._setup_schema()
 
     def _setup_schema(self) -> None:
-        """Create node and edge tables if they don't exist."""
+        """Create node and edge tables with dedicated columns."""
         try:
-            # Create a generic Node table
             self._conn.execute("""
                 CREATE NODE TABLE IF NOT EXISTS Node(
                     id STRING PRIMARY KEY,
                     label STRING,
+                    name STRING,
+                    age INT64,
+                    city STRING,
+                    score INT64,
+                    firstName STRING,
+                    lastName STRING,
                     props STRING
                 )
             """)
-            # Create a generic Edge relationship
             self._conn.execute("""
                 CREATE REL TABLE IF NOT EXISTS Edge(
                     FROM Node TO Node,
                     edge_type STRING,
+                    weight DOUBLE,
                     props STRING
                 )
             """)
@@ -112,41 +183,47 @@ class LadybugAdapter(BaseAdapter):
         nodes: Sequence[dict[str, Any]],
         *,
         label: str = "Node",
-        batch_size: int = 500,
+        batch_size: int = 1000,
     ) -> int:
-        import json
-
         count = 0
-        # Process in batches using UNWIND for better performance
         for i in range(0, len(nodes), batch_size):
             batch = nodes[i : i + batch_size]
             node_data = [
-                {
-                    "id": str(node.get("id", i + j)),
-                    "label": node.get("label", label),
-                    "props": json.dumps({k: v for k, v in node.items() if k not in ("id", "label")}),
-                }
+                _node_to_row(node, i + j, label)
                 for j, node in enumerate(batch)
             ]
             try:
                 self._conn.execute(
                     """
                     UNWIND $nodes AS n
-                    CREATE (:Node {id: n.id, label: n.label, props: n.props})
+                    CREATE (:Node {
+                        id: n.id, label: n.label,
+                        name: n.name, age: n.age,
+                        city: n.city, score: n.score,
+                        firstName: n.firstName,
+                        lastName: n.lastName,
+                        props: n.props
+                    })
                     """,
                     {"nodes": node_data},
                 )
                 count += len(batch)
             except Exception:
-                # Fall back to individual inserts if UNWIND fails
                 for j, node in enumerate(batch):
-                    node_id = str(node.get("id", i + j))
-                    props = json.dumps({k: v for k, v in node.items() if k not in ("id", "label")})
-                    node_label = node.get("label", label)
+                    row = _node_to_row(node, i + j, label)
                     try:
                         self._conn.execute(
-                            "CREATE (:Node {id: $id, label: $label, props: $props})",
-                            {"id": node_id, "label": node_label, "props": props},
+                            """
+                            CREATE (:Node {
+                                id: $id, label: $label,
+                                name: $name, age: $age,
+                                city: $city, score: $score,
+                                firstName: $firstName,
+                                lastName: $lastName,
+                                props: $props
+                            })
+                            """,
+                            row,
                         )
                         count += 1
                     except Exception:
@@ -154,58 +231,77 @@ class LadybugAdapter(BaseAdapter):
         return count
 
     def get_node(self, node_id: str) -> dict[str, Any] | None:
-        import json
-
         try:
             result = self._conn.execute(
-                "MATCH (n:Node {id: $id}) RETURN n.id, n.label, n.props",
+                f"MATCH (n:Node {{id: $id}}) RETURN {_NODE_RETURN}",
                 {"id": node_id},
             )
             for row in result:
-                props = json.loads(row[2]) if row[2] else {}
-                return {"id": row[0], "label": row[1], **props}
+                return _row_to_node(row)
         except Exception:
             pass
         return None
 
     def update_node(self, node_id: str, properties: dict[str, Any]) -> bool:
-        import json
-
         try:
-            # Get existing props
-            result = self._conn.execute(
-                "MATCH (n:Node {id: $id}) RETURN n.props",
-                {"id": node_id},
-            )
-            existing_props = {}
-            for row in result:
-                existing_props = json.loads(row[0]) if row[0] else {}
-                break
-            else:
-                return False  # Node not found
+            # SET known columns directly — no JSON read-modify-write
+            set_parts = []
+            params: dict[str, Any] = {"id": node_id}
+            overflow: dict[str, Any] = {}
 
-            # Merge and update
-            existing_props.update(properties)
-            self._conn.execute(
-                "MATCH (n:Node {id: $id}) SET n.props = $props",
-                {"id": node_id, "props": json.dumps(existing_props)},
+            for k, v in properties.items():
+                if k in _KNOWN_NODE_COLS and k != "id":
+                    set_parts.append(f"n.{k} = ${k}")
+                    params[k] = v
+                else:
+                    overflow[k] = v
+
+            if overflow:
+                # Read existing overflow, merge, write back
+                result = self._conn.execute(
+                    "MATCH (n:Node {id: $id}) RETURN n.props",
+                    {"id": node_id},
+                )
+                existing = {}
+                for row in result:
+                    if row[0]:
+                        try:
+                            existing = json.loads(row[0])
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+                    break
+                else:
+                    return False
+                existing.update(overflow)
+                set_parts.append("n.props = $props")
+                params["props"] = json.dumps(existing)
+
+            if not set_parts:
+                return False
+
+            query = (
+                f"MATCH (n:Node {{id: $id}}) "
+                f"SET {', '.join(set_parts)} RETURN n.id"
             )
-            return True
+            result = self._conn.execute(query, params)
+            for _ in result:
+                return True
+            return False
         except Exception:
             return False
 
-    def get_nodes_by_label(self, label: str, *, limit: int = 100) -> list[dict[str, Any]]:
-        import json
-
+    def get_nodes_by_label(
+        self, label: str, *, limit: int = 100
+    ) -> list[dict[str, Any]]:
         nodes = []
         try:
             result = self._conn.execute(
-                f"MATCH (n:Node) WHERE n.label = $label RETURN n.id, n.label, n.props LIMIT {limit}",
+                "MATCH (n:Node) WHERE n.label = $label "
+                f"RETURN {_NODE_RETURN} LIMIT {limit}",
                 {"label": label},
             )
             for row in result:
-                props = json.loads(row[2]) if row[2] else {}
-                nodes.append({"id": row[0], "label": row[1], **props})
+                nodes.append(_row_to_node(row))
         except Exception:
             pass
         return nodes
@@ -214,12 +310,9 @@ class LadybugAdapter(BaseAdapter):
         self,
         edges: Sequence[tuple[str, str, str, dict[str, Any]]],
         *,
-        batch_size: int = 500,
+        batch_size: int = 1000,
     ) -> int:
-        import json
-
         count = 0
-        # Process in batches using UNWIND for better performance
         for i in range(0, len(edges), batch_size):
             batch = edges[i : i + batch_size]
             edge_data = [
@@ -227,7 +320,13 @@ class LadybugAdapter(BaseAdapter):
                     "src": src,
                     "tgt": tgt,
                     "type": edge_type,
-                    "props": json.dumps(props),
+                    "weight": float(props.get("weight", 0.0)),
+                    "props": json.dumps(
+                        {k: v for k, v in props.items()
+                         if k not in _KNOWN_EDGE_COLS}
+                    ) if any(
+                        k not in _KNOWN_EDGE_COLS for k in props
+                    ) else "",
                 }
                 for src, tgt, edge_type, props in batch
             ]
@@ -236,29 +335,50 @@ class LadybugAdapter(BaseAdapter):
                     """
                     UNWIND $edges AS e
                     MATCH (a:Node {id: e.src}), (b:Node {id: e.tgt})
-                    CREATE (a)-[:Edge {edge_type: e.type, props: e.props}]->(b)
+                    CREATE (a)-[:Edge {
+                        edge_type: e.type,
+                        weight: e.weight,
+                        props: e.props
+                    }]->(b)
                     """,
                     {"edges": edge_data},
                 )
                 count += len(batch)
             except Exception:
-                # Fall back to individual inserts if UNWIND fails
                 for src, tgt, edge_type, props in batch:
-                    props_json = json.dumps(props)
+                    weight = float(props.get("weight", 0.0))
+                    overflow = {
+                        k: v for k, v in props.items()
+                        if k not in _KNOWN_EDGE_COLS
+                    }
                     try:
                         self._conn.execute(
                             """
-                            MATCH (a:Node {id: $src}), (b:Node {id: $tgt})
-                            CREATE (a)-[:Edge {edge_type: $type, props: $props}]->(b)
+                            MATCH (a:Node {id: $src}),
+                                  (b:Node {id: $tgt})
+                            CREATE (a)-[:Edge {
+                                edge_type: $type,
+                                weight: $weight,
+                                props: $props
+                            }]->(b)
                             """,
-                            {"src": src, "tgt": tgt, "type": edge_type, "props": props_json},
+                            {
+                                "src": src,
+                                "tgt": tgt,
+                                "type": edge_type,
+                                "weight": weight,
+                                "props": json.dumps(overflow)
+                                if overflow else "",
+                            },
                         )
                         count += 1
                     except Exception:
                         pass
         return count
 
-    def get_neighbors(self, node_id: str, *, edge_type: str | None = None) -> list[str]:
+    def get_neighbors(
+        self, node_id: str, *, edge_type: str | None = None
+    ) -> list[str]:
         neighbors = []
         try:
             if edge_type:
@@ -272,7 +392,8 @@ class LadybugAdapter(BaseAdapter):
                 )
             else:
                 result = self._conn.execute(
-                    "MATCH (n:Node {id: $id})-[:Edge]->(m:Node) RETURN m.id",
+                    "MATCH (n:Node {id: $id})-[:Edge]->(m:Node) "
+                    "RETURN m.id",
                     {"id": node_id},
                 )
             for row in result:
@@ -290,9 +411,10 @@ class LadybugAdapter(BaseAdapter):
         edge_type: str | None = None,
         weighted: bool = False,
     ) -> list[str] | None:
-        # Use BFS fallback
         visited: set[str] = set()
-        queue: deque[tuple[str, list[str]]] = deque([(source, [source])])
+        queue: deque[tuple[str, list[str]]] = deque(
+            [(source, [source])]
+        )
 
         while queue:
             current, path = queue.popleft()
@@ -302,18 +424,21 @@ class LadybugAdapter(BaseAdapter):
                 continue
             visited.add(current)
 
-            for neighbor in self.get_neighbors(current, edge_type=edge_type):
+            for neighbor in self.get_neighbors(
+                current, edge_type=edge_type
+            ):
                 if neighbor not in visited:
-                    queue.append((neighbor, path + [neighbor]))
+                    queue.append((neighbor, [*path, neighbor]))
 
         return None
 
-    def execute_query(self, query: str, *, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    def execute_query(
+        self, query: str, *, params: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
         """Execute a Cypher query."""
         results = []
         try:
             result = self._conn.execute(query, params or {})
-            # Get column names if available
             if hasattr(result, "get_column_names"):
                 columns = result.get_column_names()
             else:
@@ -321,7 +446,9 @@ class LadybugAdapter(BaseAdapter):
 
             for row in result:
                 if isinstance(row, (list, tuple)):
-                    results.append(dict(zip(columns, row, strict=False)))
+                    results.append(
+                        dict(zip(columns, row, strict=False))
+                    )
                 else:
                     results.append({"value": row})
         except Exception:
@@ -332,11 +459,14 @@ class LadybugAdapter(BaseAdapter):
         try:
             if label:
                 result = self._conn.execute(
-                    "MATCH (n:Node) WHERE n.label = $label RETURN count(n)",
+                    "MATCH (n:Node) WHERE n.label = $label "
+                    "RETURN count(n)",
                     {"label": label},
                 )
             else:
-                result = self._conn.execute("MATCH (n:Node) RETURN count(n)")
+                result = self._conn.execute(
+                    "MATCH (n:Node) RETURN count(n)"
+                )
 
             for row in result:
                 return row[0] if row else 0
@@ -348,11 +478,14 @@ class LadybugAdapter(BaseAdapter):
         try:
             if edge_type:
                 result = self._conn.execute(
-                    "MATCH ()-[e:Edge]->() WHERE e.edge_type = $type RETURN count(e)",
+                    "MATCH ()-[e:Edge]->() WHERE e.edge_type = $type "
+                    "RETURN count(e)",
                     {"type": edge_type},
                 )
             else:
-                result = self._conn.execute("MATCH ()-[e:Edge]->() RETURN count(e)")
+                result = self._conn.execute(
+                    "MATCH ()-[e:Edge]->() RETURN count(e)"
+                )
 
             for row in result:
                 return row[0] if row else 0
