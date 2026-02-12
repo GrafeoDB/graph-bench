@@ -88,19 +88,19 @@ class Neo4jAdapter(BaseAdapter):
         with self._driver.session() as session:
             for i in range(0, len(nodes), batch_size):
                 batch = list(nodes[i : i + batch_size])
-                query = f"UNWIND $nodes AS node CREATE (n:{label}) SET n = node"
+                query = f"UNWIND $nodes AS node CREATE (n:{label}:Node) SET n = node"
                 session.run(query, nodes=batch)
                 count += len(batch)
-            # Create index on id for this label to speed up MATCH in insert_edges
+            # Create index on id for the universal :Node label to speed up label-free lookups
             try:
-                session.run(f"CREATE INDEX IF NOT EXISTS FOR (n:{label}) ON (n.id)")
+                session.run("CREATE INDEX IF NOT EXISTS FOR (n:Node) ON (n.id)")
             except Exception:
                 pass
         return count
 
     def get_node(self, node_id: str) -> dict[str, Any] | None:
         with self._driver.session() as session:
-            result = session.run("MATCH (n {id: $id}) RETURN n", id=node_id)
+            result = session.run("MATCH (n:Node {id: $id}) RETURN n", id=node_id)
             record = result.single()
             if record:
                 return dict(record["n"])
@@ -109,7 +109,7 @@ class Neo4jAdapter(BaseAdapter):
     def update_node(self, node_id: str, properties: dict[str, Any]) -> bool:
         with self._driver.session() as session:
             result = session.run(
-                "MATCH (n {id: $id}) SET n += $props RETURN n",
+                "MATCH (n:Node {id: $id}) SET n += $props RETURN n",
                 id=node_id,
                 props=properties,
             )
@@ -126,36 +126,34 @@ class Neo4jAdapter(BaseAdapter):
         *,
         batch_size: int = 1000,
     ) -> int:
+        # Group edges by type for efficient batched UNWIND (no APOC needed)
+        from collections import defaultdict
+
+        by_type: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for src, tgt, etype, props in edges:
+            by_type[etype].append({"src": src, "tgt": tgt, "props": props})
+
         count = 0
         with self._driver.session() as session:
-            for i in range(0, len(edges), batch_size):
-                batch = [{"src": e[0], "tgt": e[1], "type": e[2], "props": e[3]} for e in edges[i : i + batch_size]]
-                query = """
-                UNWIND $edges AS edge
-                MATCH (a {id: edge.src}), (b {id: edge.tgt})
-                CALL apoc.create.relationship(a, edge.type, edge.props, b) YIELD rel
-                RETURN count(rel)
-                """
-                try:
+            for edge_type, typed_edges in by_type.items():
+                for i in range(0, len(typed_edges), batch_size):
+                    batch = typed_edges[i : i + batch_size]
+                    query = f"""
+                    UNWIND $edges AS edge
+                    MATCH (a:Node {{id: edge.src}}), (b:Node {{id: edge.tgt}})
+                    CREATE (a)-[r:{edge_type}]->(b)
+                    SET r = edge.props
+                    """
                     session.run(query, edges=batch)
-                except Exception:
-                    for edge in batch:
-                        edge_type = edge["type"]
-                        q = f"""
-                        MATCH (a {{id: $src}}), (b {{id: $tgt}})
-                        CREATE (a)-[r:{edge_type}]->(b)
-                        SET r = $props
-                        """
-                        session.run(q, src=edge["src"], tgt=edge["tgt"], props=edge["props"])
-                count += len(batch)
+                    count += len(batch)
         return count
 
     def get_neighbors(self, node_id: str, *, edge_type: str | None = None) -> list[str]:
         with self._driver.session() as session:
             if edge_type:
-                query = f"MATCH (n {{id: $id}})-[:{edge_type}]->(m) RETURN m.id AS id"
+                query = f"MATCH (n:Node {{id: $id}})-[:{edge_type}]->(m) RETURN m.id AS id"
             else:
-                query = "MATCH (n {id: $id})-->(m) RETURN m.id AS id"
+                query = "MATCH (n:Node {id: $id})-->(m) RETURN m.id AS id"
             result = session.run(query, id=node_id)
             return [record["id"] for record in result if record["id"]]
 
@@ -175,13 +173,13 @@ class Neo4jAdapter(BaseAdapter):
 
             if weighted:
                 query = f"""
-                MATCH (start {{id: $src}}), (end {{id: $tgt}}),
+                MATCH (start:Node {{id: $src}}), (end:Node {{id: $tgt}}),
                       path = shortestPath((start)-[{rel}]->(end))
                 RETURN [n IN nodes(path) | n.id] AS path
                 """
             else:
                 query = f"""
-                MATCH (start {{id: $src}}), (end {{id: $tgt}}),
+                MATCH (start:Node {{id: $src}}), (end:Node {{id: $tgt}}),
                       path = shortestPath((start)-[{rel}]->(end))
                 RETURN [n IN nodes(path) | n.id] AS path
                 """
@@ -339,10 +337,23 @@ class Neo4jAdapter(BaseAdapter):
                 raise NotImplementedError(msg) from e
 
     def local_clustering_coefficient(self) -> dict[str, float]:
-        """LCC using Neo4j GDS."""
+        """LCC using Neo4j GDS. Requires UNDIRECTED projection."""
         with self._driver.session() as session:
             try:
-                graph_name = self._ensure_gds_projection(session)
+                graph_name = "bench_graph_undirected"
+                try:
+                    session.run(f"CALL gds.graph.drop('{graph_name}', false)")
+                except Exception:
+                    pass
+                session.run(
+                    f"""
+                    CALL gds.graph.project(
+                        '{graph_name}',
+                        '*',
+                        {{__ALL__: {{type: '*', orientation: 'UNDIRECTED'}}}}
+                    )
+                    """
+                )
                 result = session.run(
                     f"""
                     CALL gds.localClusteringCoefficient.stream('{graph_name}')
@@ -351,7 +362,10 @@ class Neo4jAdapter(BaseAdapter):
                     """
                 )
                 coeffs = {record["id"]: record["coeff"] for record in result if record["id"]}
-                self._drop_gds_projection(session, graph_name)
+                try:
+                    session.run(f"CALL gds.graph.drop('{graph_name}', false)")
+                except Exception:
+                    pass
                 return coeffs
             except Exception as e:
                 msg = f"Neo4j GDS LCC failed: {e}"
@@ -364,7 +378,7 @@ class Neo4jAdapter(BaseAdapter):
                 graph_name = self._ensure_gds_projection(session)
                 # Get source node id
                 source_result = session.run(
-                    "MATCH (n {id: $id}) RETURN id(n) AS nodeId",
+                    "MATCH (n:Node {id: $id}) RETURN id(n) AS nodeId",
                     id=source,
                 )
                 source_record = source_result.single()
@@ -399,7 +413,7 @@ class Neo4jAdapter(BaseAdapter):
                 graph_name = self._ensure_gds_projection(session)
                 # Get source node id
                 source_result = session.run(
-                    "MATCH (n {id: $id}) RETURN id(n) AS nodeId",
+                    "MATCH (n:Node {id: $id}) RETURN id(n) AS nodeId",
                     id=source,
                 )
                 source_record = source_result.single()
