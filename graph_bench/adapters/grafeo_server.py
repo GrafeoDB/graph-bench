@@ -220,45 +220,50 @@ class GrafeoServerAdapter(BaseAdapter):
         label: str = "Node",
         batch_size: int = 200,
     ) -> int:
+        # Grafeo GQL: multi-pattern CREATE only creates the first node.
+        # Must use one CREATE statement per node.
         count = 0
+        COMMIT_INTERVAL = 2000
+        nodes_in_tx = 0
         sid = self._tx_begin()
-        try:
-            for i in range(0, len(nodes), batch_size):
-                batch = list(nodes[i : i + batch_size])
-                patterns = [
-                    f"(:{label} {self._format_props(node)})"
-                    for node in batch
-                ]
-                query = "CREATE " + ", ".join(patterns)
-                self._tx_query(sid, query)
-                count += len(batch)
-            self._tx_commit(sid)
-        except Exception:
-            count = 0
-            sid = self._tx_begin()
-            for node in nodes:
-                try:
-                    self._tx_query(
-                        sid,
-                        f"CREATE (:{label} "
-                        f"{self._format_props(node)})",
-                    )
-                    count += 1
-                except Exception:
-                    pass
-            self._tx_commit(sid)
+        for node in nodes:
+            try:
+                self._tx_query(
+                    sid,
+                    f"CREATE (:{label} {self._format_props(node)})",
+                )
+                count += 1
+                nodes_in_tx += 1
+            except Exception:
+                pass
+            if nodes_in_tx >= COMMIT_INTERVAL:
+                self._tx_commit(sid)
+                sid = self._tx_begin()
+                nodes_in_tx = 0
+        self._tx_commit(sid)
         return count
+
+    # All property names used across LDBC SNB + generic benchmark datasets.
+    # Grafeo GQL: RETURN n gives internal node ID (int), not properties.
+    # We must query each property individually and filter out nulls.
+    _KNOWN_PROPS = [
+        "id", "firstName", "lastName", "gender", "birthday",
+        "creationDate", "locationIP", "browserUsed",
+        "content", "imageFile", "title", "name", "url", "type",
+        "length", "language", "creatorId", "countryId", "replyOf",
+        "country", "age", "city", "score", "value",
+    ]
 
     def get_node(self, node_id: str) -> dict[str, Any] | None:
         lit = self._gql_literal(node_id)
+        returns = ", ".join(
+            f"n.{p} AS {p}" for p in self._KNOWN_PROPS
+        )
         rows = self._query(
-            f"MATCH (n {{id: {lit}}}) RETURN n"
+            f"MATCH (n {{id: {lit}}}) RETURN {returns}"
         )
         if rows:
-            node = rows[0].get("n")
-            if isinstance(node, dict):
-                return node
-            return rows[0]
+            return {k: v for k, v in rows[0].items() if v is not None}
         return None
 
     def update_node(
@@ -285,17 +290,16 @@ class GrafeoServerAdapter(BaseAdapter):
     def get_nodes_by_label(
         self, label: str, *, limit: int = 100
     ) -> list[dict[str, Any]]:
-        rows = self._query(
-            f"MATCH (n:{label}) RETURN n LIMIT {limit}"
+        returns = ", ".join(
+            f"n.{p} AS {p}" for p in self._KNOWN_PROPS
         )
-        result = []
-        for row in rows:
-            node = row.get("n")
-            if isinstance(node, dict):
-                result.append(node)
-            else:
-                result.append(row)
-        return result
+        rows = self._query(
+            f"MATCH (n:{label}) RETURN {returns} LIMIT {limit}"
+        )
+        return [
+            {k: v for k, v in row.items() if v is not None}
+            for row in rows
+        ]
 
     def insert_edges(
         self,
