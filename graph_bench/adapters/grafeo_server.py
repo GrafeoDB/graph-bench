@@ -187,7 +187,7 @@ class GrafeoServerAdapter(BaseAdapter):
             self._session_stub.Ping(
                 pb.PingRequest(session_id=self._get_session_id())
             )
-            return "0.4.2"
+            return "0.4.3"
         except Exception:
             return "unknown"
 
