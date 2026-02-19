@@ -14,7 +14,6 @@ from graph_bench.adapters.arangodb import ArangoDBAdapter
 from graph_bench.adapters.base import AdapterRegistry, BaseAdapter
 from graph_bench.adapters.falkordb import FalkorDBAdapter
 from graph_bench.adapters.grafeo import GrafeoAdapter
-from graph_bench.adapters.grafeo_gwp import GrafeoGwpAdapter
 from graph_bench.adapters.grafeo_server import GrafeoServerAdapter
 from graph_bench.adapters.ladybug import LadybugAdapter
 from graph_bench.adapters.memgraph import MemgraphAdapter
@@ -29,7 +28,6 @@ __all__ = [
     "BaseAdapter",
     "FalkorDBAdapter",
     "GrafeoAdapter",
-    "GrafeoGwpAdapter",
     "GrafeoServerAdapter",
     "LadybugAdapter",
     "MemgraphAdapter",

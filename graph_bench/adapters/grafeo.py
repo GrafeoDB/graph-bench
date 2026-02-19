@@ -35,7 +35,6 @@ class GrafeoAdapter(BaseAdapter):
     def __init__(self) -> None:
         self._db: Any = None
         self._connected = False
-        self._id_index_created = False
 
     @property
     def name(self) -> str:
@@ -82,7 +81,6 @@ class GrafeoAdapter(BaseAdapter):
         # progressively slower MATCH lookups).
         from grafeo import GrafeoDB
         self._db = GrafeoDB()
-        self._id_index_created = False
 
     def insert_nodes(
         self,
@@ -91,37 +89,38 @@ class GrafeoAdapter(BaseAdapter):
         label: str = "Node",
         batch_size: int = 1000,
     ) -> int:
+        # UNWIND+CREATE property map access is broken in PyPI 0.5.6
+        # (props.key → None). Use create_node() Python API instead.
         count = 0
         for i in range(0, len(nodes), batch_size):
             batch = nodes[i : i + batch_size]
             for node in batch:
-                props = dict(node)
-                self._db.create_node([label], props)
+                self._db.create_node([label, "Node"], dict(node))
                 count += 1
 
-        # Rebuild property index on "id" after each insert batch.
-        # Grafeo's property index is a snapshot — nodes added after index
-        # creation are not automatically indexed. Drop+recreate fixes this.
         if hasattr(self._db, "create_property_index"):
-            if self._id_index_created:
-                self._db.drop_property_index("id")
-            self._db.create_property_index("id")
-            self._id_index_created = True
+            try:
+                self._db.create_property_index("id")
+            except Exception:
+                pass  # Index already exists
 
         return count
 
+    @staticmethod
+    def _strip_internal(node: Any) -> dict[str, Any]:
+        """Strip internal fields (_id, _labels) from a node map."""
+        if isinstance(node, dict):
+            return {k: v for k, v in node.items()
+                    if k not in ("_id", "_labels")}
+        return {}
+
     def get_node(self, node_id: str) -> dict[str, Any] | None:
-        # Grafeo GQL: RETURN n gives internal ID (int), not properties.
-        # properties(n) also returns None. Using id(n) + get_node() is
-        # the only way to retrieve all properties without knowing the schema.
+        # Grafeo >=0.5.6: RETURN n yields full node map {_id, _labels, ...props}
         result = self._db.execute(
-            "MATCH (n {id: $id}) RETURN id(n) AS nid",
-            {"id": node_id},
+            "MATCH (n {id: $id}) RETURN n", {"id": node_id},
         )
         for row in result:
-            node_obj = self._db.get_node(row["nid"])
-            if node_obj is not None:
-                return node_obj.properties()
+            return self._strip_internal(row["n"])
         return None
 
     def update_node(self, node_id: str, properties: dict[str, Any]) -> bool:
@@ -135,17 +134,13 @@ class GrafeoAdapter(BaseAdapter):
             return True
         return False
 
-    def get_nodes_by_label(self, label: str, *, limit: int = 100) -> list[dict[str, Any]]:
-        # Same limitation as get_node(): RETURN n gives internal ID.
+    def get_nodes_by_label(
+        self, label: str, *, limit: int = 100,
+    ) -> list[dict[str, Any]]:
         result = self._db.execute(
-            f"MATCH (n:{label}) RETURN id(n) AS nid LIMIT {limit}"
+            f"MATCH (n:{label}) RETURN n LIMIT {limit}"
         )
-        nodes = []
-        for row in result:
-            node_obj = self._db.get_node(row["nid"])
-            if node_obj is not None:
-                nodes.append(node_obj.properties())
-        return nodes
+        return [self._strip_internal(row["n"]) for row in result]
 
     def insert_edges(
         self,
@@ -153,29 +148,27 @@ class GrafeoAdapter(BaseAdapter):
         *,
         batch_size: int = 1000,
     ) -> int:
-        # Two separate lookups + create_edge: fair (pays property-lookup cost
-        # through query engine) but avoids Grafeo's cross-product planner issue
-        # with MATCH (a {id: $src}), (b {id: $tgt}) which is ~90x slower.
+        # Build NID cache then use create_edge() Python API.
+        # UNWIND+CREATE edge property maps are broken in PyPI 0.5.6
+        # (e.weight → None), and UNWIND+MATCH+CREATE without props
+        # works but is slower than direct create_edge() for embedded.
+        result = self._db.execute(
+            "MATCH (n) RETURN n.id AS id, id(n) AS nid"
+        )
+        nid_cache = {row["id"]: row["nid"] for row in result}
+
         count = 0
         for src, tgt, edge_type, props in edges:
-            try:
-                src_result = self._db.execute(
-                    "MATCH (n {id: $id}) RETURN id(n) AS nid", {"id": src},
-                )
-                tgt_result = self._db.execute(
-                    "MATCH (n {id: $id}) RETURN id(n) AS nid", {"id": tgt},
-                )
-                src_nid = None
-                tgt_nid = None
-                for row in src_result:
-                    src_nid = row["nid"]
-                for row in tgt_result:
-                    tgt_nid = row["nid"]
-                if src_nid is not None and tgt_nid is not None:
-                    self._db.create_edge(src_nid, tgt_nid, edge_type, props)
+            src_nid = nid_cache.get(src)
+            tgt_nid = nid_cache.get(tgt)
+            if src_nid is not None and tgt_nid is not None:
+                try:
+                    self._db.create_edge(
+                        src_nid, tgt_nid, edge_type, props,
+                    )
                     count += 1
-            except Exception:
-                pass
+                except Exception:
+                    pass
         return count
 
     def get_neighbors(self, node_id: str, *, edge_type: str | None = None) -> list[str]:
@@ -363,10 +356,48 @@ class GrafeoAdapter(BaseAdapter):
             return [{str(n) for n in comp} for comp in result]
         return super().weakly_connected_components()
 
-    # sssp() intentionally NOT overridden — uses BaseAdapter NetworkX fallback.
-    # Grafeo's native dijkstra() is point-to-point only, not single-source-
-    # all-destinations, and the previous override had a bug (returned hop count
-    # instead of weighted distance).
+    def sssp(
+        self, source: str, *, weight_attr: str = "weight",
+    ) -> dict[str, float]:
+        """LDBC SSSP using native Grafeo sssp (v0.5.6+)."""
+        if not (
+            hasattr(self._db, "algorithms")
+            and hasattr(self._db.algorithms, "sssp")
+        ):
+            return super().sssp(source, weight_attr=weight_attr)
+
+        # Resolve app ID → internal node ID
+        src_result = self._db.execute(
+            "MATCH (n {id: $id}) RETURN id(n) AS nid",
+            {"id": source},
+        )
+        src_nid = None
+        for row in src_result:
+            src_nid = row["nid"]
+        if src_nid is None:
+            return super().sssp(source, weight_attr=weight_attr)
+
+        # Build internal ID → app ID mapping
+        mapping = self._db.execute(
+            "MATCH (n) RETURN id(n) AS nid, n.id AS app_id"
+        )
+        nid_to_app = {
+            row["nid"]: str(row["app_id"]) for row in mapping
+        }
+
+        distances = self._db.algorithms.sssp(
+            source=str(src_nid), weight_attr=weight_attr,
+        )
+        if isinstance(distances, dict):
+            return {
+                nid_to_app.get(k, str(k)): float(v)
+                for k, v in distances.items()
+            }
+        # Handle iterable of (node_id, distance) tuples
+        return {
+            nid_to_app.get(k, str(k)): float(v)
+            for k, v in distances
+        }
 
     def local_clustering_coefficient(self) -> dict[str, float]:
         """LDBC LCC using native Grafeo local_clustering_coefficient."""
