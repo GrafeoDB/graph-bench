@@ -172,7 +172,7 @@ class TuGraphAdapter(BaseAdapter):
         nodes: Sequence[dict[str, Any]],
         *,
         label: str = "Node",
-        batch_size: int = 1000,
+        batch_size: int = 50,
     ) -> int:
         if not nodes:
             return 0
@@ -182,14 +182,31 @@ class TuGraphAdapter(BaseAdapter):
             self._ensure_vertex_label(session, label, sample)
             prop_keys = list(sample.keys())
 
-            # TuGraph's UNWIND only inserts the first row; use individual CREATEs
-            create_query = f"CREATE (n:{label} {{{', '.join(f'{k}: ${k}' for k in prop_keys)}}})"
-            for node in nodes:
+            # TuGraph's UNWIND only inserts the first row; batch via multi-CREATE
+            for i in range(0, len(nodes), batch_size):
+                batch = list(nodes[i : i + batch_size])
                 try:
-                    session.run(create_query, **node)
-                    count += 1
+                    create_parts = []
+                    params: dict[str, Any] = {}
+                    for j, node in enumerate(batch):
+                        prop_items = []
+                        for k in prop_keys:
+                            pk = f"p{j}_{k}"
+                            params[pk] = node.get(k)
+                            prop_items.append(f"{k}: ${pk}")
+                        create_parts.append(f"(:{label} {{{', '.join(prop_items)}}})")
+                    query = "CREATE " + ", ".join(create_parts)
+                    session.run(query, **params)
+                    count += len(batch)
                 except Exception:
-                    pass
+                    # Fallback to individual inserts
+                    create_query = f"CREATE (n:{label} {{{', '.join(f'{k}: ${k}' for k in prop_keys)}}})"
+                    for node in batch:
+                        try:
+                            session.run(create_query, **node)
+                            count += 1
+                        except Exception:
+                            pass
         return count
 
     def get_node(self, node_id: str) -> dict[str, Any] | None:
@@ -218,7 +235,7 @@ class TuGraphAdapter(BaseAdapter):
         self,
         edges: Sequence[tuple[str, str, str, dict[str, Any]]],
         *,
-        batch_size: int = 1000,
+        batch_size: int = 50,
     ) -> int:
         count = 0
         # Group by edge type to ensure labels exist
@@ -233,24 +250,40 @@ class TuGraphAdapter(BaseAdapter):
                 sample_props = edge_list[0][2] if edge_list else {"weight": 1.0}
                 self._ensure_edge_label(session, edge_type, sample_props)
 
-                # Build per-property SET clause
-                prop_keys = list(sample_props.keys())
-                if prop_keys:
-                    set_clause = " SET " + ", ".join(f"r.{k} = ${k}" for k in prop_keys)
-                else:
-                    set_clause = ""
-
-                # TuGraph's UNWIND only processes first row; use individual CREATEs
-                query = (
-                    f"MATCH (a {{id: $src}}), (b {{id: $tgt}}) "
-                    f"CREATE (a)-[r:{edge_type}]->(b){set_clause}"
-                )
-                for src, tgt, props in edge_list:
+                # TuGraph's UNWIND only processes first row; batch via multi-MATCH+CREATE
+                for i in range(0, len(edge_list), batch_size):
+                    batch = edge_list[i : i + batch_size]
                     try:
-                        session.run(query, src=src, tgt=tgt, **props)
-                        count += 1
+                        match_parts = []
+                        create_parts = []
+                        params: dict[str, Any] = {}
+                        for j, (src, tgt, props) in enumerate(batch):
+                            params[f"src{j}"] = src
+                            params[f"tgt{j}"] = tgt
+                            match_parts.append(f"(a{j} {{id: $src{j}}}), (b{j} {{id: $tgt{j}}})")
+                            prop_items = []
+                            for k, v in props.items():
+                                pk = f"p{j}_{k}"
+                                params[pk] = v
+                                prop_items.append(f"{k}: ${pk}")
+                            prop_str = f" {{{', '.join(prop_items)}}}" if prop_items else ""
+                            create_parts.append(f"(a{j})-[:{edge_type}{prop_str}]->(b{j})")
+                        query = "MATCH " + ", ".join(match_parts) + " CREATE " + ", ".join(create_parts)
+                        session.run(query, **params)
+                        count += len(batch)
                     except Exception:
-                        pass
+                        # Fallback to individual inserts for this batch
+                        prop_keys = list(sample_props.keys())
+                        set_clause = ""
+                        if prop_keys:
+                            set_clause = " SET " + ", ".join(f"r.{k} = ${k}" for k in prop_keys)
+                        q = f"MATCH (a {{id: $src}}), (b {{id: $tgt}}) CREATE (a)-[r:{edge_type}]->(b){set_clause}"
+                        for src, tgt, props in batch:
+                            try:
+                                session.run(q, src=src, tgt=tgt, **props)
+                                count += 1
+                            except Exception:
+                                pass
         return count
 
     def get_neighbors(self, node_id: str, *, edge_type: str | None = None) -> list[str]:

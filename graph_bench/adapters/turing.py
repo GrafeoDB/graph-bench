@@ -177,10 +177,14 @@ class TuringDBAdapter(BaseAdapter):
         """Convert a pandas DataFrame to a list of plain dicts."""
         if df is None or df.empty:
             return []
-        records = []
-        for _, row in df.iterrows():
-            records.append({col: self._df_val(row[col]) for col in df.columns})
-        return records
+        # Use pandas C-level conversion instead of slow iterrows()
+        import numpy as np
+        records = df.where(df.notna(), other=None).to_dict("records")
+        # Convert numpy types to plain Python
+        return [
+            {k: (v.item() if hasattr(v, "item") else v) for k, v in row.items()}
+            for row in records
+        ]
 
     def clear(self) -> None:
         """Clear by switching to a fresh graph (avoids change-state corruption)."""
@@ -207,6 +211,13 @@ class TuringDBAdapter(BaseAdapter):
             self._db.query(query)
             count += len(batch)
         self._flush()
+        # Create index on id property for faster lookups (if supported)
+        try:
+            self._ensure_change()
+            self._db.query("CREATE INDEX FOR (n:Node) ON (n.id)")
+            self._flush()
+        except Exception:
+            self._flush()
         return count
 
     def get_node(self, node_id: str) -> dict[str, Any] | None:

@@ -89,14 +89,23 @@ class GrafeoAdapter(BaseAdapter):
         label: str = "Node",
         batch_size: int = 1000,
     ) -> int:
-        # UNWIND+CREATE property map access is broken in PyPI 0.5.6
-        # (props.key → None). Use create_node() Python API instead.
+        if not nodes:
+            return 0
         count = 0
+        prop_keys = list(nodes[0].keys())
+        prop_map = ", ".join(f"{k}: props.{k}" for k in prop_keys)
+        query = f"UNWIND $nodes AS props CREATE (:{label}:Node {{{prop_map}}})"
+
         for i in range(0, len(nodes), batch_size):
-            batch = nodes[i : i + batch_size]
-            for node in batch:
-                self._db.create_node([label, "Node"], dict(node))
-                count += 1
+            batch = list(nodes[i : i + batch_size])
+            try:
+                self._db.execute(query, {"nodes": batch})
+                count += len(batch)
+            except Exception:
+                # Fallback to individual create_node() API
+                for node in batch:
+                    self._db.create_node([label, "Node"], dict(node))
+                    count += 1
 
         if hasattr(self._db, "create_property_index"):
             try:
@@ -148,27 +157,46 @@ class GrafeoAdapter(BaseAdapter):
         *,
         batch_size: int = 1000,
     ) -> int:
-        # Build NID cache then use create_edge() Python API.
-        # UNWIND+CREATE edge property maps are broken in PyPI 0.5.6
-        # (e.weight → None), and UNWIND+MATCH+CREATE without props
-        # works but is slower than direct create_edge() for embedded.
-        result = self._db.execute(
-            "MATCH (n) RETURN n.id AS id, id(n) AS nid"
-        )
-        nid_cache = {row["id"]: row["nid"] for row in result}
+        if not edges:
+            return 0
+
+        # Group by edge type for UNWIND (Cypher/GQL requires static rel types)
+        by_type: dict[str, list[dict[str, Any]]] = {}
+        for src, tgt, edge_type, props in edges:
+            if edge_type not in by_type:
+                by_type[edge_type] = []
+            by_type[edge_type].append({"src": src, "tgt": tgt, **props})
 
         count = 0
-        for src, tgt, edge_type, props in edges:
-            src_nid = nid_cache.get(src)
-            tgt_nid = nid_cache.get(tgt)
-            if src_nid is not None and tgt_nid is not None:
+        for edge_type, edge_list in by_type.items():
+            # Build property map from first edge (excluding src/tgt)
+            prop_keys = [k for k in edge_list[0] if k not in ("src", "tgt")]
+            prop_map = ", ".join(f"{k}: e.{k}" for k in prop_keys)
+            prop_str = f" {{{prop_map}}}" if prop_map else ""
+            query = (
+                f"UNWIND $edges AS e "
+                f"MATCH (a {{id: e.src}}), (b {{id: e.tgt}}) "
+                f"CREATE (a)-[:{edge_type}{prop_str}]->(b)"
+            )
+            for i in range(0, len(edge_list), batch_size):
+                batch = edge_list[i : i + batch_size]
                 try:
-                    self._db.create_edge(
-                        src_nid, tgt_nid, edge_type, props,
-                    )
-                    count += 1
+                    self._db.execute(query, {"edges": batch})
+                    count += len(batch)
                 except Exception:
-                    pass
+                    # Fallback to individual create_edge() API
+                    result = self._db.execute("MATCH (n) RETURN n.id AS id, id(n) AS nid")
+                    nid_cache = {row["id"]: row["nid"] for row in result}
+                    for e in batch:
+                        src_nid = nid_cache.get(e["src"])
+                        tgt_nid = nid_cache.get(e["tgt"])
+                        if src_nid is not None and tgt_nid is not None:
+                            props = {k: e[k] for k in prop_keys}
+                            try:
+                                self._db.create_edge(src_nid, tgt_nid, edge_type, props)
+                                count += 1
+                            except Exception:
+                                pass
         return count
 
     def get_neighbors(self, node_id: str, *, edge_type: str | None = None) -> list[str]:
