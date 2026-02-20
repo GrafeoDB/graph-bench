@@ -50,8 +50,8 @@ f31# GrafeoDB Benchmark Results
 </tr>
 <tr>
   <td>Pattern</td>
-  <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
-  <td></td><td></td>
+  <td>12,177</td><td>44</td><td>226</td><td>225</td><td>322</td><td>140</td><td>282</td><td>12,344</td>
+  <td>1</td><td>201</td>
 </tr>
 <tr>
   <td>Structure</td>
@@ -60,18 +60,18 @@ f31# GrafeoDB Benchmark Results
 </tr>
 <tr>
   <td>Algorithms</td>
-  <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>—</td>
-  <td></td><td>—</td>
+  <td>—</td><td>—</td><td>70</td><td>46</td><td>179</td><td>—</td><td>331</td><td>—</td>
+  <td>1</td><td>—</td>
 </tr>
 <tr>
   <td>LDBC Graphanalytics</td>
-  <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>—</td>
-  <td></td><td>—</td>
+  <td>—</td><td>—</td><td>15</td><td>19</td><td>167</td><td>—</td><td>528</td><td>—</td>
+  <td>1</td><td>—</td>
 </tr>
 <tr>
   <td>LDBC SNB Interactive</td>
-  <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
-  <td></td><td></td>
+  <td>37,719</td><td>5,183</td><td>TIMEOUT</td><td>7,283</td><td>6,110</td><td>4,998</td><td>5,758</td><td>FAILED</td>
+  <td>TIMEOUT</td><td>4,737</td>
 </tr>
 <tr>
   <td>LDBC ACID</td>
@@ -80,18 +80,18 @@ f31# GrafeoDB Benchmark Results
 </tr>
 <tr>
   <td>Concurrent</td>
-  <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
-  <td></td><td></td>
+  <td>13,365</td><td>597</td><td>TIMEOUT</td><td>783</td><td>2,394</td><td>1,569</td><td>FAILED</td><td>TIMEOUT</td>
+  <td>29</td><td>3,594</td>
 </tr>
 <tr>
   <td>Vector †</td>
-  <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
-  <td></td><td></td>
+  <td>13,348</td><td>5,480</td><td>241</td><td>12,708</td><td>12,542</td><td>15,326</td><td>634</td><td>TIMEOUT</td>
+  <td>341</td><td>5,689</td>
 </tr>
 <tr>
   <td>Hybrid †</td>
-  <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
-  <td></td><td></td>
+  <td>10,049</td><td>3,196</td><td>79</td><td>1,352</td><td>1,460</td><td>1,855</td><td>86</td><td>TIMEOUT</td>
+  <td>28</td><td>740</td>
 </tr>
 <tr>
   <td>Turing-Bench ‡</td>
@@ -155,9 +155,9 @@ All values in milliseconds (total per category). **Bold** = fastest in section.
 
 | Benchmark | Grafeo | LadybugDB |
 |-----------|--------|-----------|
-| triangle_count | | |
-| common_neighbors | | |
-| **Total (ms)** | | |
+| triangle_count | 0.2 ms | 161.1 ms |
+| common_neighbors | 0.4 ms | 39.8 ms |
+| **Total (ms)** | **0.6** | **200.9** |
 | **Peak Memory** | | |
 
 ### Structure
@@ -177,9 +177,11 @@ Native implementations only.
 
 | Benchmark | Grafeo |
 |-----------|--------|
-| pagerank | |
-| community_detection | |
-| **Total (ms)** | |
+| pagerank | 0.0 ms |
+| community_detection | 0.0 ms |
+| betweenness_centrality | 0.4 ms |
+| closeness_centrality | 0.2 ms |
+| **Total (ms)** | **0.6** |
 | **Peak Memory** | |
 
 ### LDBC Graphanalytics
@@ -188,31 +190,31 @@ Native implementations only.
 
 | Benchmark | Grafeo |
 |-----------|--------|
-| ldbc_bfs | |
-| ldbc_pagerank | |
-| ldbc_wcc | |
-| ldbc_cdlp | |
-| ldbc_lcc | |
-| ldbc_sssp | |
-| **Total (ms)** | |
+| ldbc_bfs | 0.4 ms |
+| ldbc_pagerank | 0.0 ms |
+| ldbc_wcc | 0.0 ms |
+| ldbc_cdlp | 0.0 ms |
+| ldbc_lcc | 0.0 ms |
+| ldbc_sssp | 0.4 ms |
+| **Total (ms)** | **1.0** |
 | **Peak Memory** | |
 
 ### LDBC SNB Interactive
 
 | Benchmark | Grafeo | LadybugDB |
 |-----------|--------|-----------|
-| snb_is1 | | |
-| snb_is2 | | |
-| snb_is3 | | |
-| snb_is4 | | |
-| snb_is5 | | |
-| snb_is6 | | |
-| snb_is7 | | |
-| snb_ic1 | | |
-| snb_ic2 | | |
-| snb_ic3 | | |
-| snb_ic6 | | |
-| **Total (ms)** | | |
+| snb_is1 | TIMEOUT | 182.0 ms |
+| snb_is2 | TIMEOUT | 163.1 ms |
+| snb_is3 | TIMEOUT | 1,777.4 ms |
+| snb_is4 | TIMEOUT | 49.3 ms |
+| snb_is5 | TIMEOUT | 64.3 ms |
+| snb_is6 | TIMEOUT | 171.8 ms |
+| snb_is7 | TIMEOUT | 119.8 ms |
+| snb_ic1 | TIMEOUT | TIMEOUT |
+| snb_ic2 | TIMEOUT | 655.6 ms |
+| snb_ic3 | TIMEOUT | 607.7 ms |
+| snb_ic6 | TIMEOUT | 945.6 ms |
+| **Total (ms)** | **TIMEOUT** | **4,736.6** |
 | **Peak Memory** | | |
 
 ### LDBC ACID
@@ -238,12 +240,12 @@ Native implementations only.
 
 | Benchmark | Grafeo | LadybugDB |
 |-----------|--------|-----------|
-| throughput_scaling | | |
-| lost_update | | |
-| read_after_write | | |
-| concurrent_mixed | | |
-| concurrent_acid | | |
-| **Total (ms)** | | |
+| throughput_scaling | 8.6 ms | 1,910.2 ms |
+| lost_update | 1.1 ms | 120.0 ms |
+| read_after_write | 2.0 ms | 117.7 ms |
+| concurrent_mixed | 2.4 ms | 435.4 ms |
+| concurrent_acid | 14.6 ms | 1,011.0 ms |
+| **Total (ms)** | **28.7** | **3,594.3** |
 | **Peak Memory** | | |
 
 ### Vector
@@ -252,11 +254,11 @@ Brute-force fallback — no native vector index. Times include data retrieval + 
 
 | Benchmark | Grafeo | LadybugDB |
 |-----------|--------|-----------|
-| vector_insert | | |
-| vector_knn | | |
-| vector_batch_search | | |
-| vector_recall | | |
-| **Total (ms)** | | |
+| vector_insert | 43.2 ms | 194.1 ms |
+| vector_knn | 25.6 ms | 460.2 ms |
+| vector_batch_search | 249.2 ms | 4,590.0 ms |
+| vector_recall | 23.1 ms | 444.6 ms |
+| **Total (ms)** | **341.1** | **5,688.9** |
 | **Peak Memory** | | |
 
 ### Hybrid
@@ -265,9 +267,9 @@ Brute-force vector fallback. Graph traversal is native.
 
 | Benchmark | Grafeo | LadybugDB |
 |-----------|--------|-----------|
-| hybrid_graph_to_vector | | |
-| hybrid_vector_to_graph | | |
-| **Total (ms)** | | |
+| hybrid_graph_to_vector | 23.7 ms | 552.5 ms |
+| hybrid_vector_to_graph | 4.3 ms | 187.7 ms |
+| **Total (ms)** | **28.0** | **740.2** |
 | **Peak Memory** | | |
 
 ### Turing-Bench (PoleDB)
@@ -342,9 +344,9 @@ External benchmark suite from [turing-bench](https://github.com/turing-db/turing
 
 | Benchmark | Grafeo Server | Neo4j | Memgraph | FalkorDB | ArangoDB | TuGraph | NebulaGraph | TuringDB |
 |-----------|---------------|-------|----------|----------|----------|---------|-------------|----------|
-| triangle_count | | | | | | | | |
-| common_neighbors | | | | | | | | |
-| **Total (ms)** | | | | | | | | |
+| triangle_count | 178.2 ms | 253.3 ms | 175.7 ms | 11.6 ms | 9,710.4 ms | 224.6 ms | 40.8 ms | 9,704.5 ms |
+| common_neighbors | 48.2 ms | 68.3 ms | 49.6 ms | 32.6 ms | 2,466.1 ms | 57.6 ms | 99.4 ms | 2,639.2 ms |
+| **Total (ms)** | **226.4** | **321.6** | **225.3** | **44.2** | **12,176.5** | **282.2** | **140.2** | **12,343.7** |
 | **Peak Memory** | | | | | | | | |
 
 ### Structure
@@ -362,44 +364,46 @@ External benchmark suite from [turing-bench](https://github.com/turing-db/turing
 
 Native implementations only.
 
-| Benchmark | ArangoDB | FalkorDB | Grafeo Server | Memgraph | Neo4j | NebulaGraph | TuGraph |
-|-----------|----------|----------|---------------|----------|-------|-------------|---------|
-| pagerank | | | | | | | |
-| community_detection | | | | | | | |
-| **Total (ms)** | | | | | | | |
-| **Peak Memory** | | | | | | | |
+| Benchmark | Grafeo Server | Neo4j | Memgraph | TuGraph |
+|-----------|---------------|-------|----------|---------|
+| pagerank | 2.2 ms | 54.9 ms | 4.0 ms | 109.7 ms |
+| community_detection | 2.3 ms | 60.5 ms | 3.6 ms | 110.0 ms |
+| betweenness_centrality | 41.6 ms | 20.9 ms | TIMEOUT | 74.5 ms |
+| closeness_centrality | 23.7 ms | 42.6 ms | 38.1 ms | 37.1 ms |
+| **Total (ms)** | **69.8** | **178.9** | **45.7** | **331.3** |
+| **Peak Memory** | | | | |
 
 ### LDBC Graphanalytics
 
 Native implementations only.
 
-| Benchmark | ArangoDB | FalkorDB | Grafeo Server | Memgraph | Neo4j | NebulaGraph | TuGraph |
-|-----------|----------|----------|---------------|----------|-------|-------------|---------|
-| ldbc_bfs | | | | | | | |
-| ldbc_pagerank | | | | | | | |
-| ldbc_wcc | | | | | | | |
-| ldbc_cdlp | | | | | | | |
-| ldbc_lcc | | | | | | | |
-| ldbc_sssp | | | | | | | |
-| **Total (ms)** | | | | | | | |
-| **Peak Memory** | | | | | | | |
+| Benchmark | Grafeo Server | Neo4j | Memgraph | TuGraph |
+|-----------|---------------|-------|----------|---------|
+| ldbc_bfs | 2.8 ms | 23.7 ms | 1.5 ms | 88.7 ms |
+| ldbc_pagerank | 2.4 ms | 53.5 ms | 2.9 ms | 87.7 ms |
+| ldbc_wcc | 2.1 ms | 18.6 ms | 2.5 ms | 87.9 ms |
+| ldbc_cdlp | 2.1 ms | 33.5 ms | 3.1 ms | 88.6 ms |
+| ldbc_lcc | 2.7 ms | 20.4 ms | 6.6 ms | 87.4 ms |
+| ldbc_sssp | 2.7 ms | 16.8 ms | 2.4 ms | 87.2 ms |
+| **Total (ms)** | **14.8** | **166.5** | **19.0** | **527.5** |
+| **Peak Memory** | | | | |
 
 ### LDBC SNB Interactive
 
 | Benchmark | Grafeo Server | Neo4j | Memgraph | FalkorDB | ArangoDB | TuGraph | NebulaGraph | TuringDB |
 |-----------|---------------|-------|----------|----------|----------|---------|-------------|----------|
-| snb_is1 | | | | | | | | |
-| snb_is2 | | | | | | | | |
-| snb_is3 | | | | | | | | |
-| snb_is4 | | | | | | | | |
-| snb_is5 | | | | | | | | |
-| snb_is6 | | | | | | | | |
-| snb_is7 | | | | | | | | |
-| snb_ic1 | | | | | | | | |
-| snb_ic2 | | | | | | | | |
-| snb_ic3 | | | | | | | | |
-| snb_ic6 | | | | | | | | |
-| **Total (ms)** | | | | | | | | |
+| snb_is1 | TIMEOUT | 273.1 ms | 329.3 ms | 231.3 ms | 4,487.7 ms | 248.3 ms | 1,062.1 ms | FAILED |
+| snb_is2 | TIMEOUT | 226.5 ms | 246.4 ms | 183.8 ms | 1,099.0 ms | 192.2 ms | 108.9 ms | FAILED |
+| snb_is3 | TIMEOUT | 3,234.3 ms | 3,836.7 ms | 2,706.5 ms | 6,030.6 ms | 2,913.6 ms | TIMEOUT | FAILED |
+| snb_is4 | TIMEOUT | 92.3 ms | 108.5 ms | 77.0 ms | 97.1 ms | 81.6 ms | 154.0 ms | FAILED |
+| snb_is5 | TIMEOUT | 89.4 ms | 139.2 ms | 81.0 ms | 2,207.7 ms | 84.3 ms | 666.3 ms | FAILED |
+| snb_is6 | TIMEOUT | 221.9 ms | 263.8 ms | 199.3 ms | TIMEOUT | 202.2 ms | 199.0 ms | FAILED |
+| snb_is7 | TIMEOUT | 153.9 ms | 194.9 ms | 131.3 ms | TIMEOUT | 139.3 ms | 124.3 ms | FAILED |
+| snb_ic1 | TIMEOUT | TIMEOUT | TIMEOUT | TIMEOUT | TIMEOUT | TIMEOUT | TIMEOUT | FAILED |
+| snb_ic2 | TIMEOUT | 739.6 ms | 869.8 ms | 574.3 ms | 10,086.2 ms | 646.6 ms | 1,047.8 ms | FAILED |
+| snb_ic3 | TIMEOUT | 593.6 ms | 694.8 ms | 538.7 ms | TIMEOUT | 636.5 ms | 910.4 ms | FAILED |
+| snb_ic6 | TIMEOUT | 485.3 ms | 599.0 ms | 459.3 ms | 13,710.9 ms | 613.7 ms | 724.7 ms | FAILED |
+| **Total (ms)** | **TIMEOUT** | **6,109.9** | **7,282.4** | **5,182.5** | **37,719.2** | **5,758.3** | **4,997.5** | **FAILED** |
 | **Peak Memory** | | | | | | | | |
 
 ### LDBC ACID
@@ -425,12 +429,12 @@ Native implementations only.
 
 | Benchmark | Grafeo Server | Neo4j | Memgraph | FalkorDB | ArangoDB | TuGraph | NebulaGraph | TuringDB |
 |-----------|---------------|-------|----------|----------|----------|---------|-------------|----------|
-| throughput_scaling | | | | | | | | |
-| lost_update | | | | | | | | |
-| read_after_write | | | | | | | | |
-| concurrent_mixed | | | | | | | | |
-| concurrent_acid | | | | | | | | |
-| **Total (ms)** | | | | | | | | |
+| throughput_scaling | TIMEOUT | 733.8 ms | 583.3 ms | 178.0 ms | 8,854.1 ms | FAILED | 386.4 ms | TIMEOUT |
+| lost_update | TIMEOUT | 219.7 ms | FAILED | 41.0 ms | 1,169.5 ms | FAILED | 123.2 ms | TIMEOUT |
+| read_after_write | TIMEOUT | 127.6 ms | 64.7 ms | 39.5 ms | 1,126.0 ms | FAILED | 199.5 ms | TIMEOUT |
+| concurrent_mixed | TIMEOUT | 158.2 ms | 134.5 ms | 41.8 ms | 2,215.2 ms | FAILED | 105.7 ms | TIMEOUT |
+| concurrent_acid | TIMEOUT | 1,154.4 ms | FAILED | 297.1 ms | TIMEOUT | FAILED | 754.0 ms | TIMEOUT |
+| **Total (ms)** | **TIMEOUT** | **2,393.7** | **782.5** | **597.4** | **13,364.8** | **FAILED** | **1,568.8** | **TIMEOUT** |
 | **Peak Memory** | | | | | | | | |
 
 ### Vector
@@ -439,11 +443,11 @@ Brute-force fallback — no native vector index. Times include data retrieval + 
 
 | Benchmark | Grafeo Server | Neo4j | Memgraph | FalkorDB | ArangoDB | TuGraph | NebulaGraph | TuringDB |
 |-----------|---------------|-------|----------|----------|----------|---------|-------------|----------|
-| vector_insert | | | | | | | | |
-| vector_knn | | | | | | | | |
-| vector_batch_search | | | | | | | | |
-| vector_recall | | | | | | | | |
-| **Total (ms)** | | | | | | | | |
+| vector_insert | 145.0 ms | 262.7 ms | 479.6 ms | 146.8 ms | 149.6 ms | 535.3 ms | 1,178.2 ms | TIMEOUT |
+| vector_knn | 7.4 ms | 1,040.5 ms | 1,093.3 ms | 2,718.6 ms | 1,132.0 ms | 8.5 ms | 1,047.6 ms | TIMEOUT |
+| vector_batch_search | 80.0 ms | 10,224.4 ms | 10,084.5 ms | TIMEOUT | 10,941.4 ms | 82.3 ms | 11,879.1 ms | TIMEOUT |
+| vector_recall | 8.1 ms | 1,014.4 ms | 1,050.8 ms | 2,614.3 ms | 1,125.4 ms | 7.8 ms | 1,220.8 ms | TIMEOUT |
+| **Total (ms)** | **240.5** | **12,542.0** | **12,708.2** | **5,479.7** | **13,348.4** | **633.9** | **15,325.7** | **TIMEOUT** |
 | **Peak Memory** | | | | | | | | |
 
 ### Hybrid
@@ -452,9 +456,9 @@ Brute-force vector fallback. Graph traversal is native.
 
 | Benchmark | Grafeo Server | Neo4j | Memgraph | FalkorDB | ArangoDB | TuGraph | NebulaGraph | TuringDB |
 |-----------|---------------|-------|----------|----------|----------|---------|-------------|----------|
-| hybrid_graph_to_vector | | | | | | | | |
-| hybrid_vector_to_graph | | | | | | | | |
-| **Total (ms)** | | | | | | | | |
+| hybrid_graph_to_vector | 71.8 ms | 1,156.6 ms | 1,080.9 ms | 2,615.5 ms | 5,075.4 ms | 78.2 ms | 1,534.4 ms | TIMEOUT |
+| hybrid_vector_to_graph | 7.4 ms | 303.3 ms | 271.0 ms | 580.0 ms | 4,973.8 ms | 8.1 ms | 320.9 ms | TIMEOUT |
+| **Total (ms)** | **79.2** | **1,459.9** | **1,351.9** | **3,195.5** | **10,049.2** | **86.3** | **1,855.3** | **TIMEOUT** |
 | **Peak Memory** | | | | | | | | |
 
 ### Turing-Bench (PoleDB)
