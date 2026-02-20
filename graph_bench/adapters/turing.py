@@ -129,8 +129,12 @@ class TuringDBAdapter(BaseAdapter):
             pass
 
     def _ensure_read(self) -> None:
-        """Flush any pending writes before a read operation."""
-        self._flush()
+        """Flush any pending writes before a read operation.
+
+        Only flushes if there's actually an open change to submit.
+        """
+        if self._has_open_change:
+            self._flush()
 
     # ── Value formatting (no parameterized queries) ──────────────
 
@@ -197,7 +201,7 @@ class TuringDBAdapter(BaseAdapter):
         nodes: Sequence[dict[str, Any]],
         *,
         label: str = "Node",
-        batch_size: int = 200,
+        batch_size: int = 1000,
     ) -> int:
         if not nodes:
             return 0
@@ -257,7 +261,7 @@ class TuringDBAdapter(BaseAdapter):
         self,
         edges: Sequence[tuple[str, str, str, dict[str, Any]]],
         *,
-        batch_size: int = 50,
+        batch_size: int = 1000,
     ) -> int:
         if not edges:
             return 0

@@ -38,6 +38,7 @@ class NebulaGraphAdapter(BaseAdapter):
         self._password: str = "nebula"
         self._connected = False
         self._space = "benchmark"
+        self._tag_fields: dict[str, list[str]] = {}  # label -> ordered field names
 
     @property
     def _session(self) -> Any:
@@ -106,14 +107,8 @@ class NebulaGraphAdapter(BaseAdapter):
         time.sleep(1)
         session.execute(f"USE {self._space}")
 
-        # Create common tags (node labels) - use backticks for reserved words
+        # Create common edge types - use backticks for reserved words
         time.sleep(1)
-        for tag in ["Node", "`Vertex`", "Person"]:
-            session.execute(
-                f"CREATE TAG IF NOT EXISTS {tag}(id string, name string, value int)"
-            )
-
-        # Create edge types - use backticks for reserved words
         session.execute(
             "CREATE EDGE IF NOT EXISTS CONNECTS(weight double)"
         )
@@ -132,6 +127,7 @@ class NebulaGraphAdapter(BaseAdapter):
         self._connected = False
 
     def clear(self) -> None:
+        self._tag_fields.clear()
         try:
             self._session.execute(f"CLEAR SPACE {self._space}")
         except Exception:
@@ -144,6 +140,53 @@ class NebulaGraphAdapter(BaseAdapter):
             return f"`{name}`"
         return name
 
+    @staticmethod
+    def _ngql_type(value: Any) -> str:
+        """Map a Python value to an nGQL schema type."""
+        if isinstance(value, bool):
+            return "bool"
+        if isinstance(value, int):
+            return "int64"
+        if isinstance(value, float):
+            return "double"
+        if isinstance(value, (list, tuple)):
+            return "string"  # store as JSON string
+        return "string"
+
+    @staticmethod
+    def _ngql_literal(value: Any) -> str:
+        """Format a Python value as an nGQL literal."""
+        if value is None:
+            return '""'
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, int):
+            return str(value)
+        if isinstance(value, float):
+            return str(value)
+        if isinstance(value, (list, tuple)):
+            import json
+            s = json.dumps(value).replace("\\", "\\\\").replace('"', '\\"')
+            return f'"{s}"'
+        s = str(value).replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{s}"'
+
+    def _ensure_tag(self, label: str, sample: dict[str, Any]) -> list[str]:
+        """Create tag with fields inferred from sample node, return ordered field names."""
+        escaped_label = self._escape_name(label)
+        if label in self._tag_fields:
+            return self._tag_fields[label]
+
+        fields = list(sample.keys())
+        schema_parts = [f"{k} {self._ngql_type(sample[k])}" for k in fields]
+        self._session.execute(
+            f"CREATE TAG IF NOT EXISTS {escaped_label}({', '.join(schema_parts)})"
+        )
+        import time
+        time.sleep(1)
+        self._tag_fields[label] = fields
+        return fields
+
     def insert_nodes(
         self,
         nodes: Sequence[dict[str, Any]],
@@ -151,55 +194,54 @@ class NebulaGraphAdapter(BaseAdapter):
         label: str = "Node",
         batch_size: int = 1000,
     ) -> int:
+        if not nodes:
+            return 0
         escaped_label = self._escape_name(label)
+        fields = self._ensure_tag(label, nodes[0])
         count = 0
         for i in range(0, len(nodes), batch_size):
             batch = nodes[i : i + batch_size]
             values = []
             for node in batch:
                 node_id = node.get("id", f"n{count}")
-                name = node.get("name", "")
-                value = node.get("value", 0)
-                # Correct NebulaGraph syntax: "vid":(prop1_value, prop2_value, ...)
-                values.append(f'"{node_id}":("{node_id}", "{name}", {value})')
+                prop_vals = ", ".join(self._ngql_literal(node.get(f)) for f in fields)
+                values.append(f'"{node_id}":({prop_vals})')
                 count += 1
 
             if values:
-                query = f"INSERT VERTEX {escaped_label}(id, name, value) VALUES {', '.join(values)}"
+                field_names = ", ".join(fields)
+                query = f"INSERT VERTEX {escaped_label}({field_names}) VALUES {', '.join(values)}"
                 result = self._session.execute(query)
                 if not result.is_succeeded():
-                    # Try creating the tag on-the-fly
-                    self._session.execute(
-                        f"CREATE TAG IF NOT EXISTS {escaped_label}(id string, name string, value int)"
-                    )
-                    import time
-                    time.sleep(1)
+                    # Retry after ensuring tag exists
+                    self._ensure_tag(label, nodes[0])
                     self._session.execute(query)
 
         return count
 
     def get_node(self, node_id: str) -> dict[str, Any] | None:
-        # Try multiple common tags
-        for tag in ["Node", "`Vertex`", "Person"]:
-            query = f'FETCH PROP ON {tag} "{node_id}" YIELD properties(vertex) AS props'
+        # Try tags created during this session first, then common defaults
+        tags_to_try = list(self._tag_fields.keys()) or ["Node", "Person"]
+        for tag in tags_to_try:
+            escaped = self._escape_name(tag)
+            query = f'FETCH PROP ON {escaped} "{node_id}" YIELD properties(vertex) AS props'
             result = self._session.execute(query)
             if result.is_succeeded() and result.row_size() > 0:
                 props = result.row_values(0)[0].as_map()
                 return {
-                    k: v.as_string() if hasattr(v, "as_string") else v
-                    for k, v in props.items()
+                    k: self._convert_value(v) for k, v in props.items()
                 }
         return None
 
     def update_node(self, node_id: str, properties: dict[str, Any]) -> bool:
-        # Try updating on common tags
-        for tag in ["Node", "`Vertex`", "Person"]:
-            # Build UPDATE VERTEX query
+        tags_to_try = list(self._tag_fields.keys()) or ["Node", "Person"]
+        for tag in tags_to_try:
+            escaped = self._escape_name(tag)
             set_clauses = ", ".join(
                 f'{k} = "{v}"' if isinstance(v, str) else f"{k} = {v}"
                 for k, v in properties.items()
             )
-            query = f'UPDATE VERTEX ON {tag} "{node_id}" SET {set_clauses}'
+            query = f'UPDATE VERTEX ON {escaped} "{node_id}" SET {set_clauses}'
             result = self._session.execute(query)
             if result.is_succeeded():
                 return True
@@ -357,13 +399,5 @@ class NebulaGraphAdapter(BaseAdapter):
                     visited.append(node_id)
         return visited
 
-    def traverse_dfs(
-        self,
-        start: str,
-        *,
-        max_depth: int = 3,
-        edge_type: str | None = None,
-    ) -> list[str]:
-        """DFS traversal - NebulaGraph doesn't have native DFS, use GO statement."""
-        # NebulaGraph GO is BFS-like, but we can still use it for traversal
-        return self.traverse_bfs(start, max_depth=max_depth, edge_type=edge_type)
+    # No traverse_dfs override — NebulaGraph GO is BFS-like.
+    # BaseAdapter.traverse_dfs() provides correct DFS via get_neighbors().

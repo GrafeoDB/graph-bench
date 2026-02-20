@@ -172,7 +172,7 @@ class TuGraphAdapter(BaseAdapter):
         nodes: Sequence[dict[str, Any]],
         *,
         label: str = "Node",
-        batch_size: int = 50,
+        batch_size: int = 200,
     ) -> int:
         if not nodes:
             return 0
@@ -235,7 +235,7 @@ class TuGraphAdapter(BaseAdapter):
         self,
         edges: Sequence[tuple[str, str, str, dict[str, Any]]],
         *,
-        batch_size: int = 50,
+        batch_size: int = 200,
     ) -> int:
         count = 0
         # Group by edge type to ensure labels exist

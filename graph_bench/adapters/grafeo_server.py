@@ -509,7 +509,7 @@ class GrafeoServerAdapter(BaseAdapter):
         self,
         edges: Sequence[tuple[str, str, str, dict[str, Any]]],
         *,
-        batch_size: int = 200,
+        batch_size: int = 1000,
     ) -> int:
         """Insert edges using batched UNWIND MATCH+CREATE.
 
@@ -700,6 +700,64 @@ class GrafeoServerAdapter(BaseAdapter):
         except Exception:
             raise NotImplementedError(
                 f"{self.name} community detection failed"
+            )
+
+    def traverse_bfs(
+        self,
+        start: str,
+        *,
+        max_depth: int = 3,
+        edge_type: str | None = None,
+    ) -> list[str]:
+        """BFS traversal via CALL grafeo.bfs()."""
+        src_nid = self._resolve_nid(start)
+        if src_nid is None:
+            return super().traverse_bfs(
+                start, max_depth=max_depth, edge_type=edge_type
+            )
+        nid_to_app = self._nid_map()
+        try:
+            results = self._query(
+                f"CALL grafeo.bfs({src_nid}) "
+                f"YIELD node_id, depth"
+            )
+            return [
+                nid_to_app.get(r["node_id"], str(r["node_id"]))
+                for r in results
+                if int(r["depth"]) <= max_depth
+            ]
+        except Exception:
+            return super().traverse_bfs(
+                start, max_depth=max_depth, edge_type=edge_type
+            )
+
+    def traverse_dfs(
+        self,
+        start: str,
+        *,
+        max_depth: int = 3,
+        edge_type: str | None = None,
+    ) -> list[str]:
+        """DFS traversal via CALL grafeo.dfs()."""
+        src_nid = self._resolve_nid(start)
+        if src_nid is None:
+            return super().traverse_dfs(
+                start, max_depth=max_depth, edge_type=edge_type
+            )
+        nid_to_app = self._nid_map()
+        try:
+            results = self._query(
+                f"CALL grafeo.dfs({src_nid}) "
+                f"YIELD node_id, depth"
+            )
+            return [
+                nid_to_app.get(r["node_id"], str(r["node_id"]))
+                for r in results
+                if int(r["depth"]) <= max_depth
+            ]
+        except Exception:
+            return super().traverse_dfs(
+                start, max_depth=max_depth, edge_type=edge_type
             )
 
     def bfs_levels(self, source: str) -> dict[str, int]:
