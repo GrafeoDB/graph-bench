@@ -95,8 +95,8 @@ f31# GrafeoDB Benchmark Results
 </tr>
 <tr>
   <td>Turing-Bench ‡</td>
-  <td>—</td><td>—</td><td>—</td><td>—</td><td></td><td>—</td><td>—</td><td></td>
-  <td></td><td>—</td>
+  <td>—</td><td>—</td><td>—</td><td>—</td><td></td><td>—</td><td>—</td><td>29</td>
+  <td>669</td><td>—</td>
 </tr>
 </table>
 
@@ -276,19 +276,19 @@ External benchmark suite from [turing-bench](https://github.com/turing-db/turing
 
 | Benchmark | Rows | Grafeo | LadybugDB |
 |-----------|------|--------|-----------|
-| Full node scan | 61,521 | | — |
-| Label scan: Person | 369 | | — |
-| Count: Person | 1 | | — |
-| Label scan: Crime | 28,762 | | — |
-| Count: Crime | 1 | | — |
-| Full edge scan | 105,840 | | — |
-| Count: Edges | 1 | | — |
-| Indexed lookup → Crime | 0 | | — |
-| Person → Crime | 55 | | — |
-| Indexed lookup → Any | 6 | | — |
-| 2-hop → Crime | 0 | | — |
-| Crime → Location | 28,762 | | — |
-| **Total (ms)** | — | | — |
+| Full node scan | 61,521 | 144.0 ms | — |
+| Label scan: Person | 369 | 0.0 ms | — |
+| Count: Person | 1 | 0.0 ms | — |
+| Label scan: Crime | 28,762 | 64.0 ms | — |
+| Count: Crime | 1 | 23.0 ms | — |
+| Full edge scan | 105,840 | 188.0 ms | — |
+| Count: Edges | 1 | 158.0 ms | — |
+| Indexed lookup → Crime | 0 | 0.0 ms | — |
+| Person → Crime | 55 | 0.0 ms | — |
+| Indexed lookup → Any | 6 | 0.0 ms | — |
+| 2-hop → Crime | 0 | 0.0 ms | — |
+| Crime → Location | 28,762 | 92.0 ms | — |
+| **Total (ms)** | — | **669.0** | — |
 | **Peak Memory** | — | | — |
 
 ---
@@ -463,17 +463,17 @@ External benchmark suite from [turing-bench](https://github.com/turing-db/turing
 
 | Benchmark | Rows | Grafeo Server | Neo4j | Memgraph | FalkorDB | ArangoDB | TuGraph | NebulaGraph | TuringDB |
 |-----------|------|---------------|-------|----------|----------|----------|---------|-------------|----------|
-| Full node scan | 61,521 | — | | — | — | — | — | — | |
-| Label scan: Person | 369 | — | | — | — | — | — | — | |
-| Count: Person | 1 | — | | — | — | — | — | — | |
-| Label scan: Crime | 28,762 | — | | — | — | — | — | — | |
-| Count: Crime | 1 | — | | — | — | — | — | — | |
-| Full edge scan | 105,840 | — | | — | — | — | — | — | |
-| Count: Edges | 1 | — | | — | — | — | — | — | |
-| Indexed lookup → Crime | 0 | — | | — | — | — | — | — | |
-| Person → Crime | 55 | — | | — | — | — | — | — | |
-| Indexed lookup → Any | 6 | — | | — | — | — | — | — | |
-| 2-hop → Crime | 0 | — | | — | — | — | — | — | |
-| Crime → Location | 28,762 | — | | — | — | — | — | — | |
-| **Total (ms)** | — | — | | — | — | — | — | — | |
+| Full node scan | 61,521 | — | | — | — | — | — | — | 4.0 ms |
+| Label scan: Person | 369 | — | | — | — | — | — | — | 0.0 ms |
+| Count: Person | 1 | — | | — | — | — | — | — | 0.0 ms |
+| Label scan: Crime | 28,762 | — | | — | — | — | — | — | 2.0 ms |
+| Count: Crime | 1 | — | | — | — | — | — | — | 0.0 ms |
+| Full edge scan | 105,840 | — | | — | — | — | — | — | 9.0 ms |
+| Count: Edges | 1 | — | | — | — | — | — | — | 2.0 ms |
+| Indexed lookup → Crime | 0 | — | | — | — | — | — | — | 3.0 ms |
+| Person → Crime | 55 | — | | — | — | — | — | — | 1.0 ms |
+| Indexed lookup → Any | 6 | — | | — | — | — | — | — | 2.0 ms |
+| 2-hop → Crime | 0 | — | | — | — | — | — | — | 1.0 ms |
+| Crime → Location | 28,762 | — | | — | — | — | — | — | 5.0 ms |
+| **Total (ms)** | — | — | | — | — | — | — | — | **29.0** |
 | **Peak Memory** | — | — | | — | — | — | — | — | |
