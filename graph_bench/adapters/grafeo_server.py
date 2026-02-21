@@ -26,6 +26,7 @@ import math
 import threading
 from collections import defaultdict
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 import grpc
@@ -121,6 +122,7 @@ def _execute_and_collect(
     *,
     transaction_id: str = "",
     parameters: dict[str, Any] | None = None,
+    timeout: int = 300,
 ) -> tuple[list[str], list[list[Any]]]:
     """Execute a GQL statement via GWP and collect all result frames.
 
@@ -136,7 +138,7 @@ def _execute_and_collect(
         parameters=params,
         transaction_id=transaction_id,
     )
-    response_stream = gql_stub.Execute(req)
+    response_stream = gql_stub.Execute(req, timeout=timeout)
 
     columns: list[str] = []
     rows: list[list[Any]] = []
@@ -174,6 +176,8 @@ class GrafeoServerAdapter(BaseAdapter):
         # Session-per-thread pool: each thread gets its own GWP session
         self._thread_sessions: dict[int, str] = {}
         self._session_lock = threading.Lock()
+        # Shared thread pool for concurrent operations (BFS, DFS)
+        self._pool: ThreadPoolExecutor | None = None
 
     @property
     def name(self) -> str:
@@ -210,6 +214,9 @@ class GrafeoServerAdapter(BaseAdapter):
                 ("grpc.keepalive_time_ms", 30000),
                 ("grpc.keepalive_timeout_ms", 5000),
                 ("grpc.http2.max_pings_without_data", 0),
+                ("grpc.optimization_target", "latency"),
+                ("grpc.max_concurrent_streams", 100),
+                ("grpc.initial_reconnect_backoff_ms", 100),
             ],
         )
         self._session_stub = pb_grpc.SessionServiceStub(self._channel)
@@ -243,8 +250,13 @@ class GrafeoServerAdapter(BaseAdapter):
         )
         self._thread_sessions[threading.get_ident()] = resp.session_id
         self._connected = True
+        # Pre-warm shared thread pool (sessions created lazily per thread)
+        self._pool = ThreadPoolExecutor(max_workers=16)
 
     def disconnect(self) -> None:
+        if self._pool:
+            self._pool.shutdown(wait=False)
+            self._pool = None
         self._close_all_sessions()
         if self._channel:
             self._channel.close()
@@ -436,30 +448,24 @@ class GrafeoServerAdapter(BaseAdapter):
         label: str = "Node",
         batch_size: int = 1000,
     ) -> int:
-        """Insert nodes using UNWIND with inline map literals.
+        """Insert nodes using parameterized UNWIND.
 
-        GWP's proto encoding breaks list-of-maps params, so we
-        inline the map values directly in the GQL statement.
-        UNWIND+CREATE works with inline maps on local engine build.
+        Sends node dicts as $nodes parameter — GWP Record encoding
+        fixed in grafeo-server 0.4.4+ to correctly deserialize
+        list-of-maps parameters.
         """
         if not nodes:
             return 0
-        # Get property keys from first node (all nodes have same schema)
         prop_keys = list(nodes[0].keys())
 
         count = 0
+        assigns = ", ".join(f"{k}: props.{k}" for k in prop_keys)
+        query = f"UNWIND $nodes AS props CREATE (:{label}:Node {{{assigns}}})"
+
         sid = self._tx_begin()
         for i in range(0, len(nodes), batch_size):
-            batch = nodes[i : i + batch_size]
-            # Build inline list of maps
-            maps = ", ".join(self._gql_map(node) for node in batch)
-            # Build property assignment: {id: props.id, name: props.name, ...}
-            assigns = ", ".join(f"{k}: props.{k}" for k in prop_keys)
-            query = (
-                f"UNWIND [{maps}] AS props "
-                f"CREATE (:{label}:Node {{{assigns}}})"
-            )
-            self._tx_query(sid, query)
+            batch = [dict(n) for n in nodes[i : i + batch_size]]
+            self._tx_query(sid, query, parameters={"nodes": batch})
             count += len(batch)
         self._tx_commit(sid)
         try:
@@ -509,12 +515,13 @@ class GrafeoServerAdapter(BaseAdapter):
         self,
         edges: Sequence[tuple[str, str, str, dict[str, Any]]],
         *,
-        batch_size: int = 1000,
+        batch_size: int = 500,
     ) -> int:
-        """Insert edges using batched UNWIND MATCH+CREATE.
+        """Insert edges using parameterized UNWIND MATCH+CREATE.
 
-        Groups edges by type, then batches each group into UNWIND
-        statements with inline map literals.
+        Groups edges by type, then batches each group with $edges
+        parameter — GWP Record encoding fixed in grafeo-server 0.4.4+.
+        Smaller batch size (500) to avoid gRPC deadline with large graphs.
         """
         by_type: dict[
             str, list[tuple[str, str, dict[str, Any]]]
@@ -523,52 +530,42 @@ class GrafeoServerAdapter(BaseAdapter):
             by_type[etype].append((src, tgt, props))
 
         count = 0
-        commit_interval = 2000
-        edges_in_tx = 0
         sid = self._tx_begin()
 
         for etype, type_edges in by_type.items():
-            # Check if edges have extra properties
+            # Detect extra edge properties
             has_props = any(props for _, _, props in type_edges)
-            prop_keys = []
+            prop_keys: list[str] = []
             if has_props:
                 for _, _, props in type_edges:
                     if props:
                         prop_keys = list(props.keys())
                         break
 
+            if has_props and prop_keys:
+                prop_assigns = " {" + ", ".join(
+                    f"{k}: e.{k}" for k in prop_keys
+                ) + "}"
+            else:
+                prop_assigns = ""
+
+            query = (
+                f"UNWIND $edges AS e "
+                f"MATCH (a:Node {{id: e.src}}), "
+                f"(b:Node {{id: e.tgt}}) "
+                f"CREATE (a)-[:{etype}{prop_assigns}]->(b)"
+            )
+
             for i in range(0, len(type_edges), batch_size):
                 batch = type_edges[i : i + batch_size]
-                # Build inline list of edge maps
-                edge_maps = []
+                edge_list = []
                 for src, tgt, props in batch:
                     m: dict[str, Any] = {"src": src, "tgt": tgt}
                     if props:
                         m.update(props)
-                    edge_maps.append(self._gql_map(m))
-                maps_str = ", ".join(edge_maps)
-
-                if has_props and prop_keys:
-                    prop_assigns = " {" + ", ".join(
-                        f"{k}: e.{k}" for k in prop_keys
-                    ) + "}"
-                else:
-                    prop_assigns = ""
-
-                query = (
-                    f"UNWIND [{maps_str}] AS e "
-                    f"MATCH (a:Node {{id: e.src}}), "
-                    f"(b:Node {{id: e.tgt}}) "
-                    f"CREATE (a)-[:{etype}{prop_assigns}]->(b)"
-                )
-                self._tx_query(sid, query)
+                    edge_list.append(m)
+                self._tx_query(sid, query, parameters={"edges": edge_list})
                 count += len(batch)
-                edges_in_tx += len(batch)
-
-                if edges_in_tx >= commit_interval:
-                    self._tx_commit(sid)
-                    sid = self._tx_begin()
-                    edges_in_tx = 0
 
         self._tx_commit(sid)
         return count
@@ -709,7 +706,41 @@ class GrafeoServerAdapter(BaseAdapter):
         max_depth: int = 3,
         edge_type: str | None = None,
     ) -> list[str]:
-        """BFS traversal via CALL grafeo.bfs()."""
+        """BFS traversal via CALL grafeo.bfs() or concurrent HTTP/2 BFS.
+
+        When edge_type is specified, fires all neighbor queries for each
+        BFS level concurrently via ThreadPoolExecutor — each thread gets
+        its own GWP session over the shared HTTP/2 channel (multiplexing).
+        """
+        if edge_type:
+            pool = self._pool
+            if pool is None:
+                return super().traverse_bfs(start, max_depth=max_depth, edge_type=edge_type)
+
+            visited: set[str] = set()
+            current_level = {start}
+            result: list[str] = []
+
+            for depth in range(max_depth + 1):
+                new_nodes = current_level - visited
+                visited.update(new_nodes)
+                result.extend(new_nodes)
+                if depth == max_depth:
+                    break
+                # Fire all get_neighbors concurrently over HTTP/2
+                futures = {
+                    pool.submit(self.get_neighbors, nid, edge_type=edge_type): nid
+                    for nid in new_nodes
+                }
+                next_level: set[str] = set()
+                for future in as_completed(futures):
+                    for n in future.result():
+                        if n not in visited:
+                            next_level.add(n)
+                current_level = next_level
+
+            return result
+
         src_nid = self._resolve_nid(start)
         if src_nid is None:
             return super().traverse_bfs(
@@ -738,7 +769,46 @@ class GrafeoServerAdapter(BaseAdapter):
         max_depth: int = 3,
         edge_type: str | None = None,
     ) -> list[str]:
-        """DFS traversal via CALL grafeo.dfs()."""
+        """DFS traversal via CALL grafeo.dfs() or concurrent traversal.
+
+        When edge_type is specified, uses concurrent neighbor expansion
+        (same HTTP/2 multiplexing pattern as traverse_bfs).
+        """
+        if edge_type:
+            pool = self._pool
+            if pool is None:
+                return super().traverse_dfs(start, max_depth=max_depth, edge_type=edge_type)
+
+            visited: set[str] = set()
+            stack = [(start, 0)]
+            result: list[str] = []
+
+            while stack:
+                # Gather all nodes at current stack level for concurrent expansion
+                batch = []
+                while stack:
+                    nid, depth = stack.pop()
+                    if nid not in visited:
+                        visited.add(nid)
+                        result.append(nid)
+                        if depth < max_depth:
+                            batch.append((nid, depth))
+
+                if not batch:
+                    break
+
+                futures = {
+                    pool.submit(self.get_neighbors, nid, edge_type=edge_type): (nid, depth)
+                    for nid, depth in batch
+                }
+                for future in as_completed(futures):
+                    _, depth = futures[future]
+                    for n in future.result():
+                        if n not in visited:
+                            stack.append((n, depth + 1))
+
+            return result
+
         src_nid = self._resolve_nid(start)
         if src_nid is None:
             return super().traverse_dfs(

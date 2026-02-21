@@ -222,6 +222,119 @@ if typer is not None:
         typer.echo(f"\nCompleted: {success} successful, {failed} failed")
 
     @app.command()
+    def test(
+        database: Annotated[
+            str, typer.Option("-d", "--database", help="Database to test (single)")
+        ] = "grafeo",
+        benchmark: Annotated[
+            str, typer.Option("-b", "--benchmark", help="Benchmark name to test")
+        ] = "snb_is1",
+        scale: Annotated[str, typer.Option("-s", "--scale", help="Scale: small, medium, large")] = "small",
+        setup_only: Annotated[
+            bool, typer.Option("--setup-only", help="Only run setup (data loading), skip benchmark iterations")
+        ] = False,
+        skip_setup: Annotated[
+            bool, typer.Option("--skip-setup", help="Skip setup, assume data is already loaded")
+        ] = False,
+        iterations: Annotated[
+            int, typer.Option("-n", "--iterations", help="Number of measurement iterations (default: 1)")
+        ] = 1,
+        timeout: Annotated[
+            int, typer.Option("--timeout", help="Timeout in seconds")
+        ] = 120,
+    ) -> None:
+        """Quick single-benchmark test with phase control.
+
+        Runs a single benchmark on a single database with detailed phase timing.
+        Designed for fast iteration during development.
+
+        Examples:
+            graph-bench test -d grafeo-server -b snb_is1 -s small
+            graph-bench test -d grafeo -b snb_is1 --setup-only
+            graph-bench test -d grafeo-server -b snb_is1 --skip-setup -n 3
+        """
+        import time as _time
+
+        from graph_bench.adapters import AdapterRegistry
+        from graph_bench.benchmarks import BenchmarkRegistry
+        from graph_bench.config import get_scale
+
+        # Resolve benchmark
+        bench_cls = BenchmarkRegistry.get(benchmark)
+        if bench_cls is None:
+            available = BenchmarkRegistry.list()
+            typer.echo(f"Unknown benchmark: {benchmark}", err=True)
+            typer.echo(f"Available: {', '.join(sorted(available))}", err=True)
+            raise typer.Exit(1)
+
+        # Connect adapter
+        try:
+            adapter = AdapterRegistry.create(database)
+            adapter.connect()
+        except Exception as e:
+            typer.echo(f"Failed to connect to {database}: {e}", err=True)
+            raise typer.Exit(1)
+
+        scale_config = get_scale(scale)
+        bench = bench_cls()
+
+        typer.echo(f"=== Test: {benchmark} on {database} @ {scale} ===")
+        typer.echo(f"  Category: {bench.category}")
+        typer.echo(f"  Iterations: {iterations}")
+
+        try:
+            # Phase 1: Setup
+            if not skip_setup:
+                typer.echo("\n--- Setup phase ---")
+                t0 = _time.perf_counter()
+                bench.setup(adapter, scale_config)
+                t1 = _time.perf_counter()
+                typer.echo(f"  Setup completed in {t1 - t0:.3f}s")
+            else:
+                typer.echo("\n--- Skipping setup (--skip-setup) ---")
+
+            if setup_only:
+                typer.echo("\n--- Done (--setup-only) ---")
+                adapter.disconnect()
+                return
+
+            # Phase 2: Measurement iterations
+            typer.echo(f"\n--- Running {iterations} iteration(s) ---")
+            timings = []
+            items_total = 0
+            for i in range(iterations):
+                t0 = _time.perf_counter()
+                try:
+                    items = bench.run_iteration(adapter, scale_config)
+                except Exception as e:
+                    typer.echo(f"  Iteration {i + 1}: FAILED - {e}", err=True)
+                    break
+                t1 = _time.perf_counter()
+                elapsed_ms = (t1 - t0) * 1000
+                timings.append(elapsed_ms)
+                items_total += items
+                typer.echo(f"  Iteration {i + 1}: {elapsed_ms:.1f}ms ({items} items)")
+
+            # Summary
+            if timings:
+                typer.echo(f"\n--- Summary ---")
+                typer.echo(f"  Iterations: {len(timings)}/{iterations}")
+                typer.echo(f"  Min: {min(timings):.1f}ms")
+                typer.echo(f"  Max: {max(timings):.1f}ms")
+                typer.echo(f"  Mean: {sum(timings) / len(timings):.1f}ms")
+                typer.echo(f"  Total items: {items_total}")
+
+            # Phase 3: Teardown
+            typer.echo("\n--- Teardown ---")
+            bench.teardown(adapter)
+            typer.echo("  Done")
+
+        except Exception as e:
+            typer.echo(f"\nERROR: {e}", err=True)
+        finally:
+            adapter.disconnect()
+
+    @app.command()
     def report(
         results_path: Annotated[Path, typer.Argument(help="Path to results JSON file or directory")],
         format_: Annotated[str, typer.Option("-f", "--format", help="Output format: json, csv, markdown")] = "markdown",

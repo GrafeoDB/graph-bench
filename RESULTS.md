@@ -71,7 +71,7 @@ f31# GrafeoDB Benchmark Results
 <tr>
   <td>LDBC SNB Interactive</td>
   <td>37,719</td><td>5,183</td><td>TIMEOUT</td><td>7,283</td><td>6,110</td><td>4,998</td><td>5,758</td><td>FAILED</td>
-  <td>TIMEOUT</td><td>4,737</td>
+  <td>3,125</td><td>4,737</td>
 </tr>
 <tr>
   <td>LDBC ACID</td>
@@ -203,18 +203,18 @@ Native implementations only.
 
 | Benchmark | Grafeo | LadybugDB |
 |-----------|--------|-----------|
-| snb_is1 | TIMEOUT | 182.0 ms |
-| snb_is2 | TIMEOUT | 163.1 ms |
-| snb_is3 | TIMEOUT | 1,777.4 ms |
-| snb_is4 | TIMEOUT | 49.3 ms |
-| snb_is5 | TIMEOUT | 64.3 ms |
-| snb_is6 | TIMEOUT | 171.8 ms |
-| snb_is7 | TIMEOUT | 119.8 ms |
-| snb_ic1 | TIMEOUT | TIMEOUT |
-| snb_ic2 | TIMEOUT | 655.6 ms |
-| snb_ic3 | TIMEOUT | 607.7 ms |
-| snb_ic6 | TIMEOUT | 945.6 ms |
-| **Total (ms)** | **TIMEOUT** | **4,736.6** |
+| snb_is1 | 32.9 ms | 182.0 ms |
+| snb_is2 | 25.3 ms | 163.1 ms |
+| snb_is3 | 315.5 ms | 1,777.4 ms |
+| snb_is4 | 8.3 ms | 49.3 ms |
+| snb_is5 | 8.6 ms | 64.3 ms |
+| snb_is6 | 22.2 ms | 171.8 ms |
+| snb_is7 | 20.6 ms | 119.8 ms |
+| snb_ic1 | 2,475.9 ms | TIMEOUT |
+| snb_ic2 | 80.8 ms | 655.6 ms |
+| snb_ic3 | 68.4 ms | 607.7 ms |
+| snb_ic6 | 66.6 ms | 945.6 ms |
+| **Total (ms)** | **3,125.1** | **4,736.6** |
 | **Peak Memory** | | |
 
 ### LDBC ACID

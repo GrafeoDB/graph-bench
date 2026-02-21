@@ -91,21 +91,13 @@ class GrafeoAdapter(BaseAdapter):
     ) -> int:
         if not nodes:
             return 0
+        # Use create_node() API directly — UNWIND with params produces NULL
+        # properties in Grafeo 0.5.6 (known engine bug).
         count = 0
-        prop_keys = list(nodes[0].keys())
-        prop_map = ", ".join(f"{k}: props.{k}" for k in prop_keys)
-        query = f"UNWIND $nodes AS props CREATE (:{label}:Node {{{prop_map}}})"
-
-        for i in range(0, len(nodes), batch_size):
-            batch = list(nodes[i : i + batch_size])
-            try:
-                self._db.execute(query, {"nodes": batch})
-                count += len(batch)
-            except Exception:
-                # Fallback to individual create_node() API
-                for node in batch:
-                    self._db.create_node([label, "Node"], dict(node))
-                    count += 1
+        labels = [label, "Node"] if label != "Node" else ["Node"]
+        for node in nodes:
+            self._db.create_node(labels, dict(node))
+            count += 1
 
         if hasattr(self._db, "create_property_index"):
             try:
@@ -126,7 +118,7 @@ class GrafeoAdapter(BaseAdapter):
     def get_node(self, node_id: str) -> dict[str, Any] | None:
         # Grafeo >=0.5.6: RETURN n yields full node map {_id, _labels, ...props}
         result = self._db.execute(
-            "MATCH (n {id: $id}) RETURN n", {"id": node_id},
+            "MATCH (n:Node {id: $id}) RETURN n", {"id": node_id},
         )
         for row in result:
             return self._strip_internal(row["n"])
@@ -135,7 +127,7 @@ class GrafeoAdapter(BaseAdapter):
     def update_node(self, node_id: str, properties: dict[str, Any]) -> bool:
         # Build SET clause for properties
         set_clauses = ", ".join(f"n.{k} = ${k}" for k in properties.keys())
-        query = f"MATCH (n {{id: $id}}) SET {set_clauses} RETURN n"
+        query = f"MATCH (n:Node {{id: $id}}) SET {set_clauses} RETURN n"
         params = {"id": node_id, **properties}
         result = self._db.execute(query, params)
         # Check if any rows were returned (node was found and updated)
@@ -160,50 +152,31 @@ class GrafeoAdapter(BaseAdapter):
         if not edges:
             return 0
 
-        # Group by edge type for UNWIND (Cypher/GQL requires static rel types)
-        by_type: dict[str, list[dict[str, Any]]] = {}
-        for src, tgt, edge_type, props in edges:
-            if edge_type not in by_type:
-                by_type[edge_type] = []
-            by_type[edge_type].append({"src": src, "tgt": tgt, **props})
+        # Build app ID → internal node ID mapping once
+        result = self._db.execute(
+            "MATCH (n:Node) RETURN n.id AS id, id(n) AS nid",
+        )
+        nid_cache = {row["id"]: row["nid"] for row in result}
 
+        # Use create_edge() API directly — UNWIND MATCH with params
+        # can't resolve properties in Grafeo 0.5.6 (known engine bug).
         count = 0
-        for edge_type, edge_list in by_type.items():
-            # Build property map from first edge (excluding src/tgt)
-            prop_keys = [k for k in edge_list[0] if k not in ("src", "tgt")]
-            prop_map = ", ".join(f"{k}: e.{k}" for k in prop_keys)
-            prop_str = f" {{{prop_map}}}" if prop_map else ""
-            query = (
-                f"UNWIND $edges AS e "
-                f"MATCH (a {{id: e.src}}), (b {{id: e.tgt}}) "
-                f"CREATE (a)-[:{edge_type}{prop_str}]->(b)"
-            )
-            for i in range(0, len(edge_list), batch_size):
-                batch = edge_list[i : i + batch_size]
+        for src, tgt, edge_type, props in edges:
+            src_nid = nid_cache.get(src)
+            tgt_nid = nid_cache.get(tgt)
+            if src_nid is not None and tgt_nid is not None:
                 try:
-                    self._db.execute(query, {"edges": batch})
-                    count += len(batch)
+                    self._db.create_edge(src_nid, tgt_nid, edge_type, props)
+                    count += 1
                 except Exception:
-                    # Fallback to individual create_edge() API
-                    result = self._db.execute("MATCH (n) RETURN n.id AS id, id(n) AS nid")
-                    nid_cache = {row["id"]: row["nid"] for row in result}
-                    for e in batch:
-                        src_nid = nid_cache.get(e["src"])
-                        tgt_nid = nid_cache.get(e["tgt"])
-                        if src_nid is not None and tgt_nid is not None:
-                            props = {k: e[k] for k in prop_keys}
-                            try:
-                                self._db.create_edge(src_nid, tgt_nid, edge_type, props)
-                                count += 1
-                            except Exception:
-                                pass
+                    pass
         return count
 
     def get_neighbors(self, node_id: str, *, edge_type: str | None = None) -> list[str]:
         if edge_type:
-            query = f"MATCH (n {{id: $id}})-[:{edge_type}]->(m) RETURN m.id AS id"
+            query = f"MATCH (n:Node {{id: $id}})-[:{edge_type}]->(m) RETURN m.id AS id"
         else:
-            query = "MATCH (n {id: $id})-[]->(m) RETURN m.id AS id"
+            query = "MATCH (n:Node {id: $id})-[]->(m) RETURN m.id AS id"
 
         result = self._db.execute(query, {"id": node_id})
         return [row["id"] for row in result if row["id"]]
@@ -215,13 +188,19 @@ class GrafeoAdapter(BaseAdapter):
         max_depth: int = 3,
         edge_type: str | None = None,
     ) -> list[str]:
+        # Native BFS doesn't support edge_type filtering — use fallback
+        if edge_type:
+            return super().traverse_bfs(start, max_depth=max_depth, edge_type=edge_type)
         try:
             if hasattr(self._db, "algorithms") and hasattr(self._db.algorithms, "bfs"):
-                start_result = self._db.execute("MATCH (n {id: $id}) RETURN id(n) as nid", {"id": start})
+                start_result = self._db.execute("MATCH (n:Node {id: $id}) RETURN id(n) as nid", {"id": start})
                 for row in start_result:
                     start_nid = row["nid"]
                     result = self._db.algorithms.bfs(start_nid, max_depth=max_depth)
-                    return [str(n) for n in result]
+                    # Map internal IDs back to app IDs
+                    mapping = self._db.execute("MATCH (n:Node) RETURN id(n) AS nid, n.id AS app_id")
+                    nid_to_app = {r["nid"]: r["app_id"] for r in mapping}
+                    return [nid_to_app.get(n, str(n)) for n in result]
         except Exception:
             pass
 
@@ -234,13 +213,22 @@ class GrafeoAdapter(BaseAdapter):
         max_depth: int = 3,
         edge_type: str | None = None,
     ) -> list[str]:
+        # Native DFS doesn't support edge_type filtering — use fallback
+        if edge_type:
+            return super().traverse_dfs(start, max_depth=max_depth, edge_type=edge_type)
         try:
             if hasattr(self._db, "algorithms") and hasattr(self._db.algorithms, "dfs"):
-                start_result = self._db.execute("MATCH (n {id: $id}) RETURN id(n) as nid", {"id": start})
+                start_result = self._db.execute(
+                    "MATCH (n:Node {id: $id}) RETURN id(n) as nid", {"id": start},
+                )
                 for row in start_result:
                     start_nid = row["nid"]
                     result = self._db.algorithms.dfs(start_nid, max_depth=max_depth)
-                    return [str(n) for n in result]
+                    mapping = self._db.execute(
+                        "MATCH (n:Node) RETURN id(n) AS nid, n.id AS app_id",
+                    )
+                    nid_to_app = {r["nid"]: r["app_id"] for r in mapping}
+                    return [nid_to_app.get(n, str(n)) for n in result]
         except Exception:
             pass
 
@@ -256,8 +244,8 @@ class GrafeoAdapter(BaseAdapter):
     ) -> list[str] | None:
         try:
             if hasattr(self._db, "algorithms"):
-                src_result = self._db.execute("MATCH (n {id: $id}) RETURN id(n) as nid", {"id": source})
-                tgt_result = self._db.execute("MATCH (n {id: $id}) RETURN id(n) as nid", {"id": target})
+                src_result = self._db.execute("MATCH (n:Node {id: $id}) RETURN id(n) as nid", {"id": source})
+                tgt_result = self._db.execute("MATCH (n:Node {id: $id}) RETURN id(n) as nid", {"id": target})
 
                 src_nid = None
                 tgt_nid = None
@@ -357,7 +345,7 @@ class GrafeoAdapter(BaseAdapter):
     def bfs_levels(self, source: str) -> dict[str, int]:
         """LDBC BFS using native Grafeo bfs_layers."""
         if hasattr(self._db, "algorithms") and hasattr(self._db.algorithms, "bfs_layers"):
-            src_result = self._db.execute("MATCH (n {id: $id}) RETURN id(n) as nid", {"id": source})
+            src_result = self._db.execute("MATCH (n:Node {id: $id}) RETURN id(n) as nid", {"id": source})
             for row in src_result:
                 src_nid = row["nid"]
                 # bfs_layers returns list of lists: [[level0_nodes], [level1_nodes], ...]
@@ -396,7 +384,7 @@ class GrafeoAdapter(BaseAdapter):
 
         # Resolve app ID → internal node ID
         src_result = self._db.execute(
-            "MATCH (n {id: $id}) RETURN id(n) AS nid",
+            "MATCH (n:Node {id: $id}) RETURN id(n) AS nid",
             {"id": source},
         )
         src_nid = None
@@ -407,7 +395,7 @@ class GrafeoAdapter(BaseAdapter):
 
         # Build internal ID → app ID mapping
         mapping = self._db.execute(
-            "MATCH (n) RETURN id(n) AS nid, n.id AS app_id"
+            "MATCH (n:Node) RETURN id(n) AS nid, n.id AS app_id"
         )
         nid_to_app = {
             row["nid"]: str(row["app_id"]) for row in mapping
