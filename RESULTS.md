@@ -70,8 +70,8 @@ f31# GrafeoDB Benchmark Results
 </tr>
 <tr>
   <td>LDBC SNB Interactive</td>
-  <td>37,719</td><td>5,183</td><td>TIMEOUT</td><td>7,283</td><td>6,110</td><td>4,998</td><td>5,758</td><td>FAILED</td>
-  <td>3,125</td><td>4,737</td>
+  <td>37,719</td><td>5,183</td><td>22,293</td><td>7,283</td><td>6,110</td><td>4,998</td><td>5,758</td><td>FAILED</td>
+  <td>3,119</td><td>4,737</td>
 </tr>
 <tr>
   <td>LDBC ACID</td>
@@ -203,18 +203,18 @@ Native implementations only.
 
 | Benchmark | Grafeo | LadybugDB |
 |-----------|--------|-----------|
-| snb_is1 | 32.9 ms | 182.0 ms |
-| snb_is2 | 25.3 ms | 163.1 ms |
-| snb_is3 | 315.5 ms | 1,777.4 ms |
-| snb_is4 | 8.3 ms | 49.3 ms |
-| snb_is5 | 8.6 ms | 64.3 ms |
-| snb_is6 | 22.2 ms | 171.8 ms |
-| snb_is7 | 20.6 ms | 119.8 ms |
-| snb_ic1 | 2,475.9 ms | TIMEOUT |
-| snb_ic2 | 80.8 ms | 655.6 ms |
+| snb_is1 | 25.7 ms | 182.0 ms |
+| snb_is2 | 23.7 ms | 163.1 ms |
+| snb_is3 | 344.6 ms | 1,777.4 ms |
+| snb_is4 | 8.2 ms | 49.3 ms |
+| snb_is5 | 8.4 ms | 64.3 ms |
+| snb_is6 | 21.2 ms | 171.8 ms |
+| snb_is7 | 16.4 ms | 119.8 ms |
+| snb_ic1 | 2,458.2 ms | TIMEOUT |
+| snb_ic2 | 81.9 ms | 655.6 ms |
 | snb_ic3 | 68.4 ms | 607.7 ms |
-| snb_ic6 | 66.6 ms | 945.6 ms |
-| **Total (ms)** | **3,125.1** | **4,736.6** |
+| snb_ic6 | 62.4 ms | 945.6 ms |
+| **Total (ms)** | **3,119.1** | **4,736.6** |
 | **Peak Memory** | | |
 
 ### LDBC ACID
@@ -392,18 +392,18 @@ Native implementations only.
 
 | Benchmark | Grafeo Server | Neo4j | Memgraph | FalkorDB | ArangoDB | TuGraph | NebulaGraph | TuringDB |
 |-----------|---------------|-------|----------|----------|----------|---------|-------------|----------|
-| snb_is1 | TIMEOUT | 273.1 ms | 329.3 ms | 231.3 ms | 4,487.7 ms | 248.3 ms | 1,062.1 ms | FAILED |
-| snb_is2 | TIMEOUT | 226.5 ms | 246.4 ms | 183.8 ms | 1,099.0 ms | 192.2 ms | 108.9 ms | FAILED |
-| snb_is3 | TIMEOUT | 3,234.3 ms | 3,836.7 ms | 2,706.5 ms | 6,030.6 ms | 2,913.6 ms | TIMEOUT | FAILED |
-| snb_is4 | TIMEOUT | 92.3 ms | 108.5 ms | 77.0 ms | 97.1 ms | 81.6 ms | 154.0 ms | FAILED |
-| snb_is5 | TIMEOUT | 89.4 ms | 139.2 ms | 81.0 ms | 2,207.7 ms | 84.3 ms | 666.3 ms | FAILED |
-| snb_is6 | TIMEOUT | 221.9 ms | 263.8 ms | 199.3 ms | TIMEOUT | 202.2 ms | 199.0 ms | FAILED |
-| snb_is7 | TIMEOUT | 153.9 ms | 194.9 ms | 131.3 ms | TIMEOUT | 139.3 ms | 124.3 ms | FAILED |
-| snb_ic1 | TIMEOUT | TIMEOUT | TIMEOUT | TIMEOUT | TIMEOUT | TIMEOUT | TIMEOUT | FAILED |
-| snb_ic2 | TIMEOUT | 739.6 ms | 869.8 ms | 574.3 ms | 10,086.2 ms | 646.6 ms | 1,047.8 ms | FAILED |
-| snb_ic3 | TIMEOUT | 593.6 ms | 694.8 ms | 538.7 ms | TIMEOUT | 636.5 ms | 910.4 ms | FAILED |
-| snb_ic6 | TIMEOUT | 485.3 ms | 599.0 ms | 459.3 ms | 13,710.9 ms | 613.7 ms | 724.7 ms | FAILED |
-| **Total (ms)** | **TIMEOUT** | **6,109.9** | **7,282.4** | **5,182.5** | **37,719.2** | **5,758.3** | **4,997.5** | **FAILED** |
+| snb_is1 | 326.7 ms | 273.1 ms | 329.3 ms | 231.3 ms | 4,487.7 ms | 248.3 ms | 1,062.1 ms | FAILED |
+| snb_is2 | 254.6 ms | 226.5 ms | 246.4 ms | 183.8 ms | 1,099.0 ms | 192.2 ms | 108.9 ms | FAILED |
+| snb_is3 | 3,798.4 ms | 3,234.3 ms | 3,836.7 ms | 2,706.5 ms | 6,030.6 ms | 2,913.6 ms | TIMEOUT | FAILED |
+| snb_is4 | 107.4 ms | 92.3 ms | 108.5 ms | 77.0 ms | 97.1 ms | 81.6 ms | 154.0 ms | FAILED |
+| snb_is5 | 105.5 ms | 89.4 ms | 139.2 ms | 81.0 ms | 2,207.7 ms | 84.3 ms | 666.3 ms | FAILED |
+| snb_is6 | 268.9 ms | 221.9 ms | 263.8 ms | 199.3 ms | TIMEOUT | 202.2 ms | 199.0 ms | FAILED |
+| snb_is7 | 177.3 ms | 153.9 ms | 194.9 ms | 131.3 ms | TIMEOUT | 139.3 ms | 124.3 ms | FAILED |
+| snb_ic1 | 15,105.4 ms | TIMEOUT | TIMEOUT | TIMEOUT | TIMEOUT | TIMEOUT | TIMEOUT | FAILED |
+| snb_ic2 | 850.3 ms | 739.6 ms | 869.8 ms | 574.3 ms | 10,086.2 ms | 646.6 ms | 1,047.8 ms | FAILED |
+| snb_ic3 | 694.3 ms | 593.6 ms | 694.8 ms | 538.7 ms | TIMEOUT | 636.5 ms | 910.4 ms | FAILED |
+| snb_ic6 | 604.2 ms | 485.3 ms | 599.0 ms | 459.3 ms | 13,710.9 ms | 613.7 ms | 724.7 ms | FAILED |
+| **Total (ms)** | **22,293.0** | **6,109.9** | **7,282.4** | **5,182.5** | **37,719.2** | **5,758.3** | **4,997.5** | **FAILED** |
 | **Peak Memory** | | | | | | | | |
 
 ### LDBC ACID
