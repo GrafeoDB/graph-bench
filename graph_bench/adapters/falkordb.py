@@ -87,26 +87,26 @@ class FalkorDBAdapter(BaseAdapter):
         for i in range(0, len(nodes), batch_size):
             batch = list(nodes[i : i + batch_size])
             try:
-                # Use UNWIND for batch insert
-                query = f"UNWIND $nodes AS node CREATE (n:{label}) SET n = node"
+                # Use UNWIND for batch insert with dual :Node label
+                query = f"UNWIND $nodes AS node CREATE (n:{label}:Node) SET n = node"
                 self._graph.query(query, {"nodes": batch})
                 count += len(batch)
             except Exception:
                 # Fall back to individual inserts if UNWIND fails
                 for node in batch:
                     props = ", ".join(f"{k}: ${k}" for k in node.keys())
-                    query = f"CREATE (n:{label} {{{props}}})"
+                    query = f"CREATE (n:{label}:Node {{{props}}})"
                     self._graph.query(query, node)
                     count += 1
-        # Create index on id for this label to speed up MATCH in insert_edges
+        # Create index on :Node(id) for fast lookups (matches Neo4j pattern)
         try:
-            self._graph.query(f"CREATE INDEX FOR (n:{label}) ON (n.id)")
+            self._graph.query("CREATE INDEX FOR (n:Node) ON (n.id)")
         except Exception:
             pass  # Index may already exist
         return count
 
     def get_node(self, node_id: str) -> dict[str, Any] | None:
-        query = "MATCH (n {id: $id}) RETURN n"
+        query = "MATCH (n:Node {id: $id}) RETURN n"
         result = self._graph.query(query, {"id": node_id})
         if result.result_set:
             node = result.result_set[0][0]
@@ -116,7 +116,7 @@ class FalkorDBAdapter(BaseAdapter):
     def update_node(self, node_id: str, properties: dict[str, Any]) -> bool:
         # Build SET clause dynamically
         set_clauses = ", ".join(f"n.{k} = ${k}" for k in properties.keys())
-        query = f"MATCH (n {{id: $id}}) SET {set_clauses} RETURN n"
+        query = f"MATCH (n:Node {{id: $id}}) SET {set_clauses} RETURN n"
         params = {"id": node_id, **properties}
         result = self._graph.query(query, params)
         return len(result.result_set) > 0
@@ -146,7 +146,7 @@ class FalkorDBAdapter(BaseAdapter):
                 try:
                     query = f"""
                     UNWIND $edges AS e
-                    MATCH (a {{id: e.src}}), (b {{id: e.tgt}})
+                    MATCH (a:Node {{id: e.src}}), (b:Node {{id: e.tgt}})
                     CREATE (a)-[r:{edge_type}]->(b)
                     SET r = e.props
                     """
@@ -159,7 +159,7 @@ class FalkorDBAdapter(BaseAdapter):
                         props_str = ", ".join(f"{k}: ${k}" for k in props.keys())
                         props_clause = f" {{{props_str}}}" if props_str else ""
                         query = f"""
-                        MATCH (a {{id: $src}}), (b {{id: $tgt}})
+                        MATCH (a:Node {{id: $src}}), (b:Node {{id: $tgt}})
                         CREATE (a)-[r:{edge_type}{props_clause}]->(b)
                         """
                         params = {"src": edge["src"], "tgt": edge["tgt"], **props}
@@ -169,9 +169,9 @@ class FalkorDBAdapter(BaseAdapter):
 
     def get_neighbors(self, node_id: str, *, edge_type: str | None = None) -> list[str]:
         if edge_type:
-            query = f"MATCH (n {{id: $id}})-[:{edge_type}]->(m) RETURN m.id AS id"
+            query = f"MATCH (n:Node {{id: $id}})-[:{edge_type}]->(m) RETURN m.id AS id"
         else:
-            query = "MATCH (n {id: $id})-->(m) RETURN m.id AS id"
+            query = "MATCH (n:Node {id: $id})-->(m) RETURN m.id AS id"
 
         result = self._graph.query(query, {"id": node_id})
         return [row[0] for row in result.result_set if row[0]]
@@ -190,7 +190,7 @@ class FalkorDBAdapter(BaseAdapter):
             rel = "*"
 
         query = f"""
-        MATCH (start {{id: $src}}), (end {{id: $tgt}}),
+        MATCH (start:Node {{id: $src}}), (end:Node {{id: $tgt}}),
               path = shortestPath((start)-[{rel}]->(end))
         RETURN [n IN nodes(path) | n.id] AS path
         """

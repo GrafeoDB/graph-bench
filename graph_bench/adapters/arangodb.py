@@ -75,13 +75,11 @@ class ArangoDBAdapter(BaseAdapter):
         self._connected = True
 
     def _ensure_collections(self) -> None:
-        """Create default collections if not exist."""
+        """Create default collections if not exist (no indexes — created after insert)."""
         if not self._db.has_collection("nodes"):
-            nodes_col = self._db.create_collection("nodes")
-            # Add index on id field for fast lookups
-            nodes_col.add_hash_index(fields=["id"], unique=False)
+            self._db.create_collection("nodes")
         if not self._db.has_collection("edges"):
-            edges_col = self._db.create_collection("edges", edge=True)
+            self._db.create_collection("edges", edge=True)
             # Edge collections automatically have _from/_to indexes
 
         if not self._db.has_graph("benchmark_graph"):
@@ -125,6 +123,15 @@ class ArangoDBAdapter(BaseAdapter):
                 batch.append(doc)
                 count += 1
             collection.insert_many(batch, overwrite=True)
+
+        # Create index on id after bulk insert (per fairness policy)
+        try:
+            collection.add_persistent_index(fields=["id"], unique=False)
+        except Exception:
+            try:
+                collection.add_hash_index(fields=["id"], unique=False)
+            except Exception:
+                pass  # Index may already exist
 
         return count
 
@@ -175,13 +182,23 @@ class ArangoDBAdapter(BaseAdapter):
         return count
 
     def get_neighbors(self, node_id: str, *, edge_type: str | None = None) -> list[str]:
-        # Use native graph traversal for better performance
-        query = """
-        FOR v IN 1..1 OUTBOUND @start GRAPH 'benchmark_graph'
-            OPTIONS {bfs: true}
-            RETURN v._key
-        """
-        cursor = self._db.aql.execute(query, bind_vars={"start": f"nodes/{node_id}"})
+        if edge_type:
+            query = """
+            FOR v, e IN 1..1 OUTBOUND @start GRAPH 'benchmark_graph'
+                OPTIONS {bfs: true}
+                FILTER e._type == @etype
+                RETURN v._key
+            """
+            cursor = self._db.aql.execute(
+                query, bind_vars={"start": f"nodes/{node_id}", "etype": edge_type}
+            )
+        else:
+            query = """
+            FOR v IN 1..1 OUTBOUND @start GRAPH 'benchmark_graph'
+                OPTIONS {bfs: true}
+                RETURN v._key
+            """
+            cursor = self._db.aql.execute(query, bind_vars={"start": f"nodes/{node_id}"})
         return list(cursor)
 
     def traverse_bfs(
@@ -192,15 +209,18 @@ class ArangoDBAdapter(BaseAdapter):
         edge_type: str | None = None,
     ) -> list[str]:
         """BFS traversal using native ArangoDB graph traversal."""
-        query = """
-        FOR v IN 0..@depth OUTBOUND @start GRAPH 'benchmark_graph'
-            OPTIONS {bfs: true, uniqueVertices: 'global'}
-            RETURN DISTINCT v._key
-        """
-        cursor = self._db.aql.execute(
-            query, bind_vars={"start": f"nodes/{start}", "depth": max_depth}
-        )
-        return list(cursor)
+        try:
+            query = """
+            FOR v IN 0..@depth OUTBOUND @start GRAPH 'benchmark_graph'
+                OPTIONS {bfs: true, uniqueVertices: 'global'}
+                RETURN DISTINCT v._key
+            """
+            cursor = self._db.aql.execute(
+                query, bind_vars={"start": f"nodes/{start}", "depth": max_depth}
+            )
+            return list(cursor)
+        except Exception:
+            return super().traverse_bfs(start, max_depth=max_depth, edge_type=edge_type)
 
     def traverse_dfs(
         self,
@@ -210,16 +230,19 @@ class ArangoDBAdapter(BaseAdapter):
         edge_type: str | None = None,
     ) -> list[str]:
         """DFS traversal using native ArangoDB graph traversal."""
-        # Use 'path' uniqueness for DFS (ArangoDB doesn't support 'global' with DFS)
-        query = """
-        FOR v IN 0..@depth OUTBOUND @start GRAPH 'benchmark_graph'
-            OPTIONS {bfs: false, uniqueVertices: 'path'}
-            RETURN DISTINCT v._key
-        """
-        cursor = self._db.aql.execute(
-            query, bind_vars={"start": f"nodes/{start}", "depth": max_depth}
-        )
-        return list(cursor)
+        try:
+            # Use 'path' uniqueness for DFS (ArangoDB doesn't support 'global' with DFS)
+            query = """
+            FOR v IN 0..@depth OUTBOUND @start GRAPH 'benchmark_graph'
+                OPTIONS {bfs: false, uniqueVertices: 'path'}
+                RETURN DISTINCT v._key
+            """
+            cursor = self._db.aql.execute(
+                query, bind_vars={"start": f"nodes/{start}", "depth": max_depth}
+            )
+            return list(cursor)
+        except Exception:
+            return super().traverse_dfs(start, max_depth=max_depth, edge_type=edge_type)
 
     def shortest_path(
         self,

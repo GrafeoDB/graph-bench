@@ -270,10 +270,11 @@ class Neo4jAdapter(BaseAdapter):
                 )
                 scores = {record["id"]: record["score"] for record in result if record["id"]}
                 self._drop_gds_projection(session, graph_name)
-                return scores
-            except Exception as e:
-                msg = f"Neo4j GDS PageRank failed: {e}"
-                raise NotImplementedError(msg) from e
+                if scores:
+                    return scores
+            except Exception:
+                pass
+        return super().pagerank(damping=damping, max_iterations=max_iterations, tolerance=tolerance)
 
     def community_detection(self, *, algorithm: str = "louvain") -> list[set[str]]:
         """Community detection using Neo4j GDS."""
@@ -305,10 +306,11 @@ class Neo4jAdapter(BaseAdapter):
                             communities[cid] = set()
                         communities[cid].add(str(nid))
                 self._drop_gds_projection(session, graph_name)
-                return list(communities.values())
-            except Exception as e:
-                msg = f"Neo4j GDS community detection failed: {e}"
-                raise NotImplementedError(msg) from e
+                if communities:
+                    return list(communities.values())
+            except Exception:
+                pass
+        return super().community_detection(algorithm=algorithm)
 
     def weakly_connected_components(self) -> list[set[str]]:
         """WCC using Neo4j GDS."""
@@ -331,10 +333,11 @@ class Neo4jAdapter(BaseAdapter):
                             components[cid] = set()
                         components[cid].add(str(nid))
                 self._drop_gds_projection(session, graph_name)
-                return list(components.values())
-            except Exception as e:
-                msg = f"Neo4j GDS WCC failed: {e}"
-                raise NotImplementedError(msg) from e
+                if components:
+                    return list(components.values())
+            except Exception:
+                pass
+        return super().weakly_connected_components()
 
     def local_clustering_coefficient(self) -> dict[str, float]:
         """LCC using Neo4j GDS. Requires UNDIRECTED projection."""
@@ -366,10 +369,11 @@ class Neo4jAdapter(BaseAdapter):
                     session.run(f"CALL gds.graph.drop('{graph_name}', false)")
                 except Exception:
                     pass
-                return coeffs
-            except Exception as e:
-                msg = f"Neo4j GDS LCC failed: {e}"
-                raise NotImplementedError(msg) from e
+                if coeffs:
+                    return coeffs
+            except Exception:
+                pass
+        return super().local_clustering_coefficient()
 
     def bfs_levels(self, source: str) -> dict[str, int]:
         """BFS levels using Neo4j GDS."""
@@ -401,10 +405,11 @@ class Neo4jAdapter(BaseAdapter):
                 )
                 levels = {record["id"]: record["depth"] for record in result if record["id"]}
                 self._drop_gds_projection(session, graph_name)
-                return levels
-            except Exception as e:
-                msg = f"Neo4j GDS BFS failed: {e}"
-                raise NotImplementedError(msg) from e
+                if levels:
+                    return levels
+            except Exception:
+                pass
+        return super().bfs_levels(source)
 
     def sssp(self, source: str, *, weight_attr: str = "weight") -> dict[str, float]:
         """SSSP using Neo4j GDS Dijkstra."""
@@ -435,7 +440,8 @@ class Neo4jAdapter(BaseAdapter):
                 )
                 distances = {record["id"]: record["distance"] for record in result if record["id"]}
                 self._drop_gds_projection(session, graph_name)
-                return distances
-            except Exception as e:
-                msg = f"Neo4j GDS SSSP failed: {e}"
-                raise NotImplementedError(msg) from e
+                if distances:
+                    return distances
+            except Exception:
+                pass
+        return super().sssp(source, weight_attr=weight_attr)

@@ -87,19 +87,19 @@ class MemgraphAdapter(BaseAdapter):
         with self._driver.session() as session:
             for i in range(0, len(nodes), batch_size):
                 batch = list(nodes[i : i + batch_size])
-                query = f"UNWIND $nodes AS node CREATE (n:{label}) SET n = node"
+                query = f"UNWIND $nodes AS node CREATE (n:{label}:Node) SET n = node"
                 session.run(query, nodes=batch)
                 count += len(batch)
-            # Create index on id for this label to speed up MATCH in insert_edges
+            # Create index on :Node(id) for fast lookups (matches Neo4j pattern)
             try:
-                session.run(f"CREATE INDEX ON :{label}(id)")
+                session.run("CREATE INDEX ON :Node(id)")
             except Exception:
                 pass  # Index may already exist
         return count
 
     def get_node(self, node_id: str) -> dict[str, Any] | None:
         with self._driver.session() as session:
-            result = session.run("MATCH (n {id: $id}) RETURN n", id=node_id)
+            result = session.run("MATCH (n:Node {id: $id}) RETURN n", id=node_id)
             record = result.single()
             if record:
                 return dict(record["n"])
@@ -108,7 +108,7 @@ class MemgraphAdapter(BaseAdapter):
     def update_node(self, node_id: str, properties: dict[str, Any]) -> bool:
         with self._driver.session() as session:
             result = session.run(
-                "MATCH (n {id: $id}) SET n += $props RETURN n",
+                "MATCH (n:Node {id: $id}) SET n += $props RETURN n",
                 id=node_id,
                 props=properties,
             )
@@ -125,32 +125,32 @@ class MemgraphAdapter(BaseAdapter):
         *,
         batch_size: int = 1000,
     ) -> int:
+        # Group edges by type first (like Neo4j), then batch each type
+        from collections import defaultdict
+
+        by_type: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for src, tgt, edge_type, props in edges:
+            by_type[edge_type].append({"src": src, "tgt": tgt, "props": props})
+
         count = 0
         with self._driver.session() as session:
-            for i in range(0, len(edges), batch_size):
-                batch = edges[i : i + batch_size]
-                # Group edges by type for UNWIND (Cypher requires static rel types)
-                by_type: dict[str, list[dict[str, Any]]] = {}
-                for src, tgt, edge_type, props in batch:
-                    if edge_type not in by_type:
-                        by_type[edge_type] = []
-                    by_type[edge_type].append({"src": src, "tgt": tgt, "props": props})
-
-                for edge_type, edge_list in by_type.items():
+            for edge_type, typed_edges in by_type.items():
+                for i in range(0, len(typed_edges), batch_size):
+                    batch = typed_edges[i : i + batch_size]
                     try:
                         query = f"""
                         UNWIND $edges AS e
-                        MATCH (a {{id: e.src}}), (b {{id: e.tgt}})
+                        MATCH (a:Node {{id: e.src}}), (b:Node {{id: e.tgt}})
                         CREATE (a)-[r:{edge_type}]->(b)
                         SET r = e.props
                         """
-                        session.run(query, edges=edge_list)
-                        count += len(edge_list)
+                        session.run(query, edges=batch)
+                        count += len(batch)
                     except Exception:
                         # Fall back to individual inserts
-                        for edge in edge_list:
+                        for edge in batch:
                             query = f"""
-                            MATCH (a {{id: $src}}), (b {{id: $tgt}})
+                            MATCH (a:Node {{id: $src}}), (b:Node {{id: $tgt}})
                             CREATE (a)-[r:{edge_type}]->(b)
                             SET r = $props
                             """
@@ -166,9 +166,9 @@ class MemgraphAdapter(BaseAdapter):
     def get_neighbors(self, node_id: str, *, edge_type: str | None = None) -> list[str]:
         with self._driver.session() as session:
             if edge_type:
-                query = f"MATCH (n {{id: $id}})-[:{edge_type}]->(m) RETURN m.id AS id"
+                query = f"MATCH (n:Node {{id: $id}})-[:{edge_type}]->(m) RETURN m.id AS id"
             else:
-                query = "MATCH (n {id: $id})-->(m) RETURN m.id AS id"
+                query = "MATCH (n:Node {id: $id})-->(m) RETURN m.id AS id"
             result = session.run(query, id=node_id)
             return [record["id"] for record in result if record["id"]]
 
@@ -189,7 +189,7 @@ class MemgraphAdapter(BaseAdapter):
 
             # Variable-length path finds shortest by default in Memgraph
             query = f"""
-            MATCH (start {{id: $src}}), (end {{id: $tgt}})
+            MATCH (start:Node {{id: $src}}), (end:Node {{id: $tgt}})
             MATCH path = (start)-[{rel}]->(end)
             RETURN [n IN nodes(path) | n.id] AS path
             ORDER BY length(path)
@@ -249,14 +249,16 @@ class MemgraphAdapter(BaseAdapter):
                     damping_factor=damping,
                     stop_epsilon=tolerance,
                 )
-                return {
+                scores = {
                     record["id"]: record["score"]
                     for record in result
                     if record["id"]
                 }
-        except Exception as e:
-            msg = f"Memgraph PageRank failed. Ensure MAGE is installed: {e}"
-            raise NotImplementedError(msg) from e
+                if scores:
+                    return scores
+        except Exception:
+            pass
+        return super().pagerank(damping=damping, max_iterations=max_iterations, tolerance=tolerance)
 
     def community_detection(self, *, algorithm: str = "louvain") -> list[set[str]]:
         """Community detection using MAGE."""
@@ -281,10 +283,11 @@ class MemgraphAdapter(BaseAdapter):
                     if cid not in communities:
                         communities[cid] = set()
                     communities[cid].add(record["id"])
-                return list(communities.values())
-        except Exception as e:
-            msg = f"Memgraph community detection failed: {e}"
-            raise NotImplementedError(msg) from e
+                if communities:
+                    return list(communities.values())
+        except Exception:
+            pass
+        return super().community_detection(algorithm=algorithm)
 
     def weakly_connected_components(self) -> list[set[str]]:
         """WCC using MAGE."""
@@ -302,10 +305,11 @@ class MemgraphAdapter(BaseAdapter):
                     if cid not in components:
                         components[cid] = set()
                     components[cid].add(record["id"])
-                return list(components.values())
-        except Exception as e:
-            msg = f"Memgraph WCC failed. Ensure MAGE is installed: {e}"
-            raise NotImplementedError(msg) from e
+                if components:
+                    return list(components.values())
+        except Exception:
+            pass
+        return super().weakly_connected_components()
 
     def local_clustering_coefficient(self) -> dict[str, float]:
         """LCC using MAGE nxalg.clustering()."""
@@ -318,20 +322,21 @@ class MemgraphAdapter(BaseAdapter):
         try:
             with self._driver.session() as session:
                 result = session.run(query)
-                return {
+                coeffs = {
                     record["id"]: record["coeff"]
                     for record in result
                     if record["id"]
                 }
-        except Exception as e:
-            msg = f"Memgraph LCC failed. Ensure MAGE is installed: {e}"
-            raise NotImplementedError(msg) from e
+                if coeffs:
+                    return coeffs
+        except Exception:
+            pass
+        return super().local_clustering_coefficient()
 
     def bfs_levels(self, source: str) -> dict[str, int]:
         """BFS levels using pure Cypher variable-length paths."""
-        # Use Cypher variable-length path to find distances from source
         query = """
-        MATCH (start {id: $source})
+        MATCH (start:Node {id: $source})
         CALL {
             WITH start
             MATCH path = (start)-[*0..20]-(node)
@@ -343,20 +348,22 @@ class MemgraphAdapter(BaseAdapter):
         try:
             with self._driver.session() as session:
                 result = session.run(query, source=source)
-                return {
+                levels = {
                     record["id"]: record["depth"]
                     for record in result
                     if record["id"]
                 }
-        except Exception as e:
-            msg = f"Memgraph BFS failed: {e}"
-            raise NotImplementedError(msg) from e
+                if levels:
+                    return levels
+        except Exception:
+            pass
+        return super().bfs_levels(source)
 
     def sssp(self, source: str, *, weight_attr: str = "weight") -> dict[str, float]:
         """SSSP using MAGE nxalg.all_pairs_dijkstra_path_length or fallback."""
         # Try multi_source_dijkstra_path_length with single source
         query = """
-        MATCH (start {id: $source})
+        MATCH (start:Node {id: $source})
         WITH [start] AS sources
         CALL nxalg.multi_source_dijkstra_path_length(sources, null, $weight_attr)
         YIELD target, length

@@ -70,7 +70,7 @@ f31# GrafeoDB Benchmark Results
 </tr>
 <tr>
   <td>LDBC SNB Interactive</td>
-  <td>37,719</td><td>5,183</td><td>22,293</td><td>7,283</td><td>6,110</td><td>4,998</td><td>5,758</td><td>FAILED</td>
+  <td>37,719</td><td>5,183</td><td>22,293</td><td>7,283</td><td>6,110</td><td>4,998</td><td>5,758</td><td>140,836</td>
   <td>3,119</td><td>4,737</td>
 </tr>
 <tr>
@@ -392,18 +392,18 @@ Native implementations only.
 
 | Benchmark | Grafeo Server | Neo4j | Memgraph | FalkorDB | ArangoDB | TuGraph | NebulaGraph | TuringDB |
 |-----------|---------------|-------|----------|----------|----------|---------|-------------|----------|
-| snb_is1 | 326.7 ms | 273.1 ms | 329.3 ms | 231.3 ms | 4,487.7 ms | 248.3 ms | 1,062.1 ms | FAILED |
-| snb_is2 | 254.6 ms | 226.5 ms | 246.4 ms | 183.8 ms | 1,099.0 ms | 192.2 ms | 108.9 ms | FAILED |
-| snb_is3 | 3,798.4 ms | 3,234.3 ms | 3,836.7 ms | 2,706.5 ms | 6,030.6 ms | 2,913.6 ms | TIMEOUT | FAILED |
-| snb_is4 | 107.4 ms | 92.3 ms | 108.5 ms | 77.0 ms | 97.1 ms | 81.6 ms | 154.0 ms | FAILED |
-| snb_is5 | 105.5 ms | 89.4 ms | 139.2 ms | 81.0 ms | 2,207.7 ms | 84.3 ms | 666.3 ms | FAILED |
-| snb_is6 | 268.9 ms | 221.9 ms | 263.8 ms | 199.3 ms | TIMEOUT | 202.2 ms | 199.0 ms | FAILED |
-| snb_is7 | 177.3 ms | 153.9 ms | 194.9 ms | 131.3 ms | TIMEOUT | 139.3 ms | 124.3 ms | FAILED |
-| snb_ic1 | 15,105.4 ms | TIMEOUT | TIMEOUT | TIMEOUT | TIMEOUT | TIMEOUT | TIMEOUT | FAILED |
-| snb_ic2 | 850.3 ms | 739.6 ms | 869.8 ms | 574.3 ms | 10,086.2 ms | 646.6 ms | 1,047.8 ms | FAILED |
-| snb_ic3 | 694.3 ms | 593.6 ms | 694.8 ms | 538.7 ms | TIMEOUT | 636.5 ms | 910.4 ms | FAILED |
-| snb_ic6 | 604.2 ms | 485.3 ms | 599.0 ms | 459.3 ms | 13,710.9 ms | 613.7 ms | 724.7 ms | FAILED |
-| **Total (ms)** | **22,293.0** | **6,109.9** | **7,282.4** | **5,182.5** | **37,719.2** | **5,758.3** | **4,997.5** | **FAILED** |
+| snb_is1 | 326.7 ms | 273.1 ms | 329.3 ms | 231.3 ms | 4,487.7 ms | 248.3 ms | 1,062.1 ms | 13,522.1 ms |
+| snb_is2 | 254.6 ms | 226.5 ms | 246.4 ms | 183.8 ms | 1,099.0 ms | 192.2 ms | 108.9 ms | 10,538.2 ms |
+| snb_is3 | 3,798.4 ms | 3,234.3 ms | 3,836.7 ms | 2,706.5 ms | 6,030.6 ms | 2,913.6 ms | TIMEOUT | TIMEOUT |
+| snb_is4 | 107.4 ms | 92.3 ms | 108.5 ms | 77.0 ms | 97.1 ms | 81.6 ms | 154.0 ms | 4,648.3 ms |
+| snb_is5 | 105.5 ms | 89.4 ms | 139.2 ms | 81.0 ms | 2,207.7 ms | 84.3 ms | 666.3 ms | 4,488.9 ms |
+| snb_is6 | 268.9 ms | 221.9 ms | 263.8 ms | 199.3 ms | TIMEOUT | 202.2 ms | 199.0 ms | 11,373.6 ms |
+| snb_is7 | 177.3 ms | 153.9 ms | 194.9 ms | 131.3 ms | TIMEOUT | 139.3 ms | 124.3 ms | 7,157.6 ms |
+| snb_ic1 | 15,105.4 ms | TIMEOUT | TIMEOUT | TIMEOUT | TIMEOUT | TIMEOUT | TIMEOUT | TIMEOUT |
+| snb_ic2 | 850.3 ms | 739.6 ms | 869.8 ms | 574.3 ms | 10,086.2 ms | 646.6 ms | 1,047.8 ms | 34,702.7 ms |
+| snb_ic3 | 694.3 ms | 593.6 ms | 694.8 ms | 538.7 ms | TIMEOUT | 636.5 ms | 910.4 ms | 30,443.4 ms |
+| snb_ic6 | 604.2 ms | 485.3 ms | 599.0 ms | 459.3 ms | 13,710.9 ms | 613.7 ms | 724.7 ms | 23,961.0 ms |
+| **Total (ms)** | **22,293.0** | **6,109.9** | **7,282.4** | **5,182.5** | **37,719.2** | **5,758.3** | **4,997.5** | **140,835.8** |
 | **Peak Memory** | | | | | | | | |
 
 ### LDBC ACID

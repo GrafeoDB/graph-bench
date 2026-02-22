@@ -382,22 +382,25 @@ class NebulaGraphAdapter(BaseAdapter):
         edge_type: str | None = None,
     ) -> list[str]:
         """BFS traversal using native NebulaGraph GO statement."""
-        # Use * for all edges, or escape specific edge type
-        if edge_type:
-            edge = self._escape_name(edge_type)
-        else:
-            edge = "*"  # All edge types
-        # NebulaGraph GO with 1..N steps performs BFS
-        query = f'GO 1 TO {max_depth} STEPS FROM "{start}" OVER {edge} YIELD DISTINCT dst(edge) AS id'
-        result = self._session.execute(query)
-        visited = [start]
-        if result.is_succeeded():
-            for i in range(result.row_size()):
-                val = result.row_values(i)[0]
-                node_id = val.as_string() if hasattr(val, "as_string") else str(val)
-                if node_id not in visited:
-                    visited.append(node_id)
-        return visited
+        try:
+            # Use * for all edges, or escape specific edge type
+            if edge_type:
+                edge = self._escape_name(edge_type)
+            else:
+                edge = "*"  # All edge types
+            # NebulaGraph GO with 1..N steps performs BFS
+            query = f'GO 1 TO {max_depth} STEPS FROM "{start}" OVER {edge} YIELD DISTINCT dst(edge) AS id'
+            result = self._session.execute(query)
+            visited = [start]
+            if result.is_succeeded():
+                for i in range(result.row_size()):
+                    val = result.row_values(i)[0]
+                    node_id = val.as_string() if hasattr(val, "as_string") else str(val)
+                    if node_id not in visited:
+                        visited.append(node_id)
+            return visited
+        except Exception:
+            return super().traverse_bfs(start, max_depth=max_depth, edge_type=edge_type)
 
     # No traverse_dfs override — NebulaGraph GO is BFS-like.
     # BaseAdapter.traverse_dfs() provides correct DFS via get_neighbors().

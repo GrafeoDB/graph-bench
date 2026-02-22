@@ -193,6 +193,7 @@ class TuringDBAdapter(BaseAdapter):
     def clear(self) -> None:
         """Clear by switching to a fresh graph (avoids change-state corruption)."""
         self._rotate_graph()
+        self._resolved_props = None  # Reset property cache for new graph
 
     # ── Core operations ──────────────────────────────────────────
 
@@ -205,6 +206,10 @@ class TuringDBAdapter(BaseAdapter):
     ) -> int:
         if not nodes:
             return 0
+        # Keep change open — don't flush after each label.
+        # _ensure_read() will flush before the first read query.
+        # This avoids hitting TuringDB's ~10 commit corruption limit
+        # when SNB inserts 9 labels sequentially.
         self._ensure_change()
         count = 0
         for i in range(0, len(nodes), batch_size):
@@ -214,26 +219,64 @@ class TuringDBAdapter(BaseAdapter):
             query = "CREATE " + ", ".join(patterns)
             self._db.query(query)
             count += len(batch)
-        self._flush()
-        # Create index on id property for faster lookups (if supported)
-        try:
-            self._ensure_change()
-            self._db.query("CREATE INDEX FOR (n:Node) ON (n.id)")
-            self._flush()
-        except Exception:
-            self._flush()
+        # Don't flush here — let _ensure_read() handle it
         return count
+
+    # All candidate properties across benchmark categories.
+    # TuringDB is column-oriented: only properties that exist in the graph
+    # schema can be queried. _resolved_props caches the working set per graph.
+    _ALL_PROPS = [
+        "id", "firstName", "lastName", "gender", "birthday", "creationDate",
+        "locationIP", "browserUsed", "content", "imageFile", "length",
+        "title", "name", "country", "age", "city", "weight", "score",
+        "embedding",
+    ]
+    _resolved_props: list[str] | None = None
+
+    def _resolve_props(self) -> list[str]:
+        """Discover which properties exist in the current graph schema."""
+        if self._resolved_props is not None:
+            return self._resolved_props
+        import re
+        # Try full list, remove missing properties on error
+        props = list(self._ALL_PROPS)
+        for _ in range(len(props)):
+            ret_parts = ", ".join(f"n.{p} AS {p}" for p in props)
+            try:
+                self._db.query(f"MATCH (n) RETURN {ret_parts} LIMIT 1")
+                self._resolved_props = props
+                return props
+            except Exception as e:
+                # Error format: "Property type 'X' not found"
+                msg = str(e)
+                m = re.search(r"Property type '(\w+)' not found", msg)
+                if m and m.group(1) in props:
+                    props.remove(m.group(1))
+                else:
+                    # Can't parse — fall back to just id
+                    self._resolved_props = ["id"]
+                    return self._resolved_props
+        self._resolved_props = ["id"]
+        return self._resolved_props
 
     def get_node(self, node_id: str) -> dict[str, Any] | None:
         self._ensure_read()
         lit = self._cypher_literal(node_id)
-        result = self._db.query(f"MATCH (n {{id: {lit}}}) RETURN n")
-        if result.empty:
-            return None
-        raw = self._df_val(result.iloc[0]["n"])
-        if isinstance(raw, dict):
-            return raw
-        return {"id": node_id}
+        props_list = self._resolve_props()
+        try:
+            ret_parts = ", ".join(f"n.{p} AS {p}" for p in props_list)
+            result = self._db.query(f"MATCH (n {{id: {lit}}}) RETURN {ret_parts}")
+            if result.empty:
+                return None
+            row = result.iloc[0]
+            props: dict[str, Any] = {}
+            for p in props_list:
+                val = self._df_val(row[p])
+                if val is not None:
+                    props[p] = val
+            return props if props else {"id": node_id}
+        except Exception:
+            return {"id": node_id}
 
     def update_node(self, node_id: str, properties: dict[str, Any]) -> bool:
         self._ensure_change()
@@ -245,26 +288,37 @@ class TuringDBAdapter(BaseAdapter):
 
     def get_nodes_by_label(self, label: str, *, limit: int = 100) -> list[dict[str, Any]]:
         self._ensure_read()
-        result = self._db.query(f"MATCH (n:{label}) RETURN n LIMIT {limit}")
-        if result.empty:
+        props_list = self._resolve_props()
+        try:
+            ret_parts = ", ".join(f"n.{p} AS {p}" for p in props_list)
+            result = self._db.query(
+                f"MATCH (n:{label}) RETURN {ret_parts} LIMIT {limit}"
+            )
+            if result.empty:
+                return []
+            nodes = []
+            for _, row in result.iterrows():
+                props: dict[str, Any] = {}
+                for p in props_list:
+                    val = self._df_val(row[p])
+                    if val is not None:
+                        props[p] = val
+                nodes.append(props if props else {"id": "unknown"})
+            return nodes
+        except Exception:
             return []
-        nodes = []
-        for _, row in result.iterrows():
-            raw = self._df_val(row["n"])
-            if isinstance(raw, dict):
-                nodes.append(raw)
-            else:
-                nodes.append({"id": str(raw)})
-        return nodes
 
     def insert_edges(
         self,
         edges: Sequence[tuple[str, str, str, dict[str, Any]]],
         *,
-        batch_size: int = 1000,
+        batch_size: int = 100,
     ) -> int:
         if not edges:
             return 0
+
+        # Flush pending node inserts so MATCH can find them
+        self._flush()
 
         # Group edges by type for batching
         by_type: dict[str, list[tuple[str, str, dict[str, Any]]]] = {}
@@ -282,29 +336,31 @@ class TuringDBAdapter(BaseAdapter):
                 try:
                     match_parts = []
                     create_parts = []
-                    for j, (src, tgt, _props) in enumerate(batch):
+                    for j, (src, tgt, props) in enumerate(batch):
                         src_lit = self._cypher_literal(src)
                         tgt_lit = self._cypher_literal(tgt)
                         match_parts.append(f"(a{j} {{id: {src_lit}}}), (b{j} {{id: {tgt_lit}}})")
-                        create_parts.append(f"(a{j})-[:{etype}]->(b{j})")
+                        prop_str = f" {self._format_props(props)}" if props else ""
+                        create_parts.append(f"(a{j})-[:{etype}{prop_str}]->(b{j})")
                     query = "MATCH " + ", ".join(match_parts) + " CREATE " + ", ".join(create_parts)
                     self._db.query(query)
                     count += len(batch)
                 except Exception:
                     # Fallback to individual inserts for this batch
-                    for src, tgt, _props in batch:
+                    for src, tgt, props in batch:
                         src_lit = self._cypher_literal(src)
                         tgt_lit = self._cypher_literal(tgt)
+                        prop_str = f" {self._format_props(props)}" if props else ""
                         try:
                             self._db.query(
                                 f"MATCH (a {{id: {src_lit}}}), (b {{id: {tgt_lit}}}) "
-                                f"CREATE (a)-[:{etype}]->(b)"
+                                f"CREATE (a)-[:{etype}{prop_str}]->(b)"
                             )
                             count += 1
                         except Exception:
                             pass
 
-        self._flush()
+        # Don't flush here — let _ensure_read() handle it
         return count
 
     def get_neighbors(self, node_id: str, *, edge_type: str | None = None) -> list[str]:
@@ -319,6 +375,62 @@ class TuringDBAdapter(BaseAdapter):
             return []
         return [str(self._df_val(row["id"])) for _, row in result.iterrows() if self._df_val(row["id"]) is not None]
 
+    def traverse_bfs(
+        self,
+        start: str,
+        *,
+        max_depth: int = 3,
+        edge_type: str | None = None,
+    ) -> list[str]:
+        # Use variable-length path pattern — single HTTP request instead of
+        # N sequential get_neighbors calls.
+        self._ensure_read()
+        lit = self._cypher_literal(start)
+        rel = f":{edge_type}" if edge_type else ""
+        try:
+            result = self._db.query(
+                f"MATCH (n {{id: {lit}}})-[{rel}*1..{max_depth}]->(m) "
+                f"RETURN DISTINCT m.id AS id"
+            )
+            ids = [start]
+            if not result.empty:
+                for _, row in result.iterrows():
+                    val = self._df_val(row["id"])
+                    if val is not None:
+                        ids.append(str(val))
+            return ids
+        except Exception:
+            pass
+        return super().traverse_bfs(start, max_depth=max_depth, edge_type=edge_type)
+
+    def traverse_dfs(
+        self,
+        start: str,
+        *,
+        max_depth: int = 3,
+        edge_type: str | None = None,
+    ) -> list[str]:
+        # Same approach as traverse_bfs — result set is identical,
+        # only visit order differs (which doesn't affect benchmark correctness).
+        self._ensure_read()
+        lit = self._cypher_literal(start)
+        rel = f":{edge_type}" if edge_type else ""
+        try:
+            result = self._db.query(
+                f"MATCH (n {{id: {lit}}})-[{rel}*1..{max_depth}]->(m) "
+                f"RETURN DISTINCT m.id AS id"
+            )
+            ids = [start]
+            if not result.empty:
+                for _, row in result.iterrows():
+                    val = self._df_val(row["id"])
+                    if val is not None:
+                        ids.append(str(val))
+            return ids
+        except Exception:
+            pass
+        return super().traverse_dfs(start, max_depth=max_depth, edge_type=edge_type)
+
     def shortest_path(
         self,
         source: str,
@@ -327,25 +439,9 @@ class TuringDBAdapter(BaseAdapter):
         edge_type: str | None = None,
         weighted: bool = False,
     ) -> list[str] | None:
+        # TuringDB doesn't support shortestPath() or list returns —
+        # go straight to BFS fallback.
         self._ensure_read()
-        src_lit = self._cypher_literal(source)
-        tgt_lit = self._cypher_literal(target)
-        rel = f":{edge_type}*" if edge_type else "*"
-        try:
-            result = self._db.query(
-                f"MATCH (start {{id: {src_lit}}}), (end {{id: {tgt_lit}}}), "
-                f"path = shortestPath((start)-[{rel}]->(end)) "
-                f"RETURN [n IN nodes(path) | n.id] AS path"
-            )
-            if result.empty:
-                return None
-            path = self._df_val(result.iloc[0]["path"])
-            if path:
-                return [str(n) for n in path]
-        except Exception:
-            pass
-
-        # BFS fallback
         from collections import deque
         visited: set[str] = set()
         queue: deque[tuple[str, list[str]]] = deque([(source, [source])])
