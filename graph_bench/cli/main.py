@@ -71,7 +71,7 @@ if typer is not None:
 
         db_list = databases.split(",") if databases else AdapterRegistry.list()
         bench_list = benchmarks.split(",") if benchmarks else None
-        categories = [category] if category else None
+        categories = category.split(",") if category else None
 
         if verbose:
             typer.echo(f"Databases: {', '.join(db_list)}")

@@ -25,18 +25,37 @@ CONTAINER_NAMES: dict[str, str] = {
 }
 
 
-def get_process_memory() -> int:
-    """Get Python process RSS memory in bytes.
+def get_process_memory(extra_pids: list[int] | None = None) -> int:
+    """Get process RSS memory in bytes.
+
+    Measures RSS of the current Python process plus any extra PIDs
+    (for daemonized subprocesses like redislite's redis-server that
+    detach from the process tree).
+
+    Does NOT include arbitrary child processes — only explicitly listed
+    extra_pids — to avoid inflating numbers with unrelated background
+    processes.
 
     Uses psutil if available, otherwise returns 0.
 
+    Args:
+        extra_pids: Additional PIDs to include in measurement (e.g. from
+            adapter.child_pids for detached database processes).
+
     Returns:
-        Resident Set Size (RSS) in bytes, or 0 if unavailable.
+        Total Resident Set Size (RSS) in bytes, or 0 if unavailable.
     """
     try:
         import psutil
 
-        return psutil.Process(os.getpid()).memory_info().rss
+        proc = psutil.Process(os.getpid())
+        total = proc.memory_info().rss
+        for pid in extra_pids or []:
+            try:
+                total += psutil.Process(pid).memory_info().rss
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+        return total
     except ImportError:
         return 0
     except Exception:

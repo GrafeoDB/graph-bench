@@ -16,6 +16,7 @@ class TestAdapterRegistry:
         assert "grafeo" in adapters
         assert "ladybug" in adapters
         assert "tugraph" in adapters
+        assert "falkordblite" in adapters
 
     def test_get_adapter_class(self):
         adapter_cls = AdapterRegistry.get("neo4j")
@@ -89,6 +90,22 @@ class TestTuGraphAdapter:
         from graph_bench.adapters.tugraph import TuGraphAdapter
 
         adapter = TuGraphAdapter()
+        assert adapter.version == "unknown"
+
+
+class TestFalkorDBLiteAdapter:
+    def test_create_adapter(self):
+        from graph_bench.adapters.falkordblite import FalkorDBLiteAdapter
+
+        adapter = FalkorDBLiteAdapter()
+        assert adapter.name == "FalkorDB Lite"
+        assert adapter.connected is False
+        assert adapter.is_embedded is True
+
+    def test_adapter_version_disconnected(self):
+        from graph_bench.adapters.falkordblite import FalkorDBLiteAdapter
+
+        adapter = FalkorDBLiteAdapter()
         assert adapter.version == "unknown"
 
 

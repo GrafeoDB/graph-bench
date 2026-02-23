@@ -137,6 +137,7 @@ class LadybugAdapter(BaseAdapter):
         self._conn = Connection(self._db)
         self._connected = True
         self._setup_schema()
+        self._setup_algo()
 
     def _setup_schema(self) -> None:
         """Create node and edge tables with dedicated columns."""
@@ -164,6 +165,24 @@ class LadybugAdapter(BaseAdapter):
             """)
         except Exception:
             pass
+
+    def _setup_algo(self) -> None:
+        """Install and load the ALGO extension for native graph algorithms."""
+        self._has_algo = False
+        try:
+            self._conn.execute("INSTALL ALGO")
+            self._conn.execute("LOAD EXTENSION ALGO")
+            self._has_algo = True
+        except Exception:
+            pass
+
+    def _ensure_projected_graph(self) -> None:
+        """Create or recreate the projected graph for algo calls."""
+        try:
+            self._conn.execute("CALL drop_projected_graph('bench')")
+        except Exception:
+            pass
+        self._conn.execute("CALL project_graph('bench', ['Node'], ['Edge'])")
 
     def disconnect(self) -> None:
         if self._conn:
@@ -492,3 +511,76 @@ class LadybugAdapter(BaseAdapter):
         except Exception:
             pass
         return 0
+
+    # --- Native graph algorithms via ALGO extension ---
+
+    def pagerank(
+        self,
+        *,
+        damping: float = 0.85,
+        max_iterations: int = 100,
+        tolerance: float = 1e-6,
+    ) -> dict[str, float]:
+        """PageRank via LadybugDB native ALGO extension."""
+        if not self._has_algo:
+            return super().pagerank(
+                damping=damping, max_iterations=max_iterations, tolerance=tolerance
+            )
+        try:
+            self._ensure_projected_graph()
+            result = self._conn.execute(
+                "CALL page_rank('bench', dampingFactor := $d, "
+                "maxIterations := $i, tolerance := $t) "
+                "RETURN node.id, rank",
+                {"d": damping, "i": max_iterations, "t": tolerance},
+            )
+            return {
+                str(row[0]): float(row[1])
+                for row in result
+                if row[0] is not None
+            }
+        except Exception:
+            return super().pagerank(
+                damping=damping, max_iterations=max_iterations, tolerance=tolerance
+            )
+
+    def weakly_connected_components(self) -> list[set[str]]:
+        """WCC via LadybugDB native ALGO extension."""
+        if not self._has_algo:
+            return super().weakly_connected_components()
+        try:
+            self._ensure_projected_graph()
+            result = self._conn.execute(
+                "CALL weakly_connected_components('bench') "
+                "RETURN node.id, group_id"
+            )
+            components: dict[int, set[str]] = {}
+            for row in result:
+                if row[0] is not None:
+                    gid = int(row[1])
+                    if gid not in components:
+                        components[gid] = set()
+                    components[gid].add(str(row[0]))
+            return list(components.values())
+        except Exception:
+            return super().weakly_connected_components()
+
+    def community_detection(self, *, algorithm: str = "louvain") -> list[set[str]]:
+        """Community detection via LadybugDB native ALGO extension (Louvain)."""
+        if not self._has_algo:
+            return super().community_detection(algorithm=algorithm)
+        try:
+            self._ensure_projected_graph()
+            result = self._conn.execute(
+                "CALL louvain('bench') RETURN node.id, louvain_id"
+            )
+            communities: dict[int, set[str]] = {}
+            for row in result:
+                if row[0] is not None:
+                    cid = int(row[1])
+                    if cid not in communities:
+                        communities[cid] = set()
+                    communities[cid].add(str(row[0]))
+            return list(communities.values())
+        except Exception:
+            return super().community_detection(algorithm=algorithm)

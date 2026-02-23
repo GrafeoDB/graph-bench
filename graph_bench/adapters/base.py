@@ -91,6 +91,16 @@ class BaseAdapter(ABC):
         """
         return False
 
+    @property
+    def child_pids(self) -> list[int]:
+        """PIDs of child/daemon processes owned by this adapter.
+
+        Override in subclasses that spawn external processes (e.g. redislite
+        spawns a detached redis-server). These PIDs are included in memory
+        measurement for embedded adapters.
+        """
+        return []
+
     @abstractmethod
     def connect(self, *, uri: str | None = None, **kwargs: Any) -> None:
         """Establish connection to the database."""

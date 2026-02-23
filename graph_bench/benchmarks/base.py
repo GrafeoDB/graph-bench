@@ -92,7 +92,7 @@ class BaseBenchmark(ABC):
 
         # Measure memory before benchmark
         if adapter.is_embedded:
-            mem_before = get_process_memory()
+            mem_before = get_process_memory(extra_pids=adapter.child_pids)
         else:
             mem_before = get_container_memory(adapter.name)
 
@@ -123,7 +123,7 @@ class BaseBenchmark(ABC):
 
             # Measure memory after benchmark
             if adapter.is_embedded:
-                mem_after = get_process_memory()
+                mem_after = get_process_memory(extra_pids=adapter.child_pids)
             else:
                 mem_after = get_container_memory(adapter.name)
 

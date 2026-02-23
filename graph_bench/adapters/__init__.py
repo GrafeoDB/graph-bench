@@ -13,6 +13,7 @@ to provide a consistent interface across databases.
 from graph_bench.adapters.arangodb import ArangoDBAdapter
 from graph_bench.adapters.base import AdapterRegistry, BaseAdapter
 from graph_bench.adapters.falkordb import FalkorDBAdapter
+from graph_bench.adapters.falkordblite import FalkorDBLiteAdapter
 from graph_bench.adapters.grafeo import GrafeoAdapter
 from graph_bench.adapters.grafeo_server import GrafeoServerAdapter
 from graph_bench.adapters.ladybug import LadybugAdapter
@@ -27,6 +28,7 @@ __all__ = [
     "ArangoDBAdapter",
     "BaseAdapter",
     "FalkorDBAdapter",
+    "FalkorDBLiteAdapter",
     "GrafeoAdapter",
     "GrafeoServerAdapter",
     "LadybugAdapter",

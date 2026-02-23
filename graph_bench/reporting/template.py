@@ -37,6 +37,7 @@ DB_ORDER = [
     "Neo4j",
     "Memgraph",
     "FalkorDB",
+    "FalkorDB Lite",
     "ArangoDB",
     "NebulaGraph",
     "TuGraph",
@@ -50,6 +51,7 @@ DB_TYPES = {
     "Neo4j": "Server",
     "Memgraph": "Server",
     "FalkorDB": "Server",
+    "FalkorDB Lite": "Embedded",
     "ArangoDB": "Server",
     "NebulaGraph": "Distributed",
     "TuGraph": "Server",
@@ -150,10 +152,15 @@ NATIVE_ANALYTICS = {
     "Grafeo": [
         "ldbc_bfs", "ldbc_pagerank", "ldbc_wcc", "ldbc_cdlp", "ldbc_lcc",
     ],
+    "LadybugDB": ["ldbc_pagerank", "ldbc_wcc", "ldbc_cdlp"],
     "Neo4j": ["ldbc_bfs", "ldbc_pagerank", "ldbc_wcc", "ldbc_cdlp", "ldbc_sssp"],
+    "Grafeo Server": [
+        "ldbc_bfs", "ldbc_pagerank", "ldbc_wcc", "ldbc_cdlp", "ldbc_lcc", "ldbc_sssp"
+    ],
     "Memgraph": [
         "ldbc_bfs", "ldbc_pagerank", "ldbc_wcc", "ldbc_cdlp", "ldbc_lcc", "ldbc_sssp"
     ],
+    "FalkorDB Lite": ["ldbc_pagerank", "ldbc_wcc", "ldbc_cdlp"],
     "TuGraph": [
         "ldbc_bfs", "ldbc_pagerank", "ldbc_wcc", "ldbc_cdlp", "ldbc_lcc", "ldbc_sssp"
     ],
@@ -210,6 +217,14 @@ DB_INFO = {
         "data_model": "LPG",
         "query_languages": "Cypher",
         "acid": "Partial (Redis-level durability, AOF fsync policy)",
+        "consistency": "Strong",
+        "license": "SSPL",
+    },
+    "FalkorDB Lite": {
+        "type": "Embedded (redislite + FalkorDB module)",
+        "data_model": "LPG",
+        "query_languages": "Cypher",
+        "acid": "Partial (Redis-level durability)",
         "consistency": "Strong",
         "license": "SSPL",
     },
@@ -277,6 +292,9 @@ class TemplateExporter(BaseExporter):
         # Get databases in order
         dbs = self._get_ordered_databases(collector)
 
+        # Overall summary table (all categories combined)
+        self._add_overall_summary(collector, lines, dbs)
+
         # SNB Interactive summary
         self._add_summary_section(
             collector, lines, "SNB Interactive", CATEGORY_BENCHMARKS["SNB Interactive"], dbs
@@ -339,6 +357,76 @@ class TemplateExporter(BaseExporter):
         )
         lines.append("")
 
+    def _add_overall_summary(
+        self, collector: ResultCollector, lines: list[str], dbs: list[str]
+    ) -> None:
+        """Add overall summary table with total time and peak memory per category."""
+        # Categories to summarize
+        summary_cats = [
+            ("SNB", CATEGORY_BENCHMARKS["SNB Interactive"]),
+            ("Analytics", CATEGORY_BENCHMARKS["Graph Analytics"]),
+            ("ACID", CATEGORY_BENCHMARKS["LDBC ACID - Atomicity"]
+             + CATEGORY_BENCHMARKS["LDBC ACID - Isolation"]),
+        ]
+
+        lines.append("### Overall")
+        lines.append("")
+        header = "| Database | Type |"
+        sep = "|----------|------|"
+        for cat_name, _ in summary_cats:
+            header += f" {cat_name} (ms) | {cat_name} Mem |"
+            sep += " ------:| ------:|"
+        lines.append(header)
+        lines.append(sep)
+
+        # Compute totals per db per category
+        cat_totals: dict[str, dict[str, float]] = {db: {} for db in dbs}
+        cat_peak_mem: dict[str, dict[str, int]] = {db: {} for db in dbs}
+        for db in dbs:
+            for cat_name, benchmarks in summary_cats:
+                total_ms = 0.0
+                peak_mem = 0
+                has_any = False
+                for bench in benchmarks:
+                    result = self._get_result(collector, bench, db)
+                    if result and result.ok and result.metrics:
+                        total_ms += result.metrics.timing.mean_ms
+                        mem = result.metrics.memory_bytes or 0
+                        if mem > peak_mem:
+                            peak_mem = mem
+                        has_any = True
+                if has_any:
+                    cat_totals[db][cat_name] = total_ms
+                    cat_peak_mem[db][cat_name] = peak_mem
+
+        # Find fastest per category
+        fastest: dict[str, str] = {}
+        for cat_name, _ in summary_cats:
+            times = {db: cat_totals[db][cat_name] for db in dbs if cat_name in cat_totals[db]}
+            if times:
+                fastest[cat_name] = min(times, key=lambda x: times[x])
+
+        for db in dbs:
+            db_type = DB_TYPES.get(db, "Unknown")
+            is_any_fastest = db in fastest.values()
+            name = f"**{db}**" if is_any_fastest else db
+            row = f"| {name} | {db_type} |"
+            for cat_name, _ in summary_cats:
+                if cat_name in cat_totals[db]:
+                    t = cat_totals[db][cat_name]
+                    m = cat_peak_mem[db][cat_name]
+                    mem_str = f"{m / 1048576:.0f} MB" if m else ""
+                    is_fast = fastest.get(cat_name) == db
+                    if is_fast:
+                        row += f" **{t:,.1f}** | {mem_str} |"
+                    else:
+                        row += f" {t:,.0f} | {mem_str} |"
+                else:
+                    row += " | |"
+            lines.append(row)
+
+        lines.append("")
+
     def _add_summary_section(
         self,
         collector: ResultCollector,
@@ -373,12 +461,12 @@ class TemplateExporter(BaseExporter):
 
         for db in dbs:
             db_type = DB_TYPES.get(db, "Unknown")
-            total: float | None = totals.get(db)
-            if total is not None:
+            db_total = totals.get(db)
+            if db_total is not None:
                 if db == fastest_db:
-                    lines.append(f"| **{db}** | {db_type} | **{total:,.1f}** |")
+                    lines.append(f"| **{db}** | {db_type} | **{db_total:,.1f}** |")
                 else:
-                    lines.append(f"| {db} | {db_type} | {total:,.0f} |")
+                    lines.append(f"| {db} | {db_type} | {db_total:,.0f} |")
             else:
                 lines.append(f"| {db} | {db_type} | |")
 
@@ -551,20 +639,42 @@ class TemplateExporter(BaseExporter):
 
             lines.append(f"#### {cat_name} - {scale.title()}")
             lines.append("")
-            lines.append("| Benchmark | Time |")
-            lines.append("|-----------|-----:|")
+
+            # Check if any result has memory data
+            has_memory = any(
+                r and r.ok and r.metrics and r.metrics.memory_bytes
+                for _, r in results
+            )
+
+            if has_memory:
+                lines.append("| Benchmark | Time | Memory |")
+                lines.append("|-----------|-----:|-------:|")
+            else:
+                lines.append("| Benchmark | Time |")
+                lines.append("|-----------|-----:|")
 
             total = 0.0
             for bench, result in results:
                 if result and result.ok and result.metrics:
                     ms = result.metrics.timing.mean_ms
                     total += ms
-                    lines.append(f"| {bench} | {ms:.2f}ms |")
+                    if has_memory:
+                        mem = result.metrics.memory_bytes
+                        mem_str = f"{mem / 1048576:.1f} MB" if mem else ""
+                        lines.append(f"| {bench} | {ms:.2f}ms | {mem_str} |")
+                    else:
+                        lines.append(f"| {bench} | {ms:.2f}ms |")
                 elif result and not result.ok:
-                    lines.append(f"| {bench} | FAILED |")
+                    if has_memory:
+                        lines.append(f"| {bench} | FAILED | |")
+                    else:
+                        lines.append(f"| {bench} | FAILED |")
 
             if total > 0:
-                lines.append(f"| **Total** | **{total:.2f}ms** |")
+                if has_memory:
+                    lines.append(f"| **Total** | **{total:.2f}ms** | |")
+                else:
+                    lines.append(f"| **Total** | **{total:.2f}ms** |")
             lines.append("")
 
         lines.append("</details>")
@@ -586,7 +696,7 @@ class TemplateExporter(BaseExporter):
             ("**LPG**", lambda db: True),
             ("**RDF**", lambda db: db == "Grafeo"),
             ("**GQL (ISO)**", lambda db: db == "Grafeo"),
-            ("**Cypher**", lambda db: db in ["Grafeo", "LadybugDB", "Neo4j", "Memgraph", "FalkorDB", "TuGraph"]),
+            ("**Cypher**", lambda db: db in ["Grafeo", "LadybugDB", "Neo4j", "Memgraph", "FalkorDB", "FalkorDB Lite", "TuGraph"]),
             ("**Gremlin**", lambda db: db in ["Grafeo", "ArangoDB"]),
             ("**GraphQL**", lambda db: db in ["Grafeo", "ArangoDB"]),
             ("**SPARQL**", lambda db: db == "Grafeo"),

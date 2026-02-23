@@ -191,7 +191,7 @@ class GrafeoServerAdapter(BaseAdapter):
             self._session_stub.Ping(
                 pb.PingRequest(session_id=self._get_session_id())
             )
-            return "0.4.3"
+            return "0.4.4"
         except Exception:
             return "unknown"
 
@@ -468,10 +468,6 @@ class GrafeoServerAdapter(BaseAdapter):
             self._tx_query(sid, query, parameters={"nodes": batch})
             count += len(batch)
         self._tx_commit(sid)
-        try:
-            self._exec("CREATE INDEX FOR (n:Node) ON (n.id)")
-        except Exception:
-            pass
         return count
 
     def get_node(self, node_id: str) -> dict[str, Any] | None:
@@ -517,12 +513,21 @@ class GrafeoServerAdapter(BaseAdapter):
         *,
         batch_size: int = 500,
     ) -> int:
-        """Insert edges using parameterized UNWIND MATCH+CREATE.
+        """Insert edges using internal node IDs for O(1) lookups.
 
-        Groups edges by type, then batches each group with $edges
-        parameter — GWP Record encoding fixed in grafeo-server 0.4.4+.
-        Smaller batch size (500) to avoid gRPC deadline with large graphs.
+        Builds an app_id → internal_nid map first, then uses
+        MATCH (a) WHERE id(a) = e.src_nid to avoid full property scans
+        (property indexes not yet available via GQL DDL).
         """
+        if not edges:
+            return 0
+
+        # Build app_id → internal nid mapping (O(N) once)
+        nid_rows = self._query(
+            "MATCH (n:Node) RETURN n.id AS app_id, id(n) AS nid"
+        )
+        app_to_nid = {str(r["app_id"]): r["nid"] for r in nid_rows}
+
         by_type: dict[
             str, list[tuple[str, str, dict[str, Any]]]
         ] = defaultdict(list)
@@ -551,8 +556,8 @@ class GrafeoServerAdapter(BaseAdapter):
 
             query = (
                 f"UNWIND $edges AS e "
-                f"MATCH (a:Node {{id: e.src}}), "
-                f"(b:Node {{id: e.tgt}}) "
+                f"MATCH (a) WHERE id(a) = e.src_nid "
+                f"MATCH (b) WHERE id(b) = e.tgt_nid "
                 f"CREATE (a)-[:{etype}{prop_assigns}]->(b)"
             )
 
@@ -560,12 +565,17 @@ class GrafeoServerAdapter(BaseAdapter):
                 batch = type_edges[i : i + batch_size]
                 edge_list = []
                 for src, tgt, props in batch:
-                    m: dict[str, Any] = {"src": src, "tgt": tgt}
+                    src_nid = app_to_nid.get(src)
+                    tgt_nid = app_to_nid.get(tgt)
+                    if src_nid is None or tgt_nid is None:
+                        continue
+                    m: dict[str, Any] = {"src_nid": src_nid, "tgt_nid": tgt_nid}
                     if props:
                         m.update(props)
                     edge_list.append(m)
-                self._tx_query(sid, query, parameters={"edges": edge_list})
-                count += len(batch)
+                if edge_list:
+                    self._tx_query(sid, query, parameters={"edges": edge_list})
+                count += len(edge_list)
 
         self._tx_commit(sid)
         return count
