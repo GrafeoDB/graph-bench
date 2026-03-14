@@ -7,11 +7,14 @@ Benchmark suite for graph databases. Built to compare Grafeo against other optio
 | Database | Type | Query Language | Status |
 |----------|------|----------------|--------|
 | **Grafeo** | Embedded | GQL (ISO) | Ready |
+| **Grafeo Server** | Server | GQL (ISO) | Ready |
 | **LadybugDB** | Embedded | Cypher | Ready |
+| **FalkorDB Lite** | Embedded | Cypher | Ready |
 | **Neo4j** | Server | Cypher | Ready |
 | **Memgraph** | Server | Cypher | Ready |
 | **ArangoDB** | Server | AQL | Ready |
 | **FalkorDB** | Server (Redis) | Cypher | Ready |
+| **TuGraph** | Server | Cypher | Ready |
 | **NebulaGraph** | Server (Distributed) | nGQL | Ready |
 
 ## Quick Start
