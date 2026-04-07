@@ -3,7 +3,9 @@
 **Run:** 2026-02-23 | **Platform:** Windows  
 **Benchmark suite:** [graph-bench](https://github.com/GrafeoDB/graph-bench)
 
-## Scale Factors (LDBC Standard)
+> **Note:** These are not official LDBC Benchmark results. Workloads are inspired by [LDBC](https://ldbcouncil.org/) specifications but have not been audited by the LDBC Council. See the [LDBC disclaimer](README.md#ldbc-disclaimer) for details.
+
+## Scale Factors (based on LDBC SNB)
 
 | Scale | Persons | KNOWS Edges | Reference |
 |-------|--------:|------------:|-----------|

@@ -88,13 +88,13 @@ uv run graph-bench run -d grafeo -s medium
 | `edge_add_existing` | Add edges between existing nodes |
 | `mixed_workload` | 80% read / 20% write mix |
 
-### LDBC SNB Interactive (11)
+### LDBC-Inspired: SNB Interactive (11)
 | Benchmark | What it measures |
 |-----------|------------------|
 | `snb_is1` - `snb_is7` | Short read queries (profile, posts, friends, content) |
 | `snb_ic1` - `snb_ic3`, `snb_ic6` | Complex read queries (multi-hop friends, messages, tags) |
 
-### LDBC GraphAnalytics (6)
+### LDBC-Inspired: GraphAnalytics (6)
 | Benchmark | What it measures |
 |-----------|------------------|
 | `ldbc_bfs` | Breadth-first search (vertex depths) |
@@ -104,7 +104,7 @@ uv run graph-bench run -d grafeo -s medium
 | `ldbc_lcc` | Local clustering coefficient |
 | `ldbc_sssp` | Single-source shortest paths |
 
-### LDBC ACID (12)
+### LDBC-Inspired: ACID (12)
 | Benchmark | What it measures |
 |-----------|------------------|
 | `acid_atomicity_c` | Commit visibility |
@@ -259,6 +259,20 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for adding benchmarks or adapters.
 
 - [Grafeo](https://github.com/GrafeoDB/grafeo), the graph database being benchmarked
 - [anywidget-graph](https://github.com/GrafeoDB/anywidget-graph), interactive graph visualization for notebooks
+
+## LDBC Disclaimer
+
+This benchmark suite includes workloads **inspired by** [LDBC](https://ldbcouncil.org/) specifications, including the [Social Network Benchmark (SNB)](https://ldbcouncil.org/benchmarks/snb/), [Graphalytics](https://ldbcouncil.org/benchmarks/graphalytics/), and the [ACID test suite](https://ldbcouncil.org/benchmarks/snb/). These are **not official LDBC Benchmark results**. The results have not been audited or endorsed by the LDBC Council.
+
+Key differences from official LDBC benchmarks:
+
+- **No LDBC audit**: official LDBC results require formal auditing under the [LDBC Byelaws](https://ldbcouncil.org/benchmarks/fair-use-policies/).
+- **Synthetic datasets**: graph-bench generates its own datasets that follow the LDBC SNB schema but are not produced by the official LDBC SNB data generator (Datagen).
+- **Reduced scale**: default runs use SF0.1, far below the scale factors used in official LDBC publications.
+- **Simplified query set**: only a subset of the official SNB Interactive queries are implemented.
+- **No cost-of-ownership reporting**: official LDBC results include pricing and hardware disclosure.
+
+LDBC specifications are used under the [Creative Commons Attribution 4.0 (CC-BY 4.0)](https://creativecommons.org/licenses/by/4.0/) license. LDBC and the LDBC logo are trademarks of the Linked Data Benchmark Council. See the [LDBC fair use policy](https://ldbcouncil.org/benchmarks/fair-use-policies/) for details.
 
 ## License
 

@@ -4,6 +4,12 @@ This document describes the rules that govern graph-bench benchmarks.
 Every adapter, whether maintained by the project or contributed externally, must comply with these rules.
 Pull requests that optimise an adapter are welcome and will be reviewed and merged provided they follow the guidelines below.
 
+## LDBC Attribution
+
+Several benchmark categories in this suite (SNB Interactive, GraphAnalytics, ACID) are inspired by specifications published by the [Linked Data Benchmark Council (LDBC)](https://ldbcouncil.org/). These are **not official LDBC Benchmarks**, have not been audited by the LDBC Council, and do not follow the full LDBC methodology. See the [graph-bench README](README.md#ldbc-disclaimer) for details on specific differences.
+
+LDBC specifications are used under the [Creative Commons Attribution 4.0 International (CC-BY 4.0)](https://creativecommons.org/licenses/by/4.0/) license. LDBC and the LDBC logo are trademarks of the Linked Data Benchmark Council.
+
 ## Standard Adapter Parameters
 
 All adapters inherit from `BaseAdapter` and must respect the default method signatures.
