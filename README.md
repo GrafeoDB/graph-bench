@@ -231,7 +231,10 @@ docker compose ps
 
 ## Latest Results
 
-See [LATEST_RESULTS.md](LATEST_RESULTS.md) for the most recent benchmark run.
+For the most recent benchmark runs, see:
+
+- [RESULTS_SERVER.md](RESULTS_SERVER.md)
+- [RESULTS_EMBEDDED.md](RESULTS_EMBEDDED.md)
 
 Results are saved as JSON in `results/`.
 
