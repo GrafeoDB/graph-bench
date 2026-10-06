@@ -19,6 +19,8 @@ All adapters inherit from `BaseAdapter` and must respect the default method sign
 | `batch_size` (node insert) | 1000 | May be lowered to work around driver limits (e.g. TuGraph uses 200), but must not be raised above 1000 |
 | `batch_size` (edge insert) | 1000 | Same as above (Grafeo Server uses 500 to avoid gRPC deadline) |
 | Indexing | Optional | Adapters may create a property index on `id` after bulk insert. No other pre-computation is allowed during `insert_nodes` / `insert_edges` |
+| Vector index | `vector_ann` only | Built by the benchmark itself through `create_vector_index`, with the run's shared HNSW parameters (see below). The `vector_scan` and hybrid benchmarks use no vector index |
+| HNSW parameters | `m` 16, `ef_construction` 128, `ef` 64, `k` 10 | Shared by every adapter in a run and set only with the `--ann-*` options. A parameter a database cannot take (for example quantization over GWP) makes the benchmark *unsupported*, not silently different |
 | Warmup iterations | Per scale | Defined in `ScaleConfig`, not adjustable per adapter |
 | Measurement iterations | Per scale | Defined in `ScaleConfig`, not adjustable per adapter |
 | Timeout | Per scale | 60 s (small) to 3600 s (sf100). CLI `--timeout` overrides apply equally to all adapters in a run |
@@ -38,6 +40,8 @@ The following optimisations are explicitly permitted.
 5. **Connection pooling / multiplexing**: adapters may maintain connection pools, session-per-thread maps, or reuse HTTP/2 streams, as long as these are standard features of the client driver.
 
 6. **Native query language**: each adapter uses the database's own query language (Cypher, AQL, GQL, etc.). This is not an unfair advantage, it reflects real-world usage.
+
+7. **Native vector index (`vector_ann` only)**: adapters implement `create_vector_index` and `vector_ann_search` with the database's own approximate nearest neighbour index, using the shared HNSW parameters. Every `vector_ann` result reports recall@k against the exact ground truth next to its latency, so a faster but less accurate index is visible as such. Quantization is a run option (`--ann-quantization`) and is reported with the result.
 
 ## Disallowed Optimisations
 
@@ -65,6 +69,34 @@ The following are not permitted.
 - Databases **with** native support should override the fallback methods. The override must produce semantically equivalent results (e.g. same community structure, correct shortest-path distances).
 - If a native implementation fails at runtime, the adapter may fall back to `super()`. This fallback penalty is also included in the timed result.
 
+### Labelling native and fallback results
+
+Every result is labelled with what its timed iterations ran, as recorded at run time:
+
+- **native**: every call ran in the database.
+- **fallback (operations)**: at least one call ran in Python. Every `BaseAdapter` fallback records itself
+  (`_record_fallback`), and so must any Python path in an adapter, such as a breadth-first search over
+  `get_neighbors` or a client-side shortest path.
+- **unsupported**: the database has no native implementation and the benchmark has no fallback (the
+  `vector_ann` family). The adapter raises `UnsupportedOperation` and the result is SKIPPED with the reason.
+
+Reports show the label next to each time. Compare native results with native results: a fallback measures
+extraction into Python as well as the database.
+
+### Algorithm definitions
+
+A native override must compute the same definition as the fallback it replaces. Where definitions differ
+between databases, the benchmark exists once per definition and each adapter declares which ones it computes
+natively. The local clustering coefficient is the current case: `ldbc_lcc` is the LDBC directed definition
+and `lcc_undirected` the undirected one; adapters list theirs in `native_lcc_definitions` and use the
+fallback for the other.
+
+### Vector scan versus vector ANN
+
+`vector_scan_*` measures the same brute-force search (`BaseAdapter.vector_scan`, which adapters must not
+override) on every database, so its results are comparable everywhere. `vector_ann_*` measures each
+database's native index and is never run through a fallback.
+
 ## Test Inclusion / Exclusion Criteria
 
 ### Including a benchmark
@@ -82,7 +114,7 @@ A benchmark is excluded when:
 - The adapter fails to connect (the entire database is skipped).
 - The category or name does not match the CLI filter.
 
-There is no mechanism for an adapter to selectively skip individual benchmarks. If a benchmark times out or throws an exception, it is recorded as `TIMEOUT` or `FAILED`, not silently omitted.
+There is no mechanism for an adapter to selectively skip individual benchmarks. If a benchmark times out or throws an exception, it is recorded as `TIMEOUT` or `FAILED`, not silently omitted. The one exception is a benchmark without a fallback (`vector_ann_*`) on a database without the native feature: it is recorded as `SKIPPED` with the reason "unsupported: ...".
 
 ### Timeout and failure handling
 

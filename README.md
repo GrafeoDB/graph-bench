@@ -94,15 +94,23 @@ uv run graph-bench run -d grafeo -s medium
 | `snb_is1` - `snb_is7` | Short read queries (profile, posts, friends, content) |
 | `snb_ic1` - `snb_ic3`, `snb_ic6` | Complex read queries (multi-hop friends, messages, tags) |
 
-### LDBC-Inspired: GraphAnalytics (6)
+### LDBC-Inspired: GraphAnalytics (6 + 1)
 | Benchmark | What it measures |
 |-----------|------------------|
 | `ldbc_bfs` | Breadth-first search (vertex depths) |
 | `ldbc_pagerank` | PageRank centrality |
 | `ldbc_wcc` | Weakly connected components |
 | `ldbc_cdlp` | Community detection (label propagation) |
-| `ldbc_lcc` | Local clustering coefficient |
+| `ldbc_lcc` | Local clustering coefficient, LDBC directed definition |
 | `ldbc_sssp` | Single-source shortest paths |
+| `lcc_undirected` | Local clustering coefficient with edges taken as undirected (not an LDBC definition) |
+
+The two LCC definitions differ on a directed graph. `ldbc_lcc` follows LDBC Graphalytics: the neighbourhood
+N(v) holds in- and out-neighbours, the directed edges between them are counted (an edge in each direction counts
+twice) and divided by d * (d - 1). On the cycle 0->1->2->0 every vertex scores 0.5; `lcc_undirected` gives 1.0.
+Each adapter lists the definitions it computes natively (`native_lcc_definitions`); the other one runs the
+BaseAdapter fallback with that definition, and the result says so. `nx.clustering` on a directed graph (the
+Fagiolo coefficient) is neither definition.
 
 ### LDBC-Inspired: ACID (12)
 | Benchmark | What it measures |
@@ -124,13 +132,53 @@ uv run graph-bench run -d grafeo -s medium
 | `concurrent_mixed` | Concurrent 80/20 read-write mix |
 | `concurrent_acid` | ACID under concurrent load |
 
+### Vector Scan (4): the same brute-force search for every database
+| Benchmark | What it measures |
+|-----------|------------------|
+| `vector_scan_insert` | Insert 128-dimensional vector nodes (no index) |
+| `vector_scan_knn` | k=10 search per cluster centroid: read every vector node, score in Python |
+| `vector_scan_batch_search` | 100 such searches with perturbed queries |
+| `vector_scan_recall` | Share of results in the query's cluster |
+
+These were called `vector_insert`, `vector_knn`, `vector_batch_search` and `vector_recall`; the old names
+(and `-c vector`) still select them. The hybrid benchmarks use the same scan.
+
+### Vector ANN (3): the database's native index, no fallback
+| Benchmark | What it measures |
+|-----------|------------------|
+| `vector_ann_build` | Insert the vectors, then build the native index (insert and index time reported apart) |
+| `vector_ann_knn` | 100 k-NN queries at the configured `ef`, with recall@k against exact search |
+| `vector_ann_delete` | The same queries after deleting a share of the vectors: recall before and after |
+
+A database without a native vector index reports these as *unsupported* (SKIPPED), never as a fallback.
+Recall@k compares the results with the exact top k over the vectors as the database stores them (the data
+the scan reads). The HNSW parameters are shared by every database in a run: `--ann-m` (default 16),
+`--ann-ef-construction` (128), `--ann-ef` (64), `--ann-k` (10), plus `--ann-quantization`
+(`none`, `scalar`, `binary`, `product`: Grafeo embedded only) and `--ann-delete-fraction` (0.1).
+`--ann-sweep` (or `--ann-sweep-ef 10,20,40`) adds a recall versus latency curve over `ef`.
+
+### What each result measured
+
+Every result carries an `implementation` label: *native* when every call in its timed iterations ran in the
+database, *fallback* (with the operations, for example `fallback (traverse_dfs)`) when part of it ran in Python
+(a NetworkX algorithm, a client-side traversal or the vector scan), *unsupported* when the database has no
+native implementation of a benchmark that must not fall back. The labels are recorded while the benchmark
+runs, not declared per adapter, and appear in the JSON (`metrics.custom`), CSV and Markdown reports.
+
 ## Scales
 
-| Scale | Nodes | Edges | Warmup | Iterations |
-|-------|-------|-------|--------|------------|
-| small | 10K | 50K | 2 | 5 |
-| medium | 100K | 500K | 3 | 10 |
-| large | 1M | 5M | 1 | 1 |
+Scales follow the LDBC SNB scale factors (see `graph_bench/config.py`). `small`, `medium` and `large` are
+aliases for `sf01`, `sf1` and `sf100`; `sf1` is the default. Each benchmark generates a fraction of these
+counts (for example 1/10 of the nodes for the LDBC Graphalytics graph).
+
+| Scale | Nodes | Edges | Warmup | Iterations | Timeout |
+|-------|-------|-------|--------|------------|---------|
+| `sf01` (`small`) | 1K | 18K | 1 | 3 | 60 s |
+| `sf1` (`medium`) | 10K | 180K | 1 | 3 | 120 s |
+| `sf3` | 27K | 540K | 3 | 10 | 300 s |
+| `sf10` | 73K | 2M | 5 | 10 | 600 s |
+| `sf30` | 180K | 6.5M | 5 | 10 | 1800 s |
+| `sf100` (`large`) | 280K | 18M | 1 | 1 | 3600 s |
 
 ## Installation
 
@@ -143,7 +191,26 @@ uv sync --all-extras
 
 # Or just what you need
 uv sync --extra grafeo --extra cli
+
+# Grafeo Server over GWP (gRPC) needs the grafeo-server extra as well
+uv sync --extra grafeo --extra grafeo-server --extra cli
 ```
+
+### Grafeo versions
+
+The Grafeo adapters are tested against **grafeo 0.5.44** and accept `grafeo>=0.5.44,<0.7`. Grafeo is
+before 1.0, so a new minor version may break the adapters: the requirement pins the minor versions that are
+tested, and becomes `grafeo~=0.6.0` once grafeo 0.6.0 is released (write all three parts: `grafeo~=0.6`
+would also accept 0.7). A weekly CI run tests the newest grafeo on PyPI, pre-releases included.
+
+- **Embedded** (`-d grafeo`): in memory by default. `GRAPH_BENCH_GRAFEO_PATH` selects a database file; a path
+  without the `.grafeo` suffix gets it, because grafeo 0.6 replaces the WAL-directory layout with a single
+  file. A checkpoint writes `<file>.checkpoint` first, so keep free disk space for a second copy.
+- **Server** (`-d grafeo-server`): GQL over GWP to a `grafeo/grafeo-server:<version>-gwp` or `-full` image,
+  at `GRAPH_BENCH_GRAFEO_SERVER_URI` (default `localhost:7688`, grafeo-server's GWP port).
+
+A query that fails raises (`grafeo.GrafeoError`, or `GrafeoServerError` for the server), so its benchmark is
+recorded as FAILED instead of being timed.
 
 ## CLI Usage
 
@@ -162,6 +229,22 @@ uv run graph-bench run -d grafeo -b triangle_count,common_neighbors -s small
 # Output to specific directory
 uv run graph-bench run -d grafeo -s small -o ./my_results/
 ```
+
+### Grafeo-focused runs
+
+```bash
+# Native vector search with a recall versus latency curve
+uv run graph-bench run -d grafeo -c vector_ann --ann-sweep -s small -f markdown
+
+# Tune the shared HNSW parameters, with scalar quantization (embedded only)
+uv run graph-bench run -d grafeo -c vector_ann --ann-m 32 --ann-ef 128 --ann-quantization scalar -s small
+
+# Embedded and server side by side (one column each in the Markdown report)
+uv run graph-bench run -d grafeo,grafeo-server -c ldbc_graphanalytics,vector_ann -s small -f markdown
+```
+
+The server's native vector search needs a grafeo-server with the vector index (the `-full` image); on other
+builds the `vector_ann` results are *unsupported*.
 
 ## Python API
 
@@ -194,6 +277,9 @@ Create a `.env` file (copy from `.env.example`):
 # Embedded (no server needed)
 GRAPH_BENCH_GRAFEO_PATH=:memory:
 GRAPH_BENCH_LADYBUG_PATH=:memory:
+
+# Grafeo Server (GWP)
+GRAPH_BENCH_GRAFEO_SERVER_URI=localhost:7688
 
 # Server databases (needs Docker or local install)
 GRAPH_BENCH_NEO4J_URI=bolt://localhost:7687
@@ -240,8 +326,11 @@ Results are saved as JSON in `results/`.
 ```bash
 uv sync --all-extras
 
-# Run tests
-uv run pytest
+# Run tests (coverage is reported, the 88% target is not enforced yet)
+uv run pytest --cov-fail-under=0
+
+# Grafeo correctness tests: embedded always, grafeo-server when one answers at the URI
+GRAPH_BENCH_GRAFEO_SERVER_URI=localhost:7688 uv run pytest tests/test_grafeo_correctness.py --no-cov -rs
 
 # Lint
 uv run ruff check graph_bench/
