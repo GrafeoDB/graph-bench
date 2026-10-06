@@ -41,6 +41,7 @@ __all__ = [
     "LdbcPageRankBenchmark",
     "LdbcWccBenchmark",
     "LdbcCdlpBenchmark",
+    "LccUndirectedBenchmark",
     "LdbcLccBenchmark",
     "LdbcSsspBenchmark",
 ]
@@ -301,12 +302,16 @@ class LdbcCdlpBenchmark(LdbcGraphalyticsBenchmarkBase):
 class LdbcLccBenchmark(LdbcGraphalyticsBenchmarkBase):
     """LDBC Graphanalytics Local Clustering Coefficient benchmark.
 
-    LCC measures how close a vertex's neighbors are to being a clique:
-    - LCC(v) = (edges between neighbors) / (max possible edges between neighbors)
-    - For vertex v with neighbors N(v):
-      - If |N(v)| <= 1: LCC(v) = 0
-      - Otherwise: LCC(v) = 2 * |edges in N(v)| / (|N(v)| * (|N(v)| - 1))
-    - For directed graphs, neighborhood is undirected but edge counting is directed
+    LCC measures how close a vertex's neighbors are to being a clique. This is
+    the LDBC definition for a directed graph:
+    - N(v) is the set of in- and out-neighbours of v
+    - If |N(v)| <= 1: LCC(v) = 0
+    - Otherwise: LCC(v) = |directed edges between members of N(v)| / (|N(v)| * (|N(v)| - 1))
+      (an edge in each direction between two neighbours counts twice)
+
+    Adapters compute it natively only when they list "directed" in
+    native_lcc_definitions; the others use the BaseAdapter fallback.
+    See lcc_undirected for the undirected coefficient.
 
     Uses 64-bit IEEE 754 double-precision floating-point.
     Validation: Epsilon match (tolerance: 0.0001 relative error).
@@ -321,7 +326,27 @@ class LdbcLccBenchmark(LdbcGraphalyticsBenchmarkBase):
 
         Returns the number of vertices with computed coefficients.
         """
-        coefficients = adapter.local_clustering_coefficient()
+        coefficients = adapter.local_clustering_coefficient(directed=True)
+        return len(coefficients)
+
+
+@BenchmarkRegistry.register("lcc_undirected", category="ldbc_graphanalytics")
+class LccUndirectedBenchmark(LdbcGraphalyticsBenchmarkBase):
+    """Local Clustering Coefficient with every edge taken as undirected.
+
+    Not an LDBC definition (ldbc_lcc is): the usual undirected coefficient,
+    LCC(v) = |edges between neighbours| / (d * (d - 1) / 2), on the same graph.
+    Native implementations that ignore edge direction (Grafeo, Neo4j GDS)
+    compute this one.
+    """
+
+    @property
+    def name(self) -> str:
+        return "lcc_undirected"
+
+    def run_iteration(self, adapter: GraphDatabaseAdapter, scale: ScaleConfig) -> int:
+        """Compute undirected local clustering coefficients; returns the vertex count."""
+        coefficients = adapter.local_clustering_coefficient(directed=False)
         return len(coefficients)
 
 

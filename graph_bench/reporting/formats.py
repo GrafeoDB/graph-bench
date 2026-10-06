@@ -10,10 +10,73 @@ Export formats for benchmark results.
 import json
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import Any
 
-from graph_bench.reporting.collector import ResultCollector
+from graph_bench.reporting.collector import ResultCollector, implementation_label
+from graph_bench.types import BenchmarkResult, Status
 
-__all__ = ["BaseExporter", "JsonExporter", "CsvExporter", "MarkdownExporter"]
+__all__ = ["BaseExporter", "CsvExporter", "JsonExporter", "MarkdownExporter", "ann_section"]
+
+
+def ann_section(collector: ResultCollector) -> list[str]:
+    """Markdown for the vector_ann results: latency next to recall@k, sweeps and deletes."""
+    ann = [r for r in collector.results if r.benchmark_name.startswith("vector_ann_")]
+    if not ann:
+        return []
+    lines = [
+        "## Vector ANN (native index, recall@k against exact search)",
+        "",
+        "| Database | Benchmark | ms / query | recall@k | k | ef | m | ef_construction | quantization |",
+        "|----------|-----------|-----------:|---------:|--:|---:|--:|----------------:|--------------|",
+    ]
+    for r in ann:
+        if r.status == Status.SKIPPED:
+            lines.append(f"| {r.database} | {r.benchmark_name} | unsupported | | | | | | |")
+            continue
+        if not r.ok or not r.metrics:
+            lines.append(f"| {r.database} | {r.benchmark_name} | FAILED | | | | | | |")
+            continue
+        c = r.metrics.custom
+        queries = c.get("queries")
+        per_query = f"{r.metrics.timing.mean_ms / queries:.3f}" if queries else ""
+        recall = f"{c['recall_at_k']:.4f}" if "recall_at_k" in c else ""
+        lines.append(
+            f"| {r.database} | {r.benchmark_name} | {per_query} | {recall} | {c.get('k', '')} | "
+            f"{c.get('ef', '')} | {c.get('m', '')} | {c.get('ef_construction', '')} | "
+            f"{c.get('quantization') or 'none'} |"
+        )
+    lines.append("")
+    for r in ann:
+        c = r.metrics.custom if r.ok and r.metrics else {}
+        if "recall_before_delete" in c:
+            lines.append(
+                f"- **{r.database} {r.benchmark_name}:** deleted {c['deleted']} vectors "
+                f"({c['delete_fraction']:.0%}); recall@{c['k']} {c['recall_before_delete']:.4f} before, "
+                f"{c['recall_at_k']:.4f} after (drop {c['recall_drop']:+.4f}); "
+                f"results naming a deleted vector: {c['deleted_returned']}; short results: {c['short_results']}"
+            )
+    lines.append("")
+    for r in ann:
+        sweep = r.metrics.custom.get("sweep") if r.ok and r.metrics else None
+        if sweep:
+            lines.append(f"### {r.database} {r.benchmark_name}: recall versus latency")
+            lines.append("")
+            lines.append("| ef | recall@k | ms / query |")
+            lines.append("|---:|---------:|-----------:|")
+            lines.extend(f"| {p['ef']} | {p['recall_at_k']:.4f} | {p['mean_query_ms']:.3f} |" for p in sweep)
+            lines.append("")
+    return lines
+
+
+def _cell(result: BenchmarkResult[Any] | None) -> str:
+    if result is None:
+        return " N/A |"
+    if result.status == Status.SKIPPED:
+        return " unsupported |"
+    if not result.ok or not result.metrics:
+        return " FAILED |"
+    label = " (fallback)" if result.metrics.custom.get("implementation") == "fallback" else ""
+    return f" {result.metrics.timing.mean_ms:.2f}{label} |"
 
 
 class BaseExporter(ABC):
@@ -54,7 +117,10 @@ class CsvExporter(BaseExporter):
 
     def to_string(self, collector: ResultCollector) -> str:
         """Export results to CSV string."""
-        lines = ["session_id,benchmark,category,database,scale,status,mean_ms,p99_ms,throughput,items_processed"]
+        lines = [
+            "session_id,benchmark,category,database,scale,status,mean_ms,p99_ms,throughput,items_processed,"
+            "implementation,recall_at_k"
+        ]
 
         session_id = collector.session.session_id
 
@@ -63,12 +129,15 @@ class CsvExporter(BaseExporter):
             p99_ms = ""
             throughput = ""
             items = ""
+            recall = ""
 
             if result.metrics:
                 mean_ms = f"{result.metrics.timing.mean_ms:.3f}"
                 p99_ms = f"{result.metrics.timing.p99_ms:.3f}"
                 throughput = f"{result.metrics.throughput:.2f}"
                 items = str(result.metrics.items_processed)
+                if "recall_at_k" in result.metrics.custom:
+                    recall = f"{result.metrics.custom['recall_at_k']:.4f}"
 
             line = ",".join([
                 session_id,
@@ -81,6 +150,8 @@ class CsvExporter(BaseExporter):
                 p99_ms,
                 throughput,
                 items,
+                f'"{implementation_label(result)}"',
+                recall,
             ])
             lines.append(line)
 
@@ -134,6 +205,8 @@ class MarkdownExporter(BaseExporter):
             lines.append("")
             self._add_category_table(collector, category, lines)
 
+        lines.extend(ann_section(collector))
+
         comparisons = collector.compute_comparisons()
         if comparisons:
             lines.append("## Performance Comparisons")
@@ -157,18 +230,23 @@ class MarkdownExporter(BaseExporter):
         """Add summary table to lines."""
         databases = collector.session.databases
 
-        lines.append("| Database | Success | Failed | Avg Time (ms) |")
-        lines.append("|----------|---------|--------|---------------|")
+        lines.append("| Database | Success | Native | Fallback | Unsupported | Failed | Avg Time (ms) |")
+        lines.append("|----------|---------|--------|----------|-------------|--------|---------------|")
 
         for db in databases:
             db_results = collector.get_results_by_database(db)
             success = sum(1 for r in db_results if r.ok)
-            failed = sum(1 for r in db_results if not r.ok)
+            labels = [r.metrics.custom.get("implementation") for r in db_results if r.ok and r.metrics]
+            skipped = sum(1 for r in db_results if r.status == Status.SKIPPED)
+            failed = sum(1 for r in db_results if r.status not in (Status.SUCCESS, Status.SKIPPED))
 
             times = [r.metrics.timing.mean_ms for r in db_results if r.ok and r.metrics]
             avg_time = f"{sum(times) / len(times):.2f}" if times else "N/A"
 
-            lines.append(f"| {db} | {success} | {failed} | {avg_time} |")
+            lines.append(
+                f"| {db} | {success} | {labels.count('native')} | {labels.count('fallback')} | "
+                f"{skipped} | {failed} | {avg_time} |"
+            )
 
         lines.append("")
 
@@ -199,14 +277,11 @@ class MarkdownExporter(BaseExporter):
             row = f"| {bench} |"
             for db in databases:
                 result = next((r for r in collector.results if r.benchmark_name == bench and r.database == db), None)
-                if result and result.ok and result.metrics:
-                    row += f" {result.metrics.timing.mean_ms:.2f} |"
-                elif result and not result.ok:
-                    row += " FAILED |"
-                else:
-                    row += " N/A |"
+                row += _cell(result)
             lines.append(row)
 
+        lines.append("")
+        lines.append("*(fallback): part of the measured work ran in Python, not in the database.*")
         lines.append("")
 
     def _add_comparison_table(self, comparisons: dict[str, dict[str, float]], lines: list[str]) -> None:

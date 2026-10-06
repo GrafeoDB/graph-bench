@@ -4,21 +4,29 @@ Grafeo database adapter using GQL (ISO graph query language).
 Grafeo is an embedded graph database with Python bindings.
 Uses GQL as the default query language (ISO/IEC 39075).
 
-Requires: pip install grafeo
+Requires: uv sync --extra grafeo (grafeo>=0.5.44,<0.7)
 
 Environment variables:
-    GRAPH_BENCH_GRAFEO_PATH: Database path (default: ./data/grafeo)
+    GRAPH_BENCH_GRAFEO_PATH: Database file (default: in-memory). A path without
+        the ``.grafeo`` suffix gets it appended, so the database is a single
+        file: grafeo 0.6 deprecates the WAL-directory layout and migrates it.
 
     from graph_bench.adapters.grafeo import GrafeoAdapter
 
     adapter = GrafeoAdapter()
-    adapter.connect(path="./data/grafeo")
+    adapter.connect(path="./data/bench.grafeo")
 
     # GQL queries
     adapter.execute_query("MATCH (n:Person) RETURN n.name")
+
+Query errors raise ``grafeo.GrafeoError`` and are never swallowed: a benchmark
+whose query fails is recorded as FAILED instead of being timed.
 """
 
-from collections.abc import Sequence
+from __future__ import annotations
+
+from collections import deque
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -27,14 +35,54 @@ from graph_bench.config import get_env
 
 __all__ = ["GrafeoAdapter"]
 
+# Every inserted node also gets this label, so lookups by `id` use one label.
+_NODE_LABEL = "Node"
+_FILE_SUFFIX = ".grafeo"
+_INSTALL_HINT = 'grafeo package not installed. Install with: uv pip install "grafeo>=0.5.44,<0.7"'
+
+_LOOKUP_NID = "MATCH (n:Node {id: $id}) RETURN id(n) AS nid"
+_LOOKUP_NIDS = "UNWIND $keys AS key MATCH (n:Node {id: key}) RETURN key, id(n) AS nid"
+_DELETE_NODES = "UNWIND $keys AS key MATCH (n:Node {id: key}) DETACH DELETE n"
+
+
+def _database_file(path: str) -> Path:
+    """Return the single-file database path for a configured path."""
+    db_path = Path(path)
+    if db_path.suffix != _FILE_SUFFIX:
+        db_path = db_path.with_name(db_path.name + _FILE_SUFFIX)
+    return db_path
+
+
+def _strip_internal(node: Any) -> dict[str, Any]:
+    """Strip the internal fields (_id, _labels) from a node map."""
+    if isinstance(node, dict):
+        return {k: v for k, v in node.items() if k not in ("_id", "_labels")}
+    return {}
+
 
 @AdapterRegistry.register("grafeo")
 class GrafeoAdapter(BaseAdapter):
-    """Grafeo embedded graph database adapter."""
+    """Grafeo embedded graph database adapter.
+
+    Loads data with the batch APIs (``batch_create_nodes_with_props`` and
+    ``batch_create_edges``; lists of floats are stored as vectors), reads with
+    GQL, and runs Grafeo's native algorithms and HNSW vector index. Native
+    results use internal node IDs, which are mapped back to the benchmark's
+    ``id`` property.
+
+    Runs in Python (and is labelled a fallback): depth-limited DFS (the native
+    DFS has no depth limit), BFS and shortest paths restricted to one edge type,
+    and the directed (LDBC) clustering coefficient.
+    """
+
+    # algorithms.local_clustering_coefficient() ignores edge direction.
+    native_lcc_definitions = frozenset({"undirected"})
 
     def __init__(self) -> None:
         self._db: Any = None
+        self._path: Path | None = None
         self._connected = False
+        self._vector_metric = "cosine"
 
     @property
     def name(self) -> str:
@@ -46,41 +94,54 @@ class GrafeoAdapter(BaseAdapter):
             import grafeo
 
             return grafeo.__version__
-        except Exception:
+        except ImportError:
             return "unknown"
 
     @property
     def is_embedded(self) -> bool:
         return True
 
+    @property
+    def path(self) -> Path | None:
+        """Database file, or None for an in-memory database."""
+        return self._path
+
     def connect(self, *, uri: str | None = None, **kwargs: Any) -> None:
         try:
             from grafeo import GrafeoDB
         except ImportError as e:
-            msg = "grafeo package not installed. Install with: pip install grafeo"
-            raise ImportError(msg) from e
+            raise ImportError(_INSTALL_HINT) from e
 
         path = uri or kwargs.get("path") or get_env("GRAFEO_PATH")
-
-        # Handle in-memory mode (empty path, None, or :memory:)
         if path and path != ":memory:":
-            Path(path).mkdir(parents=True, exist_ok=True)
-            self._db = GrafeoDB(path)
+            self._path = _database_file(path)
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            self._db = GrafeoDB(str(self._path))
         else:
-            self._db = GrafeoDB()  # In-memory
-
+            self._path = None
+            self._db = GrafeoDB()
         self._connected = True
 
     def disconnect(self) -> None:
+        if self._db is not None:
+            self._db.close()
         self._db = None
         self._connected = False
 
     def clear(self) -> None:
-        # Reinitialize to avoid storage degradation from repeated delete/insert
-        # cycles (Grafeo's internal ID space grows after DETACH DELETE, causing
-        # progressively slower MATCH lookups).
+        if self._path is not None:
+            # A file database keeps its file and its index; only the data goes.
+            self._db.execute("MATCH (n) DETACH DELETE n")
+            return
+        # In memory: drop the database and start a new one, as the FalkorDB and
+        # Grafeo Server adapters drop and recreate their graph.
         from grafeo import GrafeoDB
+
+        if self._db is not None:
+            self._db.close()
         self._db = GrafeoDB()
+
+    # ── Writes ──────────────────────────────────────────────────
 
     def insert_nodes(
         self,
@@ -91,57 +152,22 @@ class GrafeoAdapter(BaseAdapter):
     ) -> int:
         if not nodes:
             return 0
-        # Use create_node() API directly — UNWIND with params produces NULL
-        # properties in Grafeo 0.5.6 (known engine bug).
+        labels = [label, _NODE_LABEL] if label != _NODE_LABEL else [_NODE_LABEL]
         count = 0
-        labels = [label, "Node"] if label != "Node" else ["Node"]
-        for node in nodes:
-            self._db.create_node(labels, dict(node))
-            count += 1
-
-        if hasattr(self._db, "create_property_index"):
-            try:
-                self._db.create_property_index("id")
-            except Exception:
-                pass  # Index already exists
-
+        for start in range(0, len(nodes), batch_size):
+            batch = [dict(node) for node in nodes[start : start + batch_size]]
+            count += len(self._db.batch_create_nodes_with_props(labels, batch))
+        # FAIRNESS.md allows one index on `id`, created after the insert.
+        if not self._db.has_property_index("id"):
+            self._db.create_property_index("id")
         return count
 
-    @staticmethod
-    def _strip_internal(node: Any) -> dict[str, Any]:
-        """Strip internal fields (_id, _labels) from a node map."""
-        if isinstance(node, dict):
-            return {k: v for k, v in node.items()
-                    if k not in ("_id", "_labels")}
-        return {}
-
-    def get_node(self, node_id: str) -> dict[str, Any] | None:
-        # Grafeo >=0.5.6: RETURN n yields full node map {_id, _labels, ...props}
-        result = self._db.execute(
-            "MATCH (n:Node {id: $id}) RETURN n", {"id": node_id},
-        )
-        for row in result:
-            return self._strip_internal(row["n"])
-        return None
-
     def update_node(self, node_id: str, properties: dict[str, Any]) -> bool:
-        # Build SET clause for properties
-        set_clauses = ", ".join(f"n.{k} = ${k}" for k in properties.keys())
-        query = f"MATCH (n:Node {{id: $id}}) SET {set_clauses} RETURN n"
-        params = {"id": node_id, **properties}
-        result = self._db.execute(query, params)
-        # Check if any rows were returned (node was found and updated)
-        for _ in result:
-            return True
-        return False
-
-    def get_nodes_by_label(
-        self, label: str, *, limit: int = 100,
-    ) -> list[dict[str, Any]]:
         result = self._db.execute(
-            f"MATCH (n:{label}) RETURN n LIMIT {limit}"
+            "MATCH (n:Node {id: $id}) SET n += $props RETURN n.id AS id",
+            {"id": node_id, "props": dict(properties)},
         )
-        return [self._strip_internal(row["n"]) for row in result]
+        return any(True for _ in result)
 
     def insert_edges(
         self,
@@ -149,37 +175,94 @@ class GrafeoAdapter(BaseAdapter):
         *,
         batch_size: int = 1000,
     ) -> int:
+        """Insert edges between existing nodes and return how many were created.
+
+        Resolves the distinct endpoints through the `id` index with one
+        ``UNWIND ... MATCH`` query per batch, then creates the edges with
+        ``batch_create_edges``: the same work as a Cypher ``UNWIND`` + ``MATCH``
+        + ``CREATE``, split in two calls. Like that query, an edge whose endpoint
+        does not exist is not created and not counted.
+        """
         if not edges:
             return 0
-
-        # Build app ID → internal node ID mapping once
-        result = self._db.execute(
-            "MATCH (n:Node) RETURN n.id AS id, id(n) AS nid",
-        )
-        nid_cache = {row["id"]: row["nid"] for row in result}
-
-        # Use create_edge() API directly — UNWIND MATCH with params
-        # can't resolve properties in Grafeo 0.5.6 (known engine bug).
+        endpoints = {key for src, tgt, _, _ in edges for key in (src, tgt)}
+        nids = self._internal_ids(endpoints, batch_size=batch_size)
+        rows = [
+            (nids[src], nids[tgt], edge_type, dict(props))
+            for src, tgt, edge_type, props in edges
+            if src in nids and tgt in nids
+        ]
         count = 0
-        for src, tgt, edge_type, props in edges:
-            src_nid = nid_cache.get(src)
-            tgt_nid = nid_cache.get(tgt)
-            if src_nid is not None and tgt_nid is not None:
-                try:
-                    self._db.create_edge(src_nid, tgt_nid, edge_type, props)
-                    count += 1
-                except Exception:
-                    pass
+        for start in range(0, len(rows), batch_size):
+            count += len(self._db.batch_create_edges(rows[start : start + batch_size]))
         return count
 
-    def get_neighbors(self, node_id: str, *, edge_type: str | None = None) -> list[str]:
-        if edge_type:
-            query = f"MATCH (n:Node {{id: $id}})-[:{edge_type}]->(m) RETURN m.id AS id"
-        else:
-            query = "MATCH (n:Node {id: $id})-[]->(m) RETURN m.id AS id"
+    # ── Reads ───────────────────────────────────────────────────
 
-        result = self._db.execute(query, {"id": node_id})
-        return [row["id"] for row in result if row["id"]]
+    def get_node(self, node_id: str) -> dict[str, Any] | None:
+        for row in self._db.execute("MATCH (n:Node {id: $id}) RETURN n", {"id": node_id}):
+            return _strip_internal(row["n"])
+        return None
+
+    def get_nodes_by_label(self, label: str, *, limit: int = 100) -> list[dict[str, Any]]:
+        result = self._db.execute(f"MATCH (n:{label}) RETURN n LIMIT $limit", {"limit": int(limit)})
+        return [_strip_internal(row["n"]) for row in result]
+
+    def get_neighbors(self, node_id: str, *, edge_type: str | None = None) -> list[str]:
+        rel = f"[:{edge_type}]" if edge_type else "[]"
+        result = self._db.execute(f"MATCH (n:Node {{id: $id}})-{rel}->(m) RETURN m.id AS id", {"id": node_id})
+        return [row["id"] for row in result if row["id"] is not None]
+
+    def execute_query(self, query: str, *, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        result = self._db.execute(query, params or {})
+        return [dict(row) for row in result]
+
+    def count_nodes(self, *, label: str | None = None) -> int:
+        query = f"MATCH (n:{label}) RETURN count(n) AS count" if label else "MATCH (n) RETURN count(n) AS count"
+        for row in self._db.execute(query):
+            return row["count"]
+        return 0
+
+    def count_edges(self, *, edge_type: str | None = None) -> int:
+        rel = f"[r:{edge_type}]" if edge_type else "[r]"
+        for row in self._db.execute(f"MATCH ()-{rel}->() RETURN count(r) AS count"):
+            return row["count"]
+        return 0
+
+    # ── ID mapping ──────────────────────────────────────────────
+
+    def _internal_id(self, app_id: str) -> int | None:
+        for row in self._db.execute(_LOOKUP_NID, {"id": app_id}):
+            return row["nid"]
+        return None
+
+    def _internal_ids(self, app_ids: Iterable[str], *, batch_size: int = 1000) -> dict[str, int]:
+        """Map benchmark IDs to internal node IDs (missing IDs are left out)."""
+        keys = list(app_ids)
+        found: dict[str, int] = {}
+        for start in range(0, len(keys), batch_size):
+            for row in self._db.execute(_LOOKUP_NIDS, {"keys": keys[start : start + batch_size]}):
+                found[row["key"]] = row["nid"]
+        return found
+
+    def _app_ids(self, nids: Iterable[int]) -> dict[int, str]:
+        """Map internal node IDs to benchmark IDs with one batch read."""
+        nid_list = list(nids)
+        values = self._db.get_property_batch(nid_list, "id")
+        return {nid: str(value if value is not None else nid) for nid, value in zip(nid_list, values, strict=True)}
+
+    def _by_app_id(self, values: dict[int, Any]) -> dict[str, Any]:
+        app = self._app_ids(values)
+        return {app[nid]: value for nid, value in values.items()}
+
+    def _groups(self, labels: dict[int, Any]) -> list[set[str]]:
+        """Turn a node-to-label map into sets of benchmark IDs."""
+        groups: dict[Any, set[str]] = {}
+        for app_id, label in self._by_app_id(labels).items():
+            groups.setdefault(label, set()).add(app_id)
+        return list(groups.values())
+
+    # ── Traversal ───────────────────────────────────────────────
 
     def traverse_bfs(
         self,
@@ -188,51 +271,14 @@ class GrafeoAdapter(BaseAdapter):
         max_depth: int = 3,
         edge_type: str | None = None,
     ) -> list[str]:
-        # Native BFS doesn't support edge_type filtering — use fallback
-        if edge_type:
+        # The native BFS follows every edge type, so filtering needs the fallback.
+        start_nid = None if edge_type else self._internal_id(start)
+        if start_nid is None or not hasattr(self._db.algorithms, "bfs_layers"):
             return super().traverse_bfs(start, max_depth=max_depth, edge_type=edge_type)
-        try:
-            if hasattr(self._db, "algorithms") and hasattr(self._db.algorithms, "bfs"):
-                start_result = self._db.execute("MATCH (n:Node {id: $id}) RETURN id(n) as nid", {"id": start})
-                for row in start_result:
-                    start_nid = row["nid"]
-                    result = self._db.algorithms.bfs(start_nid, max_depth=max_depth)
-                    # Map internal IDs back to app IDs
-                    mapping = self._db.execute("MATCH (n:Node) RETURN id(n) AS nid, n.id AS app_id")
-                    nid_to_app = {r["nid"]: r["app_id"] for r in mapping}
-                    return [nid_to_app.get(n, str(n)) for n in result]
-        except Exception:
-            pass
-
-        return super().traverse_bfs(start, max_depth=max_depth, edge_type=edge_type)
-
-    def traverse_dfs(
-        self,
-        start: str,
-        *,
-        max_depth: int = 3,
-        edge_type: str | None = None,
-    ) -> list[str]:
-        # Native DFS doesn't support edge_type filtering — use fallback
-        if edge_type:
-            return super().traverse_dfs(start, max_depth=max_depth, edge_type=edge_type)
-        try:
-            if hasattr(self._db, "algorithms") and hasattr(self._db.algorithms, "dfs"):
-                start_result = self._db.execute(
-                    "MATCH (n:Node {id: $id}) RETURN id(n) as nid", {"id": start},
-                )
-                for row in start_result:
-                    start_nid = row["nid"]
-                    result = self._db.algorithms.dfs(start_nid, max_depth=max_depth)
-                    mapping = self._db.execute(
-                        "MATCH (n:Node) RETURN id(n) AS nid, n.id AS app_id",
-                    )
-                    nid_to_app = {r["nid"]: r["app_id"] for r in mapping}
-                    return [nid_to_app.get(n, str(n)) for n in result]
-        except Exception:
-            pass
-
-        return super().traverse_dfs(start, max_depth=max_depth, edge_type=edge_type)
+        layers = self._db.algorithms.bfs_layers(start_nid)[: max_depth + 1]
+        visited = [nid for layer in layers for nid in layer]
+        app = self._app_ids(visited)
+        return [app[nid] for nid in visited]
 
     def shortest_path(
         self,
@@ -242,75 +288,36 @@ class GrafeoAdapter(BaseAdapter):
         edge_type: str | None = None,
         weighted: bool = False,
     ) -> list[str] | None:
-        try:
-            if hasattr(self._db, "algorithms"):
-                src_result = self._db.execute("MATCH (n:Node {id: $id}) RETURN id(n) as nid", {"id": source})
-                tgt_result = self._db.execute("MATCH (n:Node {id: $id}) RETURN id(n) as nid", {"id": target})
+        if edge_type:
+            # Native Dijkstra follows every edge type: filter with a BFS instead.
+            return self._bfs_path(source, target, edge_type)
+        nids = self._internal_ids([source, target])
+        if source not in nids or target not in nids:
+            return None
+        found = self._db.algorithms.dijkstra(nids[source], nids[target], weight="weight" if weighted else None)
+        if found is None:
+            return None
+        _, path = found
+        app = self._app_ids(path)
+        return [app[nid] for nid in path]
 
-                src_nid = None
-                tgt_nid = None
-                for row in src_result:
-                    src_nid = row["nid"]
-                for row in tgt_result:
-                    tgt_nid = row["nid"]
-
-                if src_nid is not None and tgt_nid is not None:
-                    if weighted and hasattr(self._db.algorithms, "dijkstra"):
-                        result = self._db.algorithms.dijkstra(src_nid, tgt_nid)
-                    elif hasattr(self._db.algorithms, "shortest_path"):
-                        result = self._db.algorithms.shortest_path(src_nid, tgt_nid)
-                    else:
-                        result = None
-
-                    if result:
-                        return [str(n) for n in result]
-        except Exception:
-            pass
-
-        from collections import deque
-
+    def _bfs_path(self, source: str, target: str, edge_type: str) -> list[str] | None:
+        self._record_fallback("shortest_path")
         visited: set[str] = set()
-        queue: deque[tuple[str, list[str]]] = deque([(source, [source])])
-
+        queue: deque[list[str]] = deque([[source]])
         while queue:
-            current, path = queue.popleft()
+            path = queue.popleft()
+            current = path[-1]
             if current == target:
                 return path
             if current in visited:
                 continue
             visited.add(current)
-
-            for neighbor in self.get_neighbors(current, edge_type=edge_type):
-                if neighbor not in visited:
-                    queue.append((neighbor, path + [neighbor]))
-
+            neighbors = self.get_neighbors(current, edge_type=edge_type)
+            queue.extend([*path, neighbor] for neighbor in neighbors if neighbor not in visited)
         return None
 
-    def execute_query(self, query: str, *, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-        result = self._db.execute(query, params or {})
-        return [dict(row) for row in result]
-
-    def count_nodes(self, *, label: str | None = None) -> int:
-        if label:
-            query = f"MATCH (n:{label}) RETURN count(n) AS count"
-        else:
-            query = "MATCH (n) RETURN count(n) AS count"
-
-        result = self._db.execute(query)
-        for row in result:
-            return row["count"]
-        return 0
-
-    def count_edges(self, *, edge_type: str | None = None) -> int:
-        if edge_type:
-            query = f"MATCH ()-[r:{edge_type}]->() RETURN count(r) AS count"
-        else:
-            query = "MATCH ()-[r]->() RETURN count(r) AS count"
-
-        result = self._db.execute(query)
-        for row in result:
-            return row["count"]
-        return 0
+    # ── Algorithms (native, results keyed by benchmark ID) ──────
 
     def pagerank(
         self,
@@ -319,112 +326,106 @@ class GrafeoAdapter(BaseAdapter):
         max_iterations: int = 100,
         tolerance: float = 1e-6,
     ) -> dict[str, float]:
-        if hasattr(self._db, "algorithms") and hasattr(self._db.algorithms, "pagerank"):
-            result = self._db.algorithms.pagerank(damping=damping, max_iterations=max_iterations, tolerance=tolerance)
-            return {str(k): v for k, v in result.items()}
-        raise NotImplementedError(f"{self.name} does not support native PageRank")
+        if not hasattr(self._db.algorithms, "pagerank"):
+            return super().pagerank(damping=damping, max_iterations=max_iterations, tolerance=tolerance)
+        scores = self._db.algorithms.pagerank(damping=damping, max_iterations=max_iterations, tolerance=tolerance)
+        return {app_id: float(score) for app_id, score in self._by_app_id(scores).items()}
 
     def community_detection(self, *, algorithm: str = "louvain") -> list[set[str]]:
-        if hasattr(self._db, "algorithms"):
-            if algorithm == "louvain" and hasattr(self._db.algorithms, "louvain"):
-                result = self._db.algorithms.louvain()
-                return [{str(n) for n in community} for community in result]
-            elif algorithm == "label_propagation" and hasattr(self._db.algorithms, "label_propagation"):
-                result = self._db.algorithms.label_propagation()
-                # label_propagation returns dict[node_id, label] - convert to list of sets
-                if isinstance(result, dict):
-                    communities: dict[int, set[str]] = {}
-                    for node_id, label in result.items():
-                        if label not in communities:
-                            communities[label] = set()
-                        communities[label].add(str(node_id))
-                    return list(communities.values())
-                return [{str(n) for n in community} for community in result]
-        raise NotImplementedError(f"{self.name} does not support native community detection with {algorithm}")
+        algorithms = self._db.algorithms
+        if algorithm == "louvain" and hasattr(algorithms, "louvain"):
+            # louvain() returns {"communities": {node: community}, "modularity": ..., ...}
+            return self._groups(algorithms.louvain()["communities"])
+        if algorithm == "label_propagation" and hasattr(algorithms, "label_propagation"):
+            return self._groups(algorithms.label_propagation())
+        return super().community_detection(algorithm=algorithm)
 
     def bfs_levels(self, source: str) -> dict[str, int]:
-        """LDBC BFS using native Grafeo bfs_layers."""
-        if hasattr(self._db, "algorithms") and hasattr(self._db.algorithms, "bfs_layers"):
-            src_result = self._db.execute("MATCH (n:Node {id: $id}) RETURN id(n) as nid", {"id": source})
-            for row in src_result:
-                src_nid = row["nid"]
-                # bfs_layers returns list of lists: [[level0_nodes], [level1_nodes], ...]
-                layers = self._db.algorithms.bfs_layers(src_nid)
-                result: dict[str, int] = {}
-                for depth, layer in enumerate(layers):
-                    for node_id in layer:
-                        result[str(node_id)] = depth
-                return result
-        return super().bfs_levels(source)
+        """LDBC BFS with native bfs_layers; unreachable vertices are left out."""
+        src = self._internal_id(source)
+        if src is None or not hasattr(self._db.algorithms, "bfs_layers"):
+            return super().bfs_levels(source)
+        levels = {nid: depth for depth, layer in enumerate(self._db.algorithms.bfs_layers(src)) for nid in layer}
+        return self._by_app_id(levels)
 
     def weakly_connected_components(self) -> list[set[str]]:
-        """LDBC WCC using native Grafeo connected_components."""
-        if hasattr(self._db, "algorithms") and hasattr(self._db.algorithms, "connected_components"):
-            result = self._db.algorithms.connected_components()
-            # Returns dict[node_id, component_id] - convert to list of sets
-            if isinstance(result, dict):
-                components: dict[int, set[str]] = {}
-                for node_id, comp_id in result.items():
-                    if comp_id not in components:
-                        components[comp_id] = set()
-                    components[comp_id].add(str(node_id))
-                return list(components.values())
-            return [{str(n) for n in comp} for comp in result]
-        return super().weakly_connected_components()
+        """LDBC WCC with native connected_components (edges taken as undirected)."""
+        if not hasattr(self._db.algorithms, "connected_components"):
+            return super().weakly_connected_components()
+        return self._groups(self._db.algorithms.connected_components())
 
-    def sssp(
-        self, source: str, *, weight_attr: str = "weight",
-    ) -> dict[str, float]:
-        """LDBC SSSP using native Grafeo sssp (v0.5.6+)."""
-        if not (
-            hasattr(self._db, "algorithms")
-            and hasattr(self._db.algorithms, "sssp")
+    def sssp(self, source: str, *, weight_attr: str = "weight") -> dict[str, float]:
+        """LDBC SSSP with native Dijkstra; unreachable vertices are left out.
+
+        ``algorithms.sssp()`` keys its result by the ``name`` property, so the
+        adapter uses ``dijkstra()``, which keys it by node.
+        """
+        src = self._internal_id(source)
+        if src is None or not hasattr(self._db.algorithms, "dijkstra"):
+            return super().sssp(source, weight_attr=weight_attr)
+        distances = self._db.algorithms.dijkstra(src, weight=weight_attr)
+        return {app_id: float(distance) for app_id, distance in self._by_app_id(distances).items()}
+
+    def local_clustering_coefficient(self, *, directed: bool = True) -> dict[str, float]:
+        """LCC with native local_clustering_coefficient (undirected only).
+
+        Grafeo, like Neo4j GDS, computes the undirected coefficient; the LDBC
+        directed definition uses the BaseAdapter fallback.
+        """
+        definition = "directed" if directed else "undirected"
+        if definition not in self.native_lcc_definitions or not hasattr(
+            self._db.algorithms, "local_clustering_coefficient"
         ):
-            return super().sssp(source, weight_attr=weight_attr)
+            return super().local_clustering_coefficient(directed=directed)
+        coefficients = self._db.algorithms.local_clustering_coefficient()
+        return {app_id: float(value) for app_id, value in self._by_app_id(coefficients).items()}
 
-        # Resolve app ID → internal node ID
-        src_result = self._db.execute(
-            "MATCH (n:Node {id: $id}) RETURN id(n) AS nid",
-            {"id": source},
+    # ── Native vector search (HNSW) ─────────────────────────────
+
+    def create_vector_index(
+        self,
+        label: str,
+        property_name: str,
+        *,
+        dimensions: int = 128,
+        metric: str = "cosine",
+        m: int | None = None,
+        ef_construction: int | None = None,
+        quantization: str | None = None,
+    ) -> None:
+        """Build Grafeo's HNSW index over the vectors already loaded (and later ones)."""
+        if not hasattr(self._db, "create_vector_index"):
+            return super().create_vector_index(label, property_name, dimensions=dimensions, metric=metric)
+        self._db.create_vector_index(
+            label,
+            property_name,
+            dimensions=dimensions,
+            metric=metric,
+            m=m,
+            ef_construction=ef_construction,
+            quantization=quantization,
         )
-        src_nid = None
-        for row in src_result:
-            src_nid = row["nid"]
-        if src_nid is None:
-            return super().sssp(source, weight_attr=weight_attr)
+        self._vector_metric = metric
+        return None
 
-        # Build internal ID → app ID mapping
-        mapping = self._db.execute(
-            "MATCH (n:Node) RETURN id(n) AS nid, n.id AS app_id"
-        )
-        nid_to_app = {
-            row["nid"]: str(row["app_id"]) for row in mapping
-        }
+    def vector_ann_search(
+        self,
+        query_vector: list[float],
+        *,
+        label: str = "VectorNode",
+        property_name: str = "embedding",
+        k: int = 10,
+        ef: int | None = None,
+    ) -> list[tuple[str, float]]:
+        """HNSW k-NN through db.vector_search(); scores are 1 - cosine distance."""
+        if not hasattr(self._db, "vector_search"):
+            return super().vector_ann_search(query_vector, label=label, property_name=property_name, k=k, ef=ef)
+        hits = self._db.vector_search(label, property_name, query_vector, k, ef=ef)
+        app = self._app_ids(nid for nid, _ in hits)
+        cosine = self._vector_metric == "cosine"
+        return [(app[nid], 1.0 - distance if cosine else -distance) for nid, distance in hits]
 
-        distances = self._db.algorithms.sssp(
-            source=str(src_nid), weight_attr=weight_attr,
-        )
-        if isinstance(distances, dict):
-            return {
-                nid_to_app.get(k, str(k)): float(v)
-                for k, v in distances.items()
-            }
-        # Handle iterable of (node_id, distance) tuples
-        return {
-            nid_to_app.get(k, str(k)): float(v)
-            for k, v in distances
-        }
-
-    def local_clustering_coefficient(self) -> dict[str, float]:
-        """LDBC LCC using native Grafeo local_clustering_coefficient."""
-        if hasattr(self._db, "algorithms") and hasattr(self._db.algorithms, "local_clustering_coefficient"):
-            result = self._db.algorithms.local_clustering_coefficient()
-            return {str(k): float(v) for k, v in result.items()}
-        return super().local_clustering_coefficient()
-
-    # NOTE: create_vector_index() and vector_search() use the brute-force
-    # fallback from BaseAdapter. Grafeo has native HNSW vector support in
-    # Rust, but the Python bindings don't yet expose vector type conversion
-    # or CREATE VECTOR INDEX DDL. Once the bindings are updated (see
-    # grafeo/.claude/todo/4_language_bindings/improve-vector-support.md),
-    # override these methods with native GQL implementations.
+    def delete_nodes(self, node_ids: Sequence[str]) -> int:
+        """Delete nodes and their edges (GQL DETACH DELETE); returns how many were deleted."""
+        result = self._db.execute(_DELETE_NODES, {"keys": list(node_ids)})
+        return int(result.counters.get("nodes_deleted", 0))

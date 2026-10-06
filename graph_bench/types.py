@@ -13,12 +13,27 @@ from enum import IntEnum, auto
 from typing import Any
 
 __all__ = [
-    "Status",
-    "TimingStats",
+    "UNSUPPORTED_PREFIX",
+    "BenchmarkResult",
     "Metrics",
     "ScaleConfig",
-    "BenchmarkResult",
+    "Status",
+    "TimingStats",
+    "UnsupportedOperation",
 ]
+
+UNSUPPORTED_PREFIX = "unsupported: "
+
+
+class UnsupportedOperation(NotImplementedError):
+    """The database has no native implementation, and the benchmark must not fall back.
+
+    A benchmark that raises it is recorded as SKIPPED (see ``ResultCollector``),
+    with the message after ``UNSUPPORTED_PREFIX`` as the reason.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(UNSUPPORTED_PREFIX + reason)
 
 
 class Status(IntEnum):

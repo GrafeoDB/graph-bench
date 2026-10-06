@@ -181,6 +181,22 @@ class BenchmarkOrchestrator:
                 result.append(bench_cls())
         return result
 
+    def _reconnect_adapter(self, adapter: GraphDatabaseAdapter) -> None:
+        """Disconnect and reconnect an adapter to release native memory.
+
+        Some embedded databases (e.g. LadybugDB) attach native memory to the
+        connection object that Python's GC cannot reclaim while the connection
+        is open.  Cycling the connection between benchmarks keeps memory
+        measurements accurate and prevents unbounded growth.
+        """
+        try:
+            adapter.disconnect()
+        except Exception:
+            pass
+        import gc
+        gc.collect()
+        adapter.connect()
+
     def _run_adapter_benchmarks(
         self,
         adapter: GraphDatabaseAdapter,
@@ -191,7 +207,11 @@ class BenchmarkOrchestrator:
         """Run all benchmarks for a single adapter."""
         timeout = self._config.timeout_override or scale.timeout_seconds
 
-        for benchmark in benchmarks:
+        for i, benchmark in enumerate(benchmarks):
+            # Reconnect between benchmarks to release native memory
+            if i > 0:
+                self._reconnect_adapter(adapter)
+
             if self._progress_callback:
                 self._progress_callback(adapter.name, benchmark.name, "running")
 

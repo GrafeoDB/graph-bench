@@ -103,7 +103,7 @@ class HybridBenchmarkBase(BaseBenchmark):
 
         - Nodes: VectorNode with {id, embedding, cluster}
         - Edges: SIMILAR (intra-cluster), RELATED (cross-cluster)
-        - Vector index on embedding property
+        - No vector index: the searches use the scan every adapter shares
         """
         adapter.clear()
         self._rng = random.Random(self._seed)
@@ -127,15 +127,8 @@ class HybridBenchmarkBase(BaseBenchmark):
                 "cluster": cluster_idx,
             })
         self._node_ids = [n["id"] for n in nodes]
+        # No vector index: vector_search() is the brute-force scan for every adapter.
         adapter.insert_nodes(nodes, label="VectorNode")
-
-        # Create vector index
-        adapter.create_vector_index(
-            "VectorNode",
-            "embedding",
-            dimensions=self._dimensions,
-            metric="cosine",
-        )
 
         # Create intra-cluster SIMILAR edges
         edges: list[tuple[str, str, str, dict[str, Any]]] = []

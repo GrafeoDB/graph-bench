@@ -6,7 +6,7 @@ Command-line interface for graph-bench.
 """
 
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 try:
     import typer
@@ -60,10 +60,36 @@ if typer is not None:
                 help="Run comprehensive suite: SNB (small/medium/large), Graph Analytics (medium), Concurrent (small)",
             ),
         ] = False,
+        ann_k: Annotated[int | None, typer.Option("--ann-k", help="ANN: neighbours per query (recall@k)")] = None,
+        ann_m: Annotated[int | None, typer.Option("--ann-m", help="ANN: HNSW links per node")] = None,
+        ann_ef_construction: Annotated[
+            int | None, typer.Option("--ann-ef-construction", help="ANN: HNSW build beam width")
+        ] = None,
+        ann_ef: Annotated[int | None, typer.Option("--ann-ef", help="ANN: HNSW search beam width")] = None,
+        ann_quantization: Annotated[
+            str | None, typer.Option("--ann-quantization", help="ANN: none, scalar, binary or product")
+        ] = None,
+        ann_sweep: Annotated[
+            bool, typer.Option("--ann-sweep", help="ANN: also measure recall and latency over a range of ef")
+        ] = False,
+        ann_sweep_ef: Annotated[
+            str | None, typer.Option("--ann-sweep-ef", help="ANN: ef values of the sweep (comma-separated)")
+        ] = None,
+        ann_delete_fraction: Annotated[
+            float | None, typer.Option("--ann-delete-fraction", help="ANN: share of vectors vector_ann_delete removes")
+        ] = None,
+        ann_queries: Annotated[int | None, typer.Option("--ann-queries", help="ANN: queries per iteration")] = None,
     ) -> None:
-        """Run benchmarks on graph databases."""
+        """Run benchmarks on graph databases.
+
+        Grafeo-focused examples:
+
+            graph-bench run -d grafeo -c vector_ann --ann-sweep -f markdown
+            graph-bench run -d grafeo,grafeo-server -c ldbc_graphanalytics -f markdown
+        """
         from graph_bench.adapters import AdapterRegistry
         from graph_bench.benchmarks import BenchmarkRegistry
+        from graph_bench.benchmarks.vector import DEFAULT_ANN_SWEEP, configure_ann
         from graph_bench.config import get_scale
         from graph_bench.reporting import CsvExporter, JsonExporter, MarkdownExporter, ResultCollector
         from graph_bench.reporting.template import TemplateExporter
@@ -72,6 +98,32 @@ if typer is not None:
         db_list = databases.split(",") if databases else AdapterRegistry.list()
         bench_list = benchmarks.split(",") if benchmarks else None
         categories = category.split(",") if category else None
+        if categories:
+            # "vector" was the scan family's category before the ANN family existed.
+            categories = ["vector_scan" if c == "vector" else c for c in categories]
+
+        ann_changes: dict[str, Any] = {
+            key: value
+            for key, value in {
+                "k": ann_k,
+                "m": ann_m,
+                "ef_construction": ann_ef_construction,
+                "ef": ann_ef,
+                "delete_fraction": ann_delete_fraction,
+                "queries": ann_queries,
+            }.items()
+            if value is not None
+        }
+        if ann_quantization is not None:
+            ann_changes["quantization"] = None if ann_quantization == "none" else ann_quantization
+        if ann_sweep_ef:
+            ann_changes["sweep"] = tuple(int(ef) for ef in ann_sweep_ef.split(","))
+        elif ann_sweep:
+            ann_changes["sweep"] = DEFAULT_ANN_SWEEP
+        if ann_changes:
+            settings = configure_ann(**ann_changes)
+            if verbose:
+                typer.echo(f"ANN settings: {settings}")
 
         if verbose:
             typer.echo(f"Databases: {', '.join(db_list)}")
@@ -387,6 +439,8 @@ if typer is not None:
                     ),
                     throughput=m.get("throughput", 0.0),
                     items_processed=m.get("items_processed", 0),
+                    memory_bytes=m.get("memory_bytes"),
+                    custom=m.get("custom", {}),
                 )
 
             result = BenchmarkResult(

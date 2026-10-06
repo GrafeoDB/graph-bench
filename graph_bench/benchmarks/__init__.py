@@ -13,7 +13,8 @@ Benchmarks are organized by category:
 - ldbc_graphanalytics: LDBC Graphanalytics standard benchmarks (BFS, PR, WCC, CDLP, LCC, SSSP)
 - ldbc_snb: LDBC SNB Interactive workload benchmarks (IS1, IS3, IC1, IC2, IC3, IC6)
 - concurrent: Concurrent ACID tests (throughput scaling, lost updates, read-after-write)
-- vector: Vector search benchmarks (insert, k-NN, batch search, recall)
+- vector_scan: Brute-force vector search, the same for every adapter (insert, k-NN, batch, recall)
+- vector_ann: Native approximate vector search only (build, k-NN with recall@k, recall after deletes)
 - hybrid: Hybrid graph+vector benchmarks (graph-to-vector, vector-to-graph)
 
     from graph_bench.benchmarks import NodeInsertionBenchmark, BFSBenchmark
@@ -56,6 +57,7 @@ from graph_bench.benchmarks.write import (
     PropertyUpdateBenchmark,
 )
 from graph_bench.benchmarks.graphanalytics import (
+    LccUndirectedBenchmark,
     LdbcBfsBenchmark,
     LdbcCdlpBenchmark,
     LdbcLccBenchmark,
@@ -84,10 +86,17 @@ from graph_bench.benchmarks.concurrent import (
     MixedWorkloadBenchmark as ConcurrentMixedWorkloadBenchmark,
 )
 from graph_bench.benchmarks.vector import (
+    VectorAnnBuildBenchmark,
+    VectorAnnDeleteBenchmark,
+    VectorAnnKnnBenchmark,
     VectorBatchSearchBenchmark,
     VectorInsertBenchmark,
     VectorKnnBenchmark,
     VectorRecallBenchmark,
+    VectorScanBatchSearchBenchmark,
+    VectorScanInsertBenchmark,
+    VectorScanKnnBenchmark,
+    VectorScanRecallBenchmark,
 )
 from graph_bench.benchmarks.hybrid import (
     HybridGraphToVectorBenchmark,
@@ -145,6 +154,7 @@ __all__ = [
     "MixedWorkloadBenchmark",
     "PropertyUpdateBenchmark",
     # LDBC Graphanalytics
+    "LccUndirectedBenchmark",
     "LdbcBfsBenchmark",
     "LdbcCdlpBenchmark",
     "LdbcLccBenchmark",
@@ -169,11 +179,19 @@ __all__ = [
     "ReadAfterWriteBenchmark",
     "ThroughputScalingBenchmark",
     "ConcurrentMixedWorkloadBenchmark",
-    # Vector
+    # Vector scan (VectorInsert/Knn/BatchSearch/RecallBenchmark are the old names)
+    "VectorScanInsertBenchmark",
+    "VectorScanKnnBenchmark",
+    "VectorScanBatchSearchBenchmark",
+    "VectorScanRecallBenchmark",
     "VectorInsertBenchmark",
     "VectorKnnBenchmark",
     "VectorBatchSearchBenchmark",
     "VectorRecallBenchmark",
+    # Vector ANN
+    "VectorAnnBuildBenchmark",
+    "VectorAnnKnnBenchmark",
+    "VectorAnnDeleteBenchmark",
     # Hybrid
     "HybridGraphToVectorBenchmark",
     "HybridVectorToGraphBenchmark",

@@ -22,6 +22,7 @@ from graph_bench.adapters.nebula import NebulaGraphAdapter
 from graph_bench.adapters.neo4j import Neo4jAdapter
 from graph_bench.adapters.tugraph import TuGraphAdapter
 from graph_bench.adapters.turing import TuringDBAdapter
+from graph_bench.adapters.unidb import UniDBAdapter
 
 __all__ = [
     "AdapterRegistry",
@@ -37,4 +38,5 @@ __all__ = [
     "Neo4jAdapter",
     "TuGraphAdapter",
     "TuringDBAdapter",
+    "UniDBAdapter",
 ]

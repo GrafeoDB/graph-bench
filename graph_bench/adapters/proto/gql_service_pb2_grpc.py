@@ -55,10 +55,10 @@ class SessionServiceStub(object):
                 request_serializer=gql__service__pb2.ResetRequest.SerializeToString,
                 response_deserializer=gql__service__pb2.ResetResponse.FromString,
                 _registered_method=True)
-        self.Close = channel.unary_unary(
-                '/gql.SessionService/Close',
-                request_serializer=gql__service__pb2.CloseRequest.SerializeToString,
-                response_deserializer=gql__service__pb2.CloseResponse.FromString,
+        self.CloseSession = channel.unary_unary(
+                '/gql.SessionService/CloseSession',
+                request_serializer=gql__service__pb2.CloseSessionRequest.SerializeToString,
+                response_deserializer=gql__service__pb2.CloseSessionResponse.FromString,
                 _registered_method=True)
         self.Ping = channel.unary_unary(
                 '/gql.SessionService/Ping',
@@ -97,7 +97,7 @@ class SessionServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def Close(self, request, context):
+    def CloseSession(self, request, context):
         """Terminate the session. Rolls back any active transaction.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -129,10 +129,10 @@ def add_SessionServiceServicer_to_server(servicer, server):
                     request_deserializer=gql__service__pb2.ResetRequest.FromString,
                     response_serializer=gql__service__pb2.ResetResponse.SerializeToString,
             ),
-            'Close': grpc.unary_unary_rpc_method_handler(
-                    servicer.Close,
-                    request_deserializer=gql__service__pb2.CloseRequest.FromString,
-                    response_serializer=gql__service__pb2.CloseResponse.SerializeToString,
+            'CloseSession': grpc.unary_unary_rpc_method_handler(
+                    servicer.CloseSession,
+                    request_deserializer=gql__service__pb2.CloseSessionRequest.FromString,
+                    response_serializer=gql__service__pb2.CloseSessionResponse.SerializeToString,
             ),
             'Ping': grpc.unary_unary_rpc_method_handler(
                     servicer.Ping,
@@ -238,7 +238,7 @@ class SessionService(object):
             _registered_method=True)
 
     @staticmethod
-    def Close(request,
+    def CloseSession(request,
             target,
             options=(),
             channel_credentials=None,
@@ -251,9 +251,9 @@ class SessionService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/gql.SessionService/Close',
-            gql__service__pb2.CloseRequest.SerializeToString,
-            gql__service__pb2.CloseResponse.FromString,
+            '/gql.SessionService/CloseSession',
+            gql__service__pb2.CloseSessionRequest.SerializeToString,
+            gql__service__pb2.CloseSessionResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -521,10 +521,11 @@ class GqlService(object):
             _registered_method=True)
 
 
-class DatabaseServiceStub(object):
+class CatalogServiceStub(object):
     """============================================================================
-    DatabaseService
-    Manages database lifecycle. Requires appropriate privileges.
+    CatalogService
+    Manages the catalog hierarchy: schemas, graphs, and graph types.
+    Replaces DatabaseService with spec-aligned catalog model (sec 12).
     Errors are returned as gRPC Status codes.
     ============================================================================
 
@@ -536,107 +537,204 @@ class DatabaseServiceStub(object):
         Args:
             channel: A grpc.Channel.
         """
-        self.ListDatabases = channel.unary_unary(
-                '/gql.DatabaseService/ListDatabases',
-                request_serializer=gql__service__pb2.ListDatabasesRequest.SerializeToString,
-                response_deserializer=gql__service__pb2.ListDatabasesResponse.FromString,
+        self.ListSchemas = channel.unary_unary(
+                '/gql.CatalogService/ListSchemas',
+                request_serializer=gql__service__pb2.ListSchemasRequest.SerializeToString,
+                response_deserializer=gql__service__pb2.ListSchemasResponse.FromString,
                 _registered_method=True)
-        self.CreateDatabase = channel.unary_unary(
-                '/gql.DatabaseService/CreateDatabase',
-                request_serializer=gql__service__pb2.CreateDatabaseRequest.SerializeToString,
-                response_deserializer=gql__service__pb2.CreateDatabaseResponse.FromString,
+        self.CreateSchema = channel.unary_unary(
+                '/gql.CatalogService/CreateSchema',
+                request_serializer=gql__service__pb2.CreateSchemaRequest.SerializeToString,
+                response_deserializer=gql__service__pb2.CreateSchemaResponse.FromString,
                 _registered_method=True)
-        self.DeleteDatabase = channel.unary_unary(
-                '/gql.DatabaseService/DeleteDatabase',
-                request_serializer=gql__service__pb2.DeleteDatabaseRequest.SerializeToString,
-                response_deserializer=gql__service__pb2.DeleteDatabaseResponse.FromString,
+        self.DropSchema = channel.unary_unary(
+                '/gql.CatalogService/DropSchema',
+                request_serializer=gql__service__pb2.DropSchemaRequest.SerializeToString,
+                response_deserializer=gql__service__pb2.DropSchemaResponse.FromString,
                 _registered_method=True)
-        self.GetDatabaseInfo = channel.unary_unary(
-                '/gql.DatabaseService/GetDatabaseInfo',
-                request_serializer=gql__service__pb2.GetDatabaseInfoRequest.SerializeToString,
-                response_deserializer=gql__service__pb2.GetDatabaseInfoResponse.FromString,
+        self.ListGraphs = channel.unary_unary(
+                '/gql.CatalogService/ListGraphs',
+                request_serializer=gql__service__pb2.ListGraphsRequest.SerializeToString,
+                response_deserializer=gql__service__pb2.ListGraphsResponse.FromString,
+                _registered_method=True)
+        self.CreateGraph = channel.unary_unary(
+                '/gql.CatalogService/CreateGraph',
+                request_serializer=gql__service__pb2.CreateGraphRequest.SerializeToString,
+                response_deserializer=gql__service__pb2.CreateGraphResponse.FromString,
+                _registered_method=True)
+        self.DropGraph = channel.unary_unary(
+                '/gql.CatalogService/DropGraph',
+                request_serializer=gql__service__pb2.DropGraphRequest.SerializeToString,
+                response_deserializer=gql__service__pb2.DropGraphResponse.FromString,
+                _registered_method=True)
+        self.GetGraphInfo = channel.unary_unary(
+                '/gql.CatalogService/GetGraphInfo',
+                request_serializer=gql__service__pb2.GetGraphInfoRequest.SerializeToString,
+                response_deserializer=gql__service__pb2.GetGraphInfoResponse.FromString,
+                _registered_method=True)
+        self.ListGraphTypes = channel.unary_unary(
+                '/gql.CatalogService/ListGraphTypes',
+                request_serializer=gql__service__pb2.ListGraphTypesRequest.SerializeToString,
+                response_deserializer=gql__service__pb2.ListGraphTypesResponse.FromString,
+                _registered_method=True)
+        self.CreateGraphType = channel.unary_unary(
+                '/gql.CatalogService/CreateGraphType',
+                request_serializer=gql__service__pb2.CreateGraphTypeRequest.SerializeToString,
+                response_deserializer=gql__service__pb2.CreateGraphTypeResponse.FromString,
+                _registered_method=True)
+        self.DropGraphType = channel.unary_unary(
+                '/gql.CatalogService/DropGraphType',
+                request_serializer=gql__service__pb2.DropGraphTypeRequest.SerializeToString,
+                response_deserializer=gql__service__pb2.DropGraphTypeResponse.FromString,
                 _registered_method=True)
 
 
-class DatabaseServiceServicer(object):
+class CatalogServiceServicer(object):
     """============================================================================
-    DatabaseService
-    Manages database lifecycle. Requires appropriate privileges.
+    CatalogService
+    Manages the catalog hierarchy: schemas, graphs, and graph types.
+    Replaces DatabaseService with spec-aligned catalog model (sec 12).
     Errors are returned as gRPC Status codes.
     ============================================================================
 
     """
 
-    def ListDatabases(self, request, context):
-        """List all databases with summary info.
+    def ListSchemas(self, request, context):
+        """Schema management (sec 12.2, 12.3 - Feature GC01)
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def CreateDatabase(self, request, context):
-        """Create a new named database.
+    def CreateSchema(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DropSchema(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ListGraphs(self, request, context):
+        """Graph management (sec 12.4, 12.5 - Feature GC04)
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def DeleteDatabase(self, request, context):
-        """Delete a database by name. Cannot delete "default".
+    def CreateGraph(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DropGraph(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetGraphInfo(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ListGraphTypes(self, request, context):
+        """Graph type management (sec 12.6, 12.7 - Feature GG02)
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def GetDatabaseInfo(self, request, context):
-        """Get database info (node/edge counts, metadata).
-        """
+    def CreateGraphType(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DropGraphType(self, request, context):
+        """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
 
-def add_DatabaseServiceServicer_to_server(servicer, server):
+def add_CatalogServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
-            'ListDatabases': grpc.unary_unary_rpc_method_handler(
-                    servicer.ListDatabases,
-                    request_deserializer=gql__service__pb2.ListDatabasesRequest.FromString,
-                    response_serializer=gql__service__pb2.ListDatabasesResponse.SerializeToString,
+            'ListSchemas': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListSchemas,
+                    request_deserializer=gql__service__pb2.ListSchemasRequest.FromString,
+                    response_serializer=gql__service__pb2.ListSchemasResponse.SerializeToString,
             ),
-            'CreateDatabase': grpc.unary_unary_rpc_method_handler(
-                    servicer.CreateDatabase,
-                    request_deserializer=gql__service__pb2.CreateDatabaseRequest.FromString,
-                    response_serializer=gql__service__pb2.CreateDatabaseResponse.SerializeToString,
+            'CreateSchema': grpc.unary_unary_rpc_method_handler(
+                    servicer.CreateSchema,
+                    request_deserializer=gql__service__pb2.CreateSchemaRequest.FromString,
+                    response_serializer=gql__service__pb2.CreateSchemaResponse.SerializeToString,
             ),
-            'DeleteDatabase': grpc.unary_unary_rpc_method_handler(
-                    servicer.DeleteDatabase,
-                    request_deserializer=gql__service__pb2.DeleteDatabaseRequest.FromString,
-                    response_serializer=gql__service__pb2.DeleteDatabaseResponse.SerializeToString,
+            'DropSchema': grpc.unary_unary_rpc_method_handler(
+                    servicer.DropSchema,
+                    request_deserializer=gql__service__pb2.DropSchemaRequest.FromString,
+                    response_serializer=gql__service__pb2.DropSchemaResponse.SerializeToString,
             ),
-            'GetDatabaseInfo': grpc.unary_unary_rpc_method_handler(
-                    servicer.GetDatabaseInfo,
-                    request_deserializer=gql__service__pb2.GetDatabaseInfoRequest.FromString,
-                    response_serializer=gql__service__pb2.GetDatabaseInfoResponse.SerializeToString,
+            'ListGraphs': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListGraphs,
+                    request_deserializer=gql__service__pb2.ListGraphsRequest.FromString,
+                    response_serializer=gql__service__pb2.ListGraphsResponse.SerializeToString,
+            ),
+            'CreateGraph': grpc.unary_unary_rpc_method_handler(
+                    servicer.CreateGraph,
+                    request_deserializer=gql__service__pb2.CreateGraphRequest.FromString,
+                    response_serializer=gql__service__pb2.CreateGraphResponse.SerializeToString,
+            ),
+            'DropGraph': grpc.unary_unary_rpc_method_handler(
+                    servicer.DropGraph,
+                    request_deserializer=gql__service__pb2.DropGraphRequest.FromString,
+                    response_serializer=gql__service__pb2.DropGraphResponse.SerializeToString,
+            ),
+            'GetGraphInfo': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetGraphInfo,
+                    request_deserializer=gql__service__pb2.GetGraphInfoRequest.FromString,
+                    response_serializer=gql__service__pb2.GetGraphInfoResponse.SerializeToString,
+            ),
+            'ListGraphTypes': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListGraphTypes,
+                    request_deserializer=gql__service__pb2.ListGraphTypesRequest.FromString,
+                    response_serializer=gql__service__pb2.ListGraphTypesResponse.SerializeToString,
+            ),
+            'CreateGraphType': grpc.unary_unary_rpc_method_handler(
+                    servicer.CreateGraphType,
+                    request_deserializer=gql__service__pb2.CreateGraphTypeRequest.FromString,
+                    response_serializer=gql__service__pb2.CreateGraphTypeResponse.SerializeToString,
+            ),
+            'DropGraphType': grpc.unary_unary_rpc_method_handler(
+                    servicer.DropGraphType,
+                    request_deserializer=gql__service__pb2.DropGraphTypeRequest.FromString,
+                    response_serializer=gql__service__pb2.DropGraphTypeResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'gql.DatabaseService', rpc_method_handlers)
+            'gql.CatalogService', rpc_method_handlers)
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('gql.DatabaseService', rpc_method_handlers)
+    server.add_registered_method_handlers('gql.CatalogService', rpc_method_handlers)
 
 
  # This class is part of an EXPERIMENTAL API.
-class DatabaseService(object):
+class CatalogService(object):
     """============================================================================
-    DatabaseService
-    Manages database lifecycle. Requires appropriate privileges.
+    CatalogService
+    Manages the catalog hierarchy: schemas, graphs, and graph types.
+    Replaces DatabaseService with spec-aligned catalog model (sec 12).
     Errors are returned as gRPC Status codes.
     ============================================================================
 
     """
 
     @staticmethod
-    def ListDatabases(request,
+    def ListSchemas(request,
             target,
             options=(),
             channel_credentials=None,
@@ -649,9 +747,9 @@ class DatabaseService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/gql.DatabaseService/ListDatabases',
-            gql__service__pb2.ListDatabasesRequest.SerializeToString,
-            gql__service__pb2.ListDatabasesResponse.FromString,
+            '/gql.CatalogService/ListSchemas',
+            gql__service__pb2.ListSchemasRequest.SerializeToString,
+            gql__service__pb2.ListSchemasResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -663,7 +761,7 @@ class DatabaseService(object):
             _registered_method=True)
 
     @staticmethod
-    def CreateDatabase(request,
+    def CreateSchema(request,
             target,
             options=(),
             channel_credentials=None,
@@ -676,9 +774,9 @@ class DatabaseService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/gql.DatabaseService/CreateDatabase',
-            gql__service__pb2.CreateDatabaseRequest.SerializeToString,
-            gql__service__pb2.CreateDatabaseResponse.FromString,
+            '/gql.CatalogService/CreateSchema',
+            gql__service__pb2.CreateSchemaRequest.SerializeToString,
+            gql__service__pb2.CreateSchemaResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -690,7 +788,7 @@ class DatabaseService(object):
             _registered_method=True)
 
     @staticmethod
-    def DeleteDatabase(request,
+    def DropSchema(request,
             target,
             options=(),
             channel_credentials=None,
@@ -703,9 +801,9 @@ class DatabaseService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/gql.DatabaseService/DeleteDatabase',
-            gql__service__pb2.DeleteDatabaseRequest.SerializeToString,
-            gql__service__pb2.DeleteDatabaseResponse.FromString,
+            '/gql.CatalogService/DropSchema',
+            gql__service__pb2.DropSchemaRequest.SerializeToString,
+            gql__service__pb2.DropSchemaResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -717,7 +815,7 @@ class DatabaseService(object):
             _registered_method=True)
 
     @staticmethod
-    def GetDatabaseInfo(request,
+    def ListGraphs(request,
             target,
             options=(),
             channel_credentials=None,
@@ -730,9 +828,661 @@ class DatabaseService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/gql.DatabaseService/GetDatabaseInfo',
-            gql__service__pb2.GetDatabaseInfoRequest.SerializeToString,
-            gql__service__pb2.GetDatabaseInfoResponse.FromString,
+            '/gql.CatalogService/ListGraphs',
+            gql__service__pb2.ListGraphsRequest.SerializeToString,
+            gql__service__pb2.ListGraphsResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def CreateGraph(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/gql.CatalogService/CreateGraph',
+            gql__service__pb2.CreateGraphRequest.SerializeToString,
+            gql__service__pb2.CreateGraphResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DropGraph(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/gql.CatalogService/DropGraph',
+            gql__service__pb2.DropGraphRequest.SerializeToString,
+            gql__service__pb2.DropGraphResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetGraphInfo(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/gql.CatalogService/GetGraphInfo',
+            gql__service__pb2.GetGraphInfoRequest.SerializeToString,
+            gql__service__pb2.GetGraphInfoResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListGraphTypes(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/gql.CatalogService/ListGraphTypes',
+            gql__service__pb2.ListGraphTypesRequest.SerializeToString,
+            gql__service__pb2.ListGraphTypesResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def CreateGraphType(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/gql.CatalogService/CreateGraphType',
+            gql__service__pb2.CreateGraphTypeRequest.SerializeToString,
+            gql__service__pb2.CreateGraphTypeResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DropGraphType(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/gql.CatalogService/DropGraphType',
+            gql__service__pb2.DropGraphTypeRequest.SerializeToString,
+            gql__service__pb2.DropGraphTypeResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+
+class AdminServiceStub(object):
+    """============================================================================
+    AdminService
+    Graph introspection, maintenance, and index management.
+    Errors are returned as gRPC Status codes.
+    ============================================================================
+
+    """
+
+    def __init__(self, channel):
+        """Constructor.
+
+        Args:
+            channel: A grpc.Channel.
+        """
+        self.GetGraphStats = channel.unary_unary(
+                '/gql.AdminService/GetGraphStats',
+                request_serializer=gql__service__pb2.GetGraphStatsRequest.SerializeToString,
+                response_deserializer=gql__service__pb2.GetGraphStatsResponse.FromString,
+                _registered_method=True)
+        self.WalStatus = channel.unary_unary(
+                '/gql.AdminService/WalStatus',
+                request_serializer=gql__service__pb2.WalStatusRequest.SerializeToString,
+                response_deserializer=gql__service__pb2.WalStatusResponse.FromString,
+                _registered_method=True)
+        self.WalCheckpoint = channel.unary_unary(
+                '/gql.AdminService/WalCheckpoint',
+                request_serializer=gql__service__pb2.WalCheckpointRequest.SerializeToString,
+                response_deserializer=gql__service__pb2.WalCheckpointResponse.FromString,
+                _registered_method=True)
+        self.Validate = channel.unary_unary(
+                '/gql.AdminService/Validate',
+                request_serializer=gql__service__pb2.ValidateRequest.SerializeToString,
+                response_deserializer=gql__service__pb2.ValidateResponse.FromString,
+                _registered_method=True)
+        self.CreateIndex = channel.unary_unary(
+                '/gql.AdminService/CreateIndex',
+                request_serializer=gql__service__pb2.CreateIndexRequest.SerializeToString,
+                response_deserializer=gql__service__pb2.CreateIndexResponse.FromString,
+                _registered_method=True)
+        self.DropIndex = channel.unary_unary(
+                '/gql.AdminService/DropIndex',
+                request_serializer=gql__service__pb2.DropIndexRequest.SerializeToString,
+                response_deserializer=gql__service__pb2.DropIndexResponse.FromString,
+                _registered_method=True)
+
+
+class AdminServiceServicer(object):
+    """============================================================================
+    AdminService
+    Graph introspection, maintenance, and index management.
+    Errors are returned as gRPC Status codes.
+    ============================================================================
+
+    """
+
+    def GetGraphStats(self, request, context):
+        """Get detailed graph statistics (counts, memory, disk, indexes).
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def WalStatus(self, request, context):
+        """Get WAL (Write-Ahead Log) status.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def WalCheckpoint(self, request, context):
+        """Force a WAL checkpoint (flush pending records to storage).
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def Validate(self, request, context):
+        """Validate graph integrity (dangling edges, index consistency).
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def CreateIndex(self, request, context):
+        """Create an index (property, vector, or text).
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DropIndex(self, request, context):
+        """Drop an index.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+
+def add_AdminServiceServicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'GetGraphStats': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetGraphStats,
+                    request_deserializer=gql__service__pb2.GetGraphStatsRequest.FromString,
+                    response_serializer=gql__service__pb2.GetGraphStatsResponse.SerializeToString,
+            ),
+            'WalStatus': grpc.unary_unary_rpc_method_handler(
+                    servicer.WalStatus,
+                    request_deserializer=gql__service__pb2.WalStatusRequest.FromString,
+                    response_serializer=gql__service__pb2.WalStatusResponse.SerializeToString,
+            ),
+            'WalCheckpoint': grpc.unary_unary_rpc_method_handler(
+                    servicer.WalCheckpoint,
+                    request_deserializer=gql__service__pb2.WalCheckpointRequest.FromString,
+                    response_serializer=gql__service__pb2.WalCheckpointResponse.SerializeToString,
+            ),
+            'Validate': grpc.unary_unary_rpc_method_handler(
+                    servicer.Validate,
+                    request_deserializer=gql__service__pb2.ValidateRequest.FromString,
+                    response_serializer=gql__service__pb2.ValidateResponse.SerializeToString,
+            ),
+            'CreateIndex': grpc.unary_unary_rpc_method_handler(
+                    servicer.CreateIndex,
+                    request_deserializer=gql__service__pb2.CreateIndexRequest.FromString,
+                    response_serializer=gql__service__pb2.CreateIndexResponse.SerializeToString,
+            ),
+            'DropIndex': grpc.unary_unary_rpc_method_handler(
+                    servicer.DropIndex,
+                    request_deserializer=gql__service__pb2.DropIndexRequest.FromString,
+                    response_serializer=gql__service__pb2.DropIndexResponse.SerializeToString,
+            ),
+    }
+    generic_handler = grpc.method_handlers_generic_handler(
+            'gql.AdminService', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('gql.AdminService', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class AdminService(object):
+    """============================================================================
+    AdminService
+    Graph introspection, maintenance, and index management.
+    Errors are returned as gRPC Status codes.
+    ============================================================================
+
+    """
+
+    @staticmethod
+    def GetGraphStats(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/gql.AdminService/GetGraphStats',
+            gql__service__pb2.GetGraphStatsRequest.SerializeToString,
+            gql__service__pb2.GetGraphStatsResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def WalStatus(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/gql.AdminService/WalStatus',
+            gql__service__pb2.WalStatusRequest.SerializeToString,
+            gql__service__pb2.WalStatusResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def WalCheckpoint(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/gql.AdminService/WalCheckpoint',
+            gql__service__pb2.WalCheckpointRequest.SerializeToString,
+            gql__service__pb2.WalCheckpointResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def Validate(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/gql.AdminService/Validate',
+            gql__service__pb2.ValidateRequest.SerializeToString,
+            gql__service__pb2.ValidateResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def CreateIndex(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/gql.AdminService/CreateIndex',
+            gql__service__pb2.CreateIndexRequest.SerializeToString,
+            gql__service__pb2.CreateIndexResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DropIndex(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/gql.AdminService/DropIndex',
+            gql__service__pb2.DropIndexRequest.SerializeToString,
+            gql__service__pb2.DropIndexResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+
+class SearchServiceStub(object):
+    """============================================================================
+    SearchService
+    Vector, text, and hybrid search operations.
+    Errors are returned as gRPC Status codes.
+    ============================================================================
+
+    """
+
+    def __init__(self, channel):
+        """Constructor.
+
+        Args:
+            channel: A grpc.Channel.
+        """
+        self.VectorSearch = channel.unary_unary(
+                '/gql.SearchService/VectorSearch',
+                request_serializer=gql__service__pb2.VectorSearchRequest.SerializeToString,
+                response_deserializer=gql__service__pb2.VectorSearchResponse.FromString,
+                _registered_method=True)
+        self.TextSearch = channel.unary_unary(
+                '/gql.SearchService/TextSearch',
+                request_serializer=gql__service__pb2.TextSearchRequest.SerializeToString,
+                response_deserializer=gql__service__pb2.TextSearchResponse.FromString,
+                _registered_method=True)
+        self.HybridSearch = channel.unary_unary(
+                '/gql.SearchService/HybridSearch',
+                request_serializer=gql__service__pb2.HybridSearchRequest.SerializeToString,
+                response_deserializer=gql__service__pb2.HybridSearchResponse.FromString,
+                _registered_method=True)
+
+
+class SearchServiceServicer(object):
+    """============================================================================
+    SearchService
+    Vector, text, and hybrid search operations.
+    Errors are returned as gRPC Status codes.
+    ============================================================================
+
+    """
+
+    def VectorSearch(self, request, context):
+        """Vector similarity search (KNN via HNSW index).
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def TextSearch(self, request, context):
+        """Full-text search (BM25 scoring).
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def HybridSearch(self, request, context):
+        """Hybrid search combining text and vector results with rank fusion.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+
+def add_SearchServiceServicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'VectorSearch': grpc.unary_unary_rpc_method_handler(
+                    servicer.VectorSearch,
+                    request_deserializer=gql__service__pb2.VectorSearchRequest.FromString,
+                    response_serializer=gql__service__pb2.VectorSearchResponse.SerializeToString,
+            ),
+            'TextSearch': grpc.unary_unary_rpc_method_handler(
+                    servicer.TextSearch,
+                    request_deserializer=gql__service__pb2.TextSearchRequest.FromString,
+                    response_serializer=gql__service__pb2.TextSearchResponse.SerializeToString,
+            ),
+            'HybridSearch': grpc.unary_unary_rpc_method_handler(
+                    servicer.HybridSearch,
+                    request_deserializer=gql__service__pb2.HybridSearchRequest.FromString,
+                    response_serializer=gql__service__pb2.HybridSearchResponse.SerializeToString,
+            ),
+    }
+    generic_handler = grpc.method_handlers_generic_handler(
+            'gql.SearchService', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('gql.SearchService', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class SearchService(object):
+    """============================================================================
+    SearchService
+    Vector, text, and hybrid search operations.
+    Errors are returned as gRPC Status codes.
+    ============================================================================
+
+    """
+
+    @staticmethod
+    def VectorSearch(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/gql.SearchService/VectorSearch',
+            gql__service__pb2.VectorSearchRequest.SerializeToString,
+            gql__service__pb2.VectorSearchResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def TextSearch(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/gql.SearchService/TextSearch',
+            gql__service__pb2.TextSearchRequest.SerializeToString,
+            gql__service__pb2.TextSearchResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def HybridSearch(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/gql.SearchService/HybridSearch',
+            gql__service__pb2.HybridSearchRequest.SerializeToString,
+            gql__service__pb2.HybridSearchResponse.FromString,
             options,
             channel_credentials,
             insecure,

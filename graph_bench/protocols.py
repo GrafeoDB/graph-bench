@@ -16,9 +16,9 @@ from typing import Any, Protocol, runtime_checkable
 from graph_bench.types import BenchmarkResult, Metrics, ScaleConfig
 
 __all__ = [
-    "GraphDatabaseAdapter",
     "Benchmark",
     "DatasetLoader",
+    "GraphDatabaseAdapter",
     "ResultCollector",
 ]
 
@@ -39,6 +39,16 @@ class GraphDatabaseAdapter(Protocol):
     @property
     def version(self) -> str:
         """Database version string."""
+        ...
+
+    @property
+    def is_embedded(self) -> bool:
+        """Whether the database runs in-process (memory is measured on this process)."""
+        ...
+
+    @property
+    def child_pids(self) -> list[int]:
+        """Processes the adapter started, included in the memory measurement."""
         ...
 
     def connect(self, *, uri: str | None = None, **kwargs: Any) -> None:
@@ -65,6 +75,14 @@ class GraphDatabaseAdapter(Protocol):
 
     def get_node(self, node_id: str) -> dict[str, Any] | None:
         """Retrieve a node by ID."""
+        ...
+
+    def update_node(self, node_id: str, properties: dict[str, Any]) -> bool:
+        """Merge properties into a node; False when the node does not exist."""
+        ...
+
+    def delete_nodes(self, node_ids: Sequence[str]) -> int:
+        """Delete nodes (and their edges) by ID and return how many were deleted."""
         ...
 
     def get_nodes_by_label(self, label: str, *, limit: int = 100) -> list[dict[str, Any]]:
@@ -141,6 +159,22 @@ class GraphDatabaseAdapter(Protocol):
         """Detect communities in the graph."""
         ...
 
+    def bfs_levels(self, source: str) -> dict[str, int]:
+        """Distance in hops from source to every reachable vertex."""
+        ...
+
+    def weakly_connected_components(self) -> list[set[str]]:
+        """Weakly connected components as sets of node IDs."""
+        ...
+
+    def sssp(self, source: str, *, weight_attr: str = "weight") -> dict[str, float]:
+        """Weighted shortest-path distance from source."""
+        ...
+
+    def local_clustering_coefficient(self, *, directed: bool = True) -> dict[str, float]:
+        """Local clustering coefficient (LDBC directed, or undirected)."""
+        ...
+
     def create_vector_index(
         self,
         label: str,
@@ -148,8 +182,34 @@ class GraphDatabaseAdapter(Protocol):
         *,
         dimensions: int = 128,
         metric: str = "cosine",
+        m: int | None = None,
+        ef_construction: int | None = None,
+        quantization: str | None = None,
     ) -> None:
-        """Create a vector similarity index on a node property."""
+        """Build the native ANN index on a node property (no fallback)."""
+        ...
+
+    def vector_ann_search(
+        self,
+        query_vector: list[float],
+        *,
+        label: str = "VectorNode",
+        property_name: str = "embedding",
+        k: int = 10,
+        ef: int | None = None,
+    ) -> list[tuple[str, float]]:
+        """Approximate k nearest neighbours through the native index (no fallback)."""
+        ...
+
+    def vector_scan(
+        self,
+        query_vector: list[float],
+        *,
+        label: str = "VectorNode",
+        property_name: str = "embedding",
+        k: int = 10,
+    ) -> list[tuple[str, float]]:
+        """Exact k nearest neighbours with the brute-force scan every adapter shares."""
         ...
 
     def vector_search(

@@ -18,10 +18,24 @@ from graph_bench.protocols import GraphDatabaseAdapter
 from graph_bench.types import ScaleConfig
 
 __all__ = [
+    "UPDATE_QUERIES",
     "PropertyUpdateBenchmark",
     "EdgeAddExistingBenchmark",
     "MixedWorkloadBenchmark",
 ]
+
+# The same update in each supported dialect, tried in order.
+UPDATE_QUERIES = (
+    # Cypher (Neo4j, Memgraph, LadybugDB, FalkorDB) and GQL (Grafeo)
+    "MATCH (n {id: $id}) SET n.score = $score RETURN n",
+    "MATCH (n {id: $id}) SET n.score = $score",
+    # AQL (ArangoDB)
+    """
+    FOR doc IN Person
+        FILTER doc.id == @id
+        UPDATE doc WITH { score: @score } IN Person
+    """,
+)
 
 
 class WriteBenchmarkBase(BaseBenchmark):
@@ -76,36 +90,21 @@ class PropertyUpdateBenchmark(WriteBenchmarkBase):
             node_id = random.choice(self._node_ids)
             new_score = random.randint(1, 100)
 
-            # Use execute_query for updates - most DBs support this pattern
-            try:
-                # Try Cypher-style update (Neo4j, Memgraph, LadybugDB, FalkorDB)
-                adapter.execute_query(
-                    "MATCH (n {id: $id}) SET n.score = $score RETURN n",
-                    params={"id": node_id, "score": new_score},
-                )
-                updated += 1
-            except Exception:
+            # Use execute_query for updates - most DBs support one of these dialects.
+            # When none runs, the benchmark fails instead of timing the errors.
+            errors: list[Exception] = []
+            for query in UPDATE_QUERIES:
                 try:
-                    # Try GQL-style update (Grafeo)
-                    adapter.execute_query(
-                        "MATCH (n {id: $id}) SET n.score = $score",
-                        params={"id": node_id, "score": new_score},
-                    )
-                    updated += 1
-                except Exception:
-                    try:
-                        # Try AQL-style update (ArangoDB)
-                        adapter.execute_query(
-                            """
-                            FOR doc IN Person
-                                FILTER doc.id == @id
-                                UPDATE doc WITH { score: @score } IN Person
-                            """,
-                            params={"id": node_id, "score": new_score},
-                        )
-                        updated += 1
-                    except Exception:
-                        pass
+                    adapter.execute_query(query, params={"id": node_id, "score": new_score})
+                except Exception as e:
+                    errors.append(e)
+                    continue
+                updated += 1
+                break
+            else:
+                details = "; ".join(f"{type(e).__name__}: {e}" for e in errors)
+                msg = f"no update query ran on {adapter.name}: {details}"
+                raise RuntimeError(msg) from errors[-1]
 
         return updated
 
@@ -196,12 +195,9 @@ class MixedWorkloadBenchmark(WriteBenchmarkBase):
         """Perform a write and track for later read-back."""
         src = random.choice(self._node_ids)
         tgt = random.choice(self._node_ids)
-        if src != tgt:
-            try:
-                adapter.insert_edges([(src, tgt, "INTERACTS", {"ts": op_index})])
-                # Track for potential read-back
-                self._written_edges.append((src, tgt))
-                return 1
-            except Exception:
-                pass
+        # A failing write propagates, so the benchmark is recorded as FAILED, not timed.
+        if src != tgt and adapter.insert_edges([(src, tgt, "INTERACTS", {"ts": op_index})]):
+            # Track for potential read-back
+            self._written_edges.append((src, tgt))
+            return 1
         return 0

@@ -14,9 +14,33 @@ that can be shared across database adapters.
 from abc import ABC, abstractmethod
 from collections import deque
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, ClassVar
 
-__all__ = ["BaseAdapter", "AdapterRegistry"]
+from graph_bench.types import UnsupportedOperation
+
+__all__ = ["AdapterRegistry", "BaseAdapter", "ldbc_directed_lcc"]
+
+
+def ldbc_directed_lcc(graph: Any) -> dict[str, float]:
+    """LDBC Graphalytics local clustering coefficient of a directed NetworkX graph.
+
+    For vertex v, N(v) is the set of in- and out-neighbours (v excluded). The
+    coefficient is the number of directed edges (u, w) with u and w in N(v),
+    divided by |N(v)| * (|N(v)| - 1); it is 0 when |N(v)| < 2. An edge in each
+    direction between two neighbours counts twice. This is not the Fagiolo
+    coefficient that ``nx.clustering`` computes on a DiGraph.
+    """
+    successors = {v: set(graph.successors(v)) - {v} for v in graph}
+    result: dict[str, float] = {}
+    for v in graph:
+        neighbours = (successors[v] | set(graph.predecessors(v))) - {v}
+        degree = len(neighbours)
+        if degree < 2:
+            result[str(v)] = 0.0
+            continue
+        edges = sum(len(successors[u] & neighbours) for u in neighbours)
+        result[str(v)] = edges / (degree * (degree - 1))
+    return result
 
 
 class AdapterRegistry:
@@ -64,11 +88,30 @@ class BaseAdapter(ABC):
 
     _connected: bool = False
 
+    # Clustering coefficient definitions ("directed", "undirected") the database
+    # computes natively; local_clustering_coefficient() falls back for the others.
+    native_lcc_definitions: ClassVar[frozenset[str]] = frozenset()
+
     @property
     @abstractmethod
     def name(self) -> str:
         """Human-readable adapter name."""
         ...
+
+    # ── Fallback tracking ───────────────────────────────────────
+
+    def _record_fallback(self, operation: str) -> None:
+        """Note that ``operation`` ran in Python instead of in the database.
+
+        Every BaseAdapter fallback calls it, and so must an adapter's own Python
+        path (for example a BFS over get_neighbors). Benchmarks report what
+        they measured from it (see ``take_fallbacks``).
+        """
+        self.__dict__.setdefault("_fallbacks", set()).add(operation)
+
+    def take_fallbacks(self) -> set[str]:
+        """Return the operations that used a fallback since the last call, and reset."""
+        return self.__dict__.pop("_fallbacks", set())
 
     @property
     def version(self) -> str:
@@ -177,6 +220,7 @@ class BaseAdapter(ABC):
         Default implementation using get_neighbors.
         Override for native database support.
         """
+        self._record_fallback("traverse_bfs")
         visited: set[str] = set()
         queue: deque[tuple[str, int]] = deque([(start, 0)])
         result: list[str] = []
@@ -207,6 +251,7 @@ class BaseAdapter(ABC):
         Default implementation using get_neighbors.
         Override for native database support.
         """
+        self._record_fallback("traverse_dfs")
         visited: set[str] = set()
         result: list[str] = []
 
@@ -255,6 +300,7 @@ class BaseAdapter(ABC):
         Uses BFS from known nodes to discover the graph structure.
         The extraction overhead is included in benchmark timing,
         representing the real cost of not having native support.
+        A failing read raises: an empty graph would be timed as a fast answer.
         """
         import networkx as nx
 
@@ -264,13 +310,10 @@ class BaseAdapter(ABC):
 
         # Get starting nodes from common labels
         for label in ["Person", "Node", "Vertex"]:
-            try:
-                for node in self.get_nodes_by_label(label, limit=5000):
-                    node_id = node.get("id")
-                    if node_id and str(node_id) not in visited:
-                        to_visit.append(str(node_id))
-            except Exception:
-                pass
+            for node in self.get_nodes_by_label(label, limit=5000):
+                node_id = node.get("id")
+                if node_id and str(node_id) not in visited:
+                    to_visit.append(str(node_id))
             if to_visit:
                 break
 
@@ -282,14 +325,11 @@ class BaseAdapter(ABC):
             visited.add(node_id)
             G.add_node(node_id)
 
-            try:
-                for neighbor in self.get_neighbors(node_id):
-                    neighbor_str = str(neighbor)
-                    G.add_edge(node_id, neighbor_str)
-                    if neighbor_str not in visited:
-                        to_visit.append(neighbor_str)
-            except Exception:
-                pass
+            for neighbor in self.get_neighbors(node_id):
+                neighbor_str = str(neighbor)
+                G.add_edge(node_id, neighbor_str)
+                if neighbor_str not in visited:
+                    to_visit.append(neighbor_str)
 
         return G
 
@@ -304,15 +344,37 @@ class BaseAdapter(ABC):
 
         Default uses NetworkX fallback (extracts graph from database).
         Override for native database support.
+
+        Runs the power iteration of ``nx.pagerank`` (unweighted, the rank of
+        sink nodes spread evenly), but returns the scores after
+        ``max_iterations`` when they have not converged: LDBC Graphalytics
+        PageRank runs a fixed number of iterations, while ``nx.pagerank``
+        raises ``PowerIterationFailedConvergence`` instead.
         """
         import networkx as nx
+        import numpy as np
 
+        self._record_fallback("pagerank")
         G = self._build_networkx_graph()
         if len(G) == 0:
             return {}
 
-        scores = nx.pagerank(G, alpha=damping, max_iter=max_iterations, tol=tolerance)
-        return {str(k): float(v) for k, v in scores.items()}
+        nodes = list(G)
+        n = len(nodes)
+        adjacency = nx.to_scipy_sparse_array(G, nodelist=nodes, weight=None, dtype=float)
+        out_degree = np.asarray(adjacency.sum(axis=1)).ravel()
+        is_sink = out_degree == 0
+        inverse_degree = np.divide(1.0, out_degree, out=np.zeros(n), where=~is_sink)
+
+        scores = np.full(n, 1.0 / n)
+        for _ in range(max_iterations):
+            previous = scores
+            spread = (previous * inverse_degree) @ adjacency
+            scores = damping * (spread + previous[is_sink].sum() / n) + (1 - damping) / n
+            # Same convergence test as nx.pagerank
+            if np.abs(scores - previous).sum() < n * tolerance:
+                break
+        return {str(node): float(score) for node, score in zip(nodes, scores, strict=True)}
 
     def community_detection(self, *, algorithm: str = "louvain") -> list[set[str]]:
         """Detect communities in the graph.
@@ -324,9 +386,9 @@ class BaseAdapter(ABC):
         where all nodes update based on previous iteration's labels
         (not NetworkX's asynchronous variant).
         """
-        import networkx as nx
         from networkx.algorithms.community import louvain_communities
 
+        self._record_fallback("community_detection")
         G = self._build_networkx_graph()
         if len(G) == 0:
             return []
@@ -383,24 +445,26 @@ class BaseAdapter(ABC):
             communities.setdefault(lbl, set()).add(str(node))
         return list(communities.values())
 
-    def local_clustering_coefficient(self) -> dict[str, float]:
-        """Compute Local Clustering Coefficient for all vertices.
+    def local_clustering_coefficient(self, *, directed: bool = True) -> dict[str, float]:
+        """Compute the Local Clustering Coefficient of every vertex.
 
-        LDBC Graphanalytics LCC: ratio of edges between neighbors
-        to maximum possible edges between neighbors.
+        ``directed=True`` is the LDBC Graphalytics definition for a directed
+        graph (see ``ldbc_directed_lcc``). ``directed=False`` treats every edge
+        as undirected: edges between neighbours over d * (d - 1) / 2.
 
-        Default uses NetworkX fallback (extracts graph from database).
-        Override for native database support.
+        Default uses the NetworkX graph extracted from the database. Adapters
+        list the definitions they compute natively in ``native_lcc_definitions``
+        and call this for the others.
         """
         import networkx as nx
 
+        self._record_fallback("local_clustering_coefficient")
         G = self._build_networkx_graph()
         if len(G) == 0:
             return {}
-
-        # For directed graphs, use undirected neighborhood but directed edges
-        # NetworkX clustering handles this correctly
-        coefficients = nx.clustering(G)
+        if directed:
+            return ldbc_directed_lcc(G)
+        coefficients = nx.clustering(nx.Graph(G))
         return {str(k): float(v) for k, v in coefficients.items()}
 
     def weakly_connected_components(self) -> list[set[str]]:
@@ -414,6 +478,7 @@ class BaseAdapter(ABC):
         """
         import networkx as nx
 
+        self._record_fallback("weakly_connected_components")
         G = self._build_networkx_graph()
         if len(G) == 0:
             return []
@@ -432,6 +497,7 @@ class BaseAdapter(ABC):
         """
         import networkx as nx
 
+        self._record_fallback("sssp")
         G = self._build_networkx_graph()
         if len(G) == 0:
             return {}
@@ -461,6 +527,7 @@ class BaseAdapter(ABC):
 
         LDBC_INFINITY = 9223372036854775807
 
+        self._record_fallback("bfs_levels")
         G = self._build_networkx_graph()
         if len(G) == 0:
             return {}
@@ -475,6 +542,13 @@ class BaseAdapter(ABC):
         except nx.NetworkXError:
             return {}
 
+    # ── Vector search ───────────────────────────────────────────
+    #
+    # Two separate paths, so a result always says which one it measured:
+    # vector_scan() is the same brute-force scan for every adapter (exact),
+    # create_vector_index() / vector_ann_search() are the database's native
+    # approximate nearest neighbour search and have no fallback.
+
     def create_vector_index(
         self,
         label: str,
@@ -482,41 +556,68 @@ class BaseAdapter(ABC):
         *,
         dimensions: int = 128,
         metric: str = "cosine",
+        m: int | None = None,
+        ef_construction: int | None = None,
+        quantization: str | None = None,
     ) -> None:
-        """Create a vector similarity index on a node property.
+        """Build the database's native ANN index (for example HNSW) on a node property.
 
-        Default is a no-op (brute-force search requires no index).
-        Override for native database support (e.g. HNSW).
+        ``m`` and ``ef_construction`` are the HNSW parameters; ``quantization``
+        is a database-specific compression mode. Raises UnsupportedOperation
+        when the database has no native vector index: there is no fallback.
         """
+        raise UnsupportedOperation(f"{self.name} has no native vector index")
 
-    @staticmethod
-    def _cosine_similarity(a: list[float], b: list[float]) -> float:
-        """Compute cosine similarity between two vectors."""
-        import math
-
-        dot = sum(x * y for x, y in zip(a, b))
-        norm_a = math.sqrt(sum(x * x for x in a))
-        norm_b = math.sqrt(sum(x * x for x in b))
-        if norm_a == 0 or norm_b == 0:
-            return 0.0
-        return dot / (norm_a * norm_b)
-
-    def vector_search(
+    def vector_ann_search(
         self,
         query_vector: list[float],
         *,
         label: str = "VectorNode",
         property_name: str = "embedding",
         k: int = 10,
-        metric: str = "cosine",
+        ef: int | None = None,
     ) -> list[tuple[str, float]]:
-        """Find k nearest neighbors to a query vector.
+        """Approximate k nearest neighbours through the native index, best first.
 
-        Default uses brute-force scan (extracts nodes from database).
-        The scan overhead is included in benchmark timing,
-        representing the real cost of not having native support.
-        Override for native database support.
+        Returns ``(id, similarity)`` pairs; ``ef`` is the search beam width.
+        Raises UnsupportedOperation when the database has no native vector
+        search: there is no fallback.
         """
+        raise UnsupportedOperation(f"{self.name} has no native vector search")
+
+    def delete_nodes(self, node_ids: Sequence[str]) -> int:
+        """Delete nodes (and their edges) by ``id`` and return how many were deleted.
+
+        Used by the ANN delete benchmark; raises UnsupportedOperation by default.
+        """
+        raise UnsupportedOperation(f"the {self.name} adapter does not implement delete_nodes")
+
+    @staticmethod
+    def _cosine_similarity(a: list[float], b: list[float]) -> float:
+        """Compute cosine similarity between two vectors."""
+        import math
+
+        dot = sum(x * y for x, y in zip(a, b, strict=False))
+        norm_a = math.sqrt(sum(x * x for x in a))
+        norm_b = math.sqrt(sum(x * x for x in b))
+        if norm_a == 0 or norm_b == 0:
+            return 0.0
+        return dot / (norm_a * norm_b)
+
+    def vector_scan(
+        self,
+        query_vector: list[float],
+        *,
+        label: str = "VectorNode",
+        property_name: str = "embedding",
+        k: int = 10,
+    ) -> list[tuple[str, float]]:
+        """Exact k nearest neighbours by cosine similarity, with a brute-force scan.
+
+        Reads every node of ``label`` from the database and scores it in
+        Python: the same work for every adapter, so it must not be overridden.
+        """
+        self._record_fallback("vector_scan")
         nodes = self.get_nodes_by_label(label, limit=100_000)
         scored: list[tuple[str, float]] = []
         for node in nodes:
@@ -527,6 +628,21 @@ class BaseAdapter(ABC):
                 scored.append((str(node_id), score))
         scored.sort(key=lambda x: x[1], reverse=True)
         return scored[:k]
+
+    def vector_search(
+        self,
+        query_vector: list[float],
+        *,
+        label: str = "VectorNode",
+        property_name: str = "embedding",
+        k: int = 10,
+        metric: str = "cosine",
+    ) -> list[tuple[str, float]]:
+        """Find k nearest neighbors to a query vector (the hybrid benchmarks use it).
+
+        Default is the brute-force ``vector_scan``.
+        """
+        return self.vector_scan(query_vector, label=label, property_name=property_name, k=k)
 
     def __enter__(self) -> "BaseAdapter":
         """Context manager entry."""

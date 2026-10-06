@@ -12,11 +12,12 @@ timing, warmup, and metric collection.
 
 from __future__ import annotations
 
+import builtins
 import gc
 import statistics
 import time
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, ClassVar
 
 from graph_bench.protocols import GraphDatabaseAdapter
 from graph_bench.types import Metrics, ScaleConfig, TimingStats
@@ -24,10 +25,27 @@ from graph_bench.types import Metrics, ScaleConfig, TimingStats
 __all__ = ["BaseBenchmark", "BenchmarkRegistry"]
 
 
+def _take_fallbacks(adapter: GraphDatabaseAdapter) -> set[str] | None:
+    """The fallbacks the adapter used since the last call, or None if it cannot tell."""
+    take = getattr(adapter, "take_fallbacks", None)
+    return set(take()) if callable(take) else None
+
+
+def _implementation(fallbacks: set[str] | None) -> dict[str, Any]:
+    """Label a result: "native" when every measured call ran in the database."""
+    if fallbacks is None:
+        return {"implementation": "unknown"}
+    if fallbacks:
+        return {"implementation": "fallback", "fallbacks": sorted(fallbacks)}
+    return {"implementation": "native"}
+
+
 class BenchmarkRegistry:
     """Registry for benchmark implementations."""
 
     _benchmarks: dict[str, type[BaseBenchmark]] = {}
+    # Old names that still select a benchmark; list() leaves them out.
+    _aliases: ClassVar[dict[str, str]] = {}
 
     @classmethod
     def register(cls, name: str, *, category: str = "general") -> Any:
@@ -40,17 +58,27 @@ class BenchmarkRegistry:
         return decorator
 
     @classmethod
+    def alias(cls, old_name: str, name: str) -> None:
+        """Let ``old_name`` select the benchmark registered as ``name``."""
+        cls._aliases[old_name] = name
+
+    @classmethod
+    def aliases(cls) -> dict[str, str]:
+        """Old benchmark names and the names they select."""
+        return dict(cls._aliases)
+
+    @classmethod
     def get(cls, name: str) -> type[BaseBenchmark] | None:
-        """Get benchmark class by name."""
-        return cls._benchmarks.get(name)
+        """Get benchmark class by name (or by an old name)."""
+        return cls._benchmarks.get(cls._aliases.get(name, name))
 
     @classmethod
-    def list(cls) -> list[str]:
+    def list(cls) -> builtins.list[str]:
         """List registered benchmark names."""
-        return list(cls._benchmarks.keys())
+        return builtins.list(cls._benchmarks.keys())
 
     @classmethod
-    def by_category(cls, category: str) -> list[str]:
+    def by_category(cls, category: str) -> builtins.list[str]:
         """List benchmarks in a category."""
         return [name for name, bench in cls._benchmarks.items() if bench.category == category]
 
@@ -84,6 +112,10 @@ class BaseBenchmark(ABC):
         """Clean up after benchmark."""
         pass
 
+    def custom_metrics(self, adapter: GraphDatabaseAdapter, scale: ScaleConfig) -> dict[str, Any]:
+        """Extra metrics for the result, collected after the measured iterations."""
+        return {}
+
     def run(self, adapter: GraphDatabaseAdapter, scale: ScaleConfig) -> Metrics:
         """Execute the benchmark and return metrics."""
         from graph_bench.utils.memory import get_container_memory, get_process_memory
@@ -103,6 +135,8 @@ class BaseBenchmark(ABC):
                 gc.enable()
                 gc.collect()
 
+            # Only the measured iterations decide what the result is labelled.
+            _take_fallbacks(adapter)
             timings_ns: list[int] = []
             items_processed = 0
 
@@ -117,6 +151,7 @@ class BaseBenchmark(ABC):
                 items_processed += items
                 gc.collect()
 
+            implementation = _implementation(_take_fallbacks(adapter))
             timing_stats = self._compute_stats(timings_ns)
             total_items = items_processed // scale.measurement_iterations if scale.measurement_iterations else 0
             throughput = timing_stats.ops_per_second * total_items if total_items else timing_stats.ops_per_second
@@ -135,6 +170,7 @@ class BaseBenchmark(ABC):
                 throughput=throughput,
                 items_processed=items_processed,
                 memory_bytes=peak_memory,
+                custom={**implementation, **self.custom_metrics(adapter, scale)},
             )
         finally:
             self.teardown(adapter)

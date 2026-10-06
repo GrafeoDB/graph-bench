@@ -14,10 +14,15 @@ from graph_bench.protocols import GraphDatabaseAdapter
 from graph_bench.types import ScaleConfig
 
 __all__ = [
+    "FILTER_EQUALITY_QUERY",
+    "FILTER_RANGE_QUERY",
     "AggregationCountBenchmark",
     "FilterEqualityBenchmark",
     "FilterRangeBenchmark",
 ]
+
+FILTER_EQUALITY_QUERY = "MATCH (n:Person {city: $city}) RETURN n LIMIT 100"
+FILTER_RANGE_QUERY = "MATCH (n:Person) WHERE n.age >= $min_age AND n.age <= $max_age RETURN n LIMIT 100"
 
 
 class QueryBenchmarkBase(BaseBenchmark):
@@ -61,15 +66,12 @@ class FilterEqualityBenchmark(QueryBenchmarkBase):
         return "filter_equality"
 
     def run_iteration(self, adapter: GraphDatabaseAdapter, scale: ScaleConfig) -> int:
+        # A failing query propagates, so the benchmark is recorded as FAILED, not timed.
         total = 0
         for i in range(20):
             city = f"City_{i % 100}"
-            try:
-                query = "MATCH (n:Person {city: $city}) RETURN n LIMIT 100"
-                results = adapter.execute_query(query, params={"city": city})
-                total += len(results)
-            except Exception:
-                pass
+            results = adapter.execute_query(FILTER_EQUALITY_QUERY, params={"city": city})
+            total += len(results)
         return total
 
 
@@ -82,16 +84,11 @@ class FilterRangeBenchmark(QueryBenchmarkBase):
         return "filter_range"
 
     def run_iteration(self, adapter: GraphDatabaseAdapter, scale: ScaleConfig) -> int:
+        # A failing query propagates, so the benchmark is recorded as FAILED, not timed.
         total = 0
         for i in range(20):
             min_age = 20 + (i % 40)
             max_age = min_age + 10
-            try:
-                results = adapter.execute_query(
-                    "MATCH (n:Person) WHERE n.age >= $min_age AND n.age <= $max_age RETURN n LIMIT 100",
-                    params={"min_age": min_age, "max_age": max_age},
-                )
-                total += len(results)
-            except Exception:
-                pass
+            results = adapter.execute_query(FILTER_RANGE_QUERY, params={"min_age": min_age, "max_age": max_age})
+            total += len(results)
         return total

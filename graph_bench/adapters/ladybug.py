@@ -430,6 +430,7 @@ class LadybugAdapter(BaseAdapter):
         edge_type: str | None = None,
         weighted: bool = False,
     ) -> list[str] | None:
+        self._record_fallback("shortest_path")
         visited: set[str] = set()
         queue: deque[tuple[str, list[str]]] = deque(
             [(source, [source])]

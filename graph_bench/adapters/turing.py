@@ -442,6 +442,7 @@ class TuringDBAdapter(BaseAdapter):
         # TuringDB doesn't support shortestPath() or list returns —
         # go straight to BFS fallback.
         self._ensure_read()
+        self._record_fallback("shortest_path")
         from collections import deque
         visited: set[str] = set()
         queue: deque[tuple[str, list[str]]] = deque([(source, [source])])

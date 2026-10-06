@@ -311,8 +311,14 @@ class MemgraphAdapter(BaseAdapter):
             pass
         return super().weakly_connected_components()
 
-    def local_clustering_coefficient(self) -> dict[str, float]:
+    # nxalg.clustering() is taken as the undirected coefficient; not yet checked
+    # against the reference in tests/test_lcc.py.
+    native_lcc_definitions = frozenset({"undirected"})
+
+    def local_clustering_coefficient(self, *, directed: bool = True) -> dict[str, float]:
         """LCC using MAGE nxalg.clustering()."""
+        if ("directed" if directed else "undirected") not in self.native_lcc_definitions:
+            return super().local_clustering_coefficient(directed=directed)
         # nxalg.clustering() computes clustering coefficient for all nodes
         query = """
         CALL nxalg.clustering()
@@ -331,7 +337,7 @@ class MemgraphAdapter(BaseAdapter):
                     return coeffs
         except Exception:
             pass
-        return super().local_clustering_coefficient()
+        return super().local_clustering_coefficient(directed=directed)
 
     def bfs_levels(self, source: str) -> dict[str, int]:
         """BFS levels using pure Cypher variable-length paths."""

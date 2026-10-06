@@ -269,6 +269,7 @@ class ArangoDBAdapter(BaseAdapter):
             path = list(cursor)
             return path if path else None
         except Exception:
+            self._record_fallback("shortest_path")
             visited: set[str] = set()
             queue: deque[tuple[str, list[str]]] = deque([(source, [source])])
 

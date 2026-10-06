@@ -339,8 +339,13 @@ class Neo4jAdapter(BaseAdapter):
                 pass
         return super().weakly_connected_components()
 
-    def local_clustering_coefficient(self) -> dict[str, float]:
+    # GDS computes LCC on an UNDIRECTED projection only.
+    native_lcc_definitions = frozenset({"undirected"})
+
+    def local_clustering_coefficient(self, *, directed: bool = True) -> dict[str, float]:
         """LCC using Neo4j GDS. Requires UNDIRECTED projection."""
+        if ("directed" if directed else "undirected") not in self.native_lcc_definitions:
+            return super().local_clustering_coefficient(directed=directed)
         with self._driver.session() as session:
             try:
                 graph_name = "bench_graph_undirected"
@@ -373,7 +378,7 @@ class Neo4jAdapter(BaseAdapter):
                     return coeffs
             except Exception:
                 pass
-        return super().local_clustering_coefficient()
+        return super().local_clustering_coefficient(directed=directed)
 
     def bfs_levels(self, source: str) -> dict[str, int]:
         """BFS levels using Neo4j GDS."""

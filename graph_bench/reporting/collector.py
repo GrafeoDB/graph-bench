@@ -7,13 +7,33 @@ Result collection and aggregation.
     collector.add_result(result)
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any
 
-from graph_bench.types import BenchmarkResult
+from graph_bench.types import UNSUPPORTED_PREFIX, BenchmarkResult, Status
 
-__all__ = ["ResultCollector", "SessionInfo"]
+__all__ = ["ResultCollector", "SessionInfo", "implementation_label"]
+
+
+def _skip_unsupported(result: BenchmarkResult[Any]) -> BenchmarkResult[Any]:
+    """A benchmark the database has no native implementation for is SKIPPED, not FAILED."""
+    if result.status == Status.FAILED and (result.error or "").startswith(UNSUPPORTED_PREFIX):
+        return replace(result, status=Status.SKIPPED)
+    return result
+
+
+def implementation_label(result: BenchmarkResult[Any]) -> str:
+    """What a result measured: "native", "fallback (operations)", "unsupported" or ""."""
+    if result.status == Status.SKIPPED and (result.error or "").startswith(UNSUPPORTED_PREFIX):
+        return "unsupported"
+    if not result.metrics:
+        return ""
+    custom = result.metrics.custom
+    label = custom.get("implementation", "")
+    if label == "fallback" and custom.get("fallbacks"):
+        return f"fallback ({', '.join(custom['fallbacks'])})"
+    return label
 
 
 @dataclass
@@ -101,12 +121,12 @@ class ResultCollector:
         self._session.completed_at = datetime.now(UTC).isoformat()
 
     def add_result(self, result: BenchmarkResult[Any]) -> None:
-        """Add a benchmark result."""
-        self._results.append(result)
+        """Add a benchmark result (unsupported ones become SKIPPED)."""
+        self._results.append(_skip_unsupported(result))
 
     def add_results(self, results: list[BenchmarkResult[Any]]) -> None:
-        """Add multiple benchmark results."""
-        self._results.extend(results)
+        """Add multiple benchmark results (unsupported ones become SKIPPED)."""
+        self._results.extend(_skip_unsupported(r) for r in results)
 
     @property
     def results(self) -> list[BenchmarkResult[Any]]:

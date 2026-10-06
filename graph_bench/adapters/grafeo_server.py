@@ -1,157 +1,229 @@
 r"""
 Grafeo Server database adapter (GQL over GWP/gRPC).
 
-Grafeo Server uses the GQL Wire Protocol (GWP) — a gRPC-based binary protocol.
-This adapter communicates directly via GWP using the bundled proto stubs.
+Grafeo Server speaks the GQL Wire Protocol (GWP), a gRPC protocol. This adapter
+uses the bundled stubs in ``graph_bench.adapters.proto`` (gwp 0.2.1, the
+protocol of grafeo-server 0.5.44): ``CatalogService`` creates the benchmark
+graph, ``GqlService`` runs parameterized GQL, and native algorithms run as
+``CALL grafeo.<algorithm>()`` procedures.
 
-Uses parameterized queries throughout (same approach as the Neo4j adapter).
-Multi-CREATE with numbered params for node batching; per-edge parameterized
-MATCH+CREATE for edges. RETURN n yields full node maps via GWP node_value.
-Native algorithms via CALL procedures (pagerank, SSSP, WCC, etc.).
+Works with the GWP-enabled images (``grafeo/grafeo-server:<version>-gwp`` and
+``-full``) and with a local ``grafeo-server`` binary.
 
-Works with grafeo-server:lite (GWP-only, no HTTP).
-
-Requires: pip install grpcio
+Requires: uv sync --extra grafeo-server (grpcio, protobuf)
 
 Environment variables:
-    GRAPH_BENCH_GRAFEO_SERVER_URI: GWP URI (default: localhost:7687)
+    GRAPH_BENCH_GRAFEO_SERVER_URI: GWP address (default: localhost:7688)
 
     from graph_bench.adapters.grafeo_server import GrafeoServerAdapter
 
     adapter = GrafeoServerAdapter()
-    adapter.connect(uri="localhost:7687")
+    adapter.connect(uri="localhost:7688")
+
+GWP reports query errors in the result summary instead of as gRPC errors.
+The adapter checks every summary and raises ``GrafeoServerError``, so a failing
+query fails its benchmark instead of being timed as an empty result.
 """
 
+from __future__ import annotations
+
+import functools
 import math
 import threading
-from collections import defaultdict
-from collections.abc import Sequence
+from collections import deque
+from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any
 
-import grpc
-
 from graph_bench.adapters.base import AdapterRegistry, BaseAdapter
-from graph_bench.adapters.proto import gql_service_pb2 as pb
-from graph_bench.adapters.proto import gql_service_pb2_grpc as pb_grpc
-from graph_bench.adapters.proto import gql_types_pb2 as types_pb
 from graph_bench.config import get_env
+from graph_bench.types import UnsupportedOperation
 
-__all__ = ["GrafeoServerAdapter"]
+__all__ = ["DEFAULT_URI", "GrafeoServerAdapter", "GrafeoServerError", "gwp_address"]
+
+DEFAULT_URI = "localhost:7688"
+_WRITE_ATTEMPTS = 5
+_NO_VECTOR_INDEX = "this grafeo-server has no vector index (it needs the vector-index feature, as in the -full image)"
+_SCHEMA = "default"
+_INSTALL_HINT = "grafeo-server adapter needs grpcio and protobuf. Install with: uv sync --extra grafeo-server"
 
 
-# ── Proto conversion helpers ────────────────────────────────────
+class GrafeoServerError(RuntimeError):
+    """A GQL statement or transaction failed on the server (GQLSTATUS exception)."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(f"{code}: {message}")
+        self.code = code
+        self.message = message
+
+    @property
+    def rolled_back(self) -> bool:
+        """GQLSTATUS class 40 (transaction rollback): the server aborted it, a retry may succeed."""
+        return self.code[:2] == "40"
 
 
-def _proto_to_python(value: types_pb.Value) -> Any:
+@functools.cache
+def _gwp() -> SimpleNamespace:
+    """Import grpc and the GWP stubs on first use."""
+    try:
+        import grpc
+
+        from graph_bench.adapters.proto import gql_service_pb2, gql_service_pb2_grpc, gql_types_pb2
+    except ImportError as e:
+        raise ImportError(_INSTALL_HINT) from e
+    return SimpleNamespace(grpc=grpc, pb=gql_service_pb2, stubs=gql_service_pb2_grpc, types=gql_types_pb2)
+
+
+def gwp_address(uri: str | None = None) -> str:
+    """The GWP address to use: ``uri``, else GRAPH_BENCH_GRAFEO_SERVER_URI, else the default."""
+    address = uri or get_env("GRAFEO_SERVER_URI", default=DEFAULT_URI) or DEFAULT_URI
+    for prefix in ("http://", "https://", "grpc://"):
+        address = address.removeprefix(prefix)
+    return address.rstrip("/")
+
+
+# ── GQLSTATUS ───────────────────────────────────────────────────
+
+
+def _is_exception(code: str) -> bool:
+    """Whether a GQLSTATUS code is an exception.
+
+    Classes 00 (success), 01 (warning), 02 (no data) and 03 (information) are
+    not; every other class is (ISO/IEC 39075, section 23).
+    """
+    status_class = code[:2]
+    if len(status_class) < 2:
+        return False
+    return status_class[0].isalpha() or status_class >= "08"
+
+
+def _check_status(message: Any) -> None:
+    """Raise GrafeoServerError when a response's ``status`` is an exception."""
+    if message.HasField("status") and _is_exception(message.status.code):
+        raise GrafeoServerError(message.status.code, message.status.message)
+
+
+# ── Value conversion ────────────────────────────────────────────
+
+
+def _entity_to_python(entity: Any) -> dict[str, Any]:
+    props = {k: _proto_to_python(v) for k, v in entity.properties.items()}
+    props["_labels"] = list(entity.labels)
+    return props
+
+
+def _proto_to_python(value: Any) -> Any:
     """Convert a GWP proto Value to a Python value."""
     kind = value.WhichOneof("kind")
     if kind is None or kind == "null_value":
         return None
-    if kind == "boolean_value":
-        return value.boolean_value
-    if kind == "integer_value":
-        return value.integer_value
-    if kind == "unsigned_integer_value":
-        return value.unsigned_integer_value
-    if kind == "float_value":
-        return value.float_value
-    if kind == "string_value":
-        return value.string_value
-    if kind == "bytes_value":
-        return value.bytes_value
+    if kind in ("boolean_value", "integer_value", "unsigned_integer_value", "float_value"):
+        return getattr(value, kind)
+    if kind in ("string_value", "bytes_value"):
+        return getattr(value, kind)
     if kind == "list_value":
         return [_proto_to_python(e) for e in value.list_value.elements]
     if kind == "record_value":
-        return {
-            f.name: _proto_to_python(f.value)
-            for f in value.record_value.fields
-        }
+        return {f.name: _proto_to_python(f.value) for f in value.record_value.fields}
     if kind == "node_value":
-        node = value.node_value
-        props = {k: _proto_to_python(v) for k, v in node.properties.items()}
-        props["_labels"] = list(node.labels)
-        return props
+        return _entity_to_python(value.node_value)
     if kind == "edge_value":
-        edge = value.edge_value
-        props = {k: _proto_to_python(v) for k, v in edge.properties.items()}
-        props["_labels"] = list(edge.labels)
-        return props
+        return _entity_to_python(value.edge_value)
     if kind == "path_value":
         path = value.path_value
         return {
-            "nodes": [_proto_to_python(types_pb.Value(node_value=n)) for n in path.nodes],
-            "edges": [_proto_to_python(types_pb.Value(edge_value=e)) for e in path.edges],
+            "nodes": [_entity_to_python(n) for n in path.nodes],
+            "edges": [_entity_to_python(e) for e in path.edges],
         }
-    # Temporal types, big integer, etc. — return as string
+    # Temporal types, big integers and the like: keep their text form.
     return str(value)
 
 
-def _python_to_proto(value: Any) -> types_pb.Value:
+def _python_to_proto(value: Any) -> Any:
     """Convert a Python value to a GWP proto Value."""
+    types = _gwp().types
     if value is None:
-        return types_pb.Value(null_value=types_pb.NullValue())
+        return types.Value(null_value=types.NullValue())
     if isinstance(value, bool):
-        return types_pb.Value(boolean_value=value)
+        return types.Value(boolean_value=value)
     if isinstance(value, int):
-        return types_pb.Value(integer_value=value)
+        return types.Value(integer_value=value)
     if isinstance(value, float):
         if math.isnan(value) or math.isinf(value):
-            return types_pb.Value(null_value=types_pb.NullValue())
-        return types_pb.Value(float_value=value)
+            return types.Value(null_value=types.NullValue())
+        return types.Value(float_value=value)
     if isinstance(value, str):
-        return types_pb.Value(string_value=value)
+        return types.Value(string_value=value)
     if isinstance(value, bytes):
-        return types_pb.Value(bytes_value=value)
+        return types.Value(bytes_value=value)
     if isinstance(value, (list, tuple)):
-        elements = [_python_to_proto(v) for v in value]
-        return types_pb.Value(list_value=types_pb.GqlList(elements=elements))
+        return types.Value(list_value=types.GqlList(elements=[_python_to_proto(v) for v in value]))
     if isinstance(value, dict):
-        fields = [
-            types_pb.Field(name=str(k), value=_python_to_proto(v))
-            for k, v in value.items()
-        ]
-        return types_pb.Value(record_value=types_pb.Record(fields=fields))
-    return types_pb.Value(string_value=str(value))
+        fields = [types.Field(name=str(k), value=_python_to_proto(v)) for k, v in value.items()]
+        return types.Value(record_value=types.Record(fields=fields))
+    return types.Value(string_value=str(value))
+
+
+def _all_number_lists(values: Any) -> bool:
+    """Whether every value given is a non-empty list of numbers (an embedding)."""
+    seen = False
+    for value in values:
+        if value is None:
+            continue
+        if not (
+            isinstance(value, list)
+            and value
+            and all(isinstance(x, int | float) and not isinstance(x, bool) for x in value)
+        ):
+            return False
+        seen = True
+    return seen
+
+
+@dataclass
+class _Result:
+    columns: list[str] = field(default_factory=list)
+    rows: list[list[Any]] = field(default_factory=list)
+    counters: dict[str, int] = field(default_factory=dict)
+
+    def records(self) -> list[dict[str, Any]]:
+        return [dict(zip(self.columns, row, strict=False)) for row in self.rows]
 
 
 def _execute_and_collect(
-    gql_stub: pb_grpc.GqlServiceStub,
+    gql_stub: Any,
     session_id: str,
     statement: str,
     *,
     transaction_id: str = "",
     parameters: dict[str, Any] | None = None,
     timeout: int = 300,
-) -> tuple[list[str], list[list[Any]]]:
-    """Execute a GQL statement via GWP and collect all result frames.
-
-    Returns (columns, rows) where rows are lists of Python values.
-    """
-    params = {}
-    if parameters:
-        params = {k: _python_to_proto(v) for k, v in parameters.items()}
-
-    req = pb.ExecuteRequest(
+) -> _Result:
+    """Execute a GQL statement via GWP, collect every frame and check the summary."""
+    pb = _gwp().pb
+    request = pb.ExecuteRequest(
         session_id=session_id,
         statement=statement,
-        parameters=params,
-        transaction_id=transaction_id,
+        parameters={k: _python_to_proto(v) for k, v in (parameters or {}).items()},
     )
-    response_stream = gql_stub.Execute(req, timeout=timeout)
+    if transaction_id:
+        # An empty but present transaction_id names a transaction that does not exist.
+        request.transaction_id = transaction_id
 
-    columns: list[str] = []
-    rows: list[list[Any]] = []
-
-    for frame in response_stream:
+    result = _Result()
+    for frame in gql_stub.Execute(request, timeout=timeout):
         which = frame.WhichOneof("frame")
         if which == "header":
-            columns = [col.name for col in frame.header.columns]
+            result.columns = [col.name for col in frame.header.columns]
         elif which == "row_batch":
-            for row in frame.row_batch.rows:
-                rows.append([_proto_to_python(v) for v in row.values])
-
-    return columns, rows
+            result.rows.extend([_proto_to_python(v) for v in row.values] for row in frame.row_batch.rows)
+        elif which == "summary":
+            _check_status(frame.summary)
+            result.counters = dict(frame.summary.counters)
+    return result
 
 
 # ── Adapter ─────────────────────────────────────────────────────
@@ -161,22 +233,35 @@ def _execute_and_collect(
 class GrafeoServerAdapter(BaseAdapter):
     """Grafeo Server graph database adapter (GWP/gRPC).
 
-    Communicates with grafeo-server via the GQL Wire Protocol.
-    Uses parameterized queries throughout — same approach as the Neo4j adapter.
+    Uses parameterized queries throughout, like the Neo4j adapter. Each thread
+    gets its own GWP session over one shared HTTP/2 channel. Native vector
+    search goes through the GWP AdminService (index) and SearchService (k-NN),
+    which need a server built with the vector-index feature (the -full image).
+
+    Runs in Python (and is labelled a fallback): shortest paths, DFS, BFS
+    restricted to one edge type, and the directed (LDBC) clustering coefficient.
     """
 
-    def __init__(self) -> None:
-        self._db_name: str = "bench"
+    # CALL grafeo.clustering_coefficient() ignores edge direction.
+    native_lcc_definitions = frozenset({"undirected"})
+
+    def __init__(self, *, graph: str = "bench") -> None:
+        self._graph = graph
         self._connected = False
-        self._gwp_uri: str = ""
-        self._channel: grpc.Channel | None = None
-        self._session_stub: pb_grpc.SessionServiceStub | None = None
-        self._gql_stub: pb_grpc.GqlServiceStub | None = None
-        self._db_stub: pb_grpc.DatabaseServiceStub | None = None
+        self._gwp_uri = ""
+        self._server_version = "unknown"
+        self._channel: Any = None
+        self._session_stub: Any = None
+        self._gql_stub: Any = None
+        self._catalog_stub: Any = None
+        self._admin_stub: Any = None
+        self._search_stub: Any = None
+        self._procedures: frozenset[str] = frozenset()
+        self._vector_metric = "cosine"
         # Session-per-thread pool: each thread gets its own GWP session
         self._thread_sessions: dict[int, str] = {}
         self._session_lock = threading.Lock()
-        # Shared thread pool for concurrent operations (BFS, DFS)
+        # Shared thread pool for traversals that fan out over the channel
         self._pool: ThreadPoolExecutor | None = None
 
     @property
@@ -185,30 +270,18 @@ class GrafeoServerAdapter(BaseAdapter):
 
     @property
     def version(self) -> str:
-        if not self._connected or not self._session_stub:
-            return "unknown"
-        try:
-            self._session_stub.Ping(
-                pb.PingRequest(session_id=self._get_session_id())
-            )
-            return "0.4.4"
-        except Exception:
-            return "unknown"
+        """Version from the GWP handshake.
+
+        grafeo-server 0.5.44 reports the version of its GWP library there
+        (``gwp 0.2.1``), not its own.
+        """
+        return self._server_version
 
     def connect(self, *, uri: str | None = None, **kwargs: Any) -> None:
-        default_uri = "localhost:7687"
-        self._gwp_uri = (
-            uri
-            or get_env("GRAFEO_SERVER_URI", default=default_uri)
-            or default_uri
-        )
-        # Strip protocol prefix if present
-        for prefix in ("http://", "https://", "grpc://"):
-            if self._gwp_uri.startswith(prefix):
-                self._gwp_uri = self._gwp_uri[len(prefix):]
-        self._gwp_uri = self._gwp_uri.rstrip("/")
+        gwp = _gwp()
+        self._gwp_uri = gwp_address(uri)
 
-        self._channel = grpc.insecure_channel(
+        self._channel = gwp.grpc.insecure_channel(
             self._gwp_uri,
             options=[
                 ("grpc.keepalive_time_ms", 30000),
@@ -219,227 +292,130 @@ class GrafeoServerAdapter(BaseAdapter):
                 ("grpc.initial_reconnect_backoff_ms", 100),
             ],
         )
-        self._session_stub = pb_grpc.SessionServiceStub(self._channel)
-        self._gql_stub = pb_grpc.GqlServiceStub(self._channel)
-        self._db_stub = pb_grpc.DatabaseServiceStub(self._channel)
+        self._session_stub = gwp.stubs.SessionServiceStub(self._channel)
+        self._gql_stub = gwp.stubs.GqlServiceStub(self._channel)
+        self._catalog_stub = gwp.stubs.CatalogServiceStub(self._channel)
+        self._admin_stub = gwp.stubs.AdminServiceStub(self._channel)
+        self._search_stub = gwp.stubs.SearchServiceStub(self._channel)
 
-        # Create benchmark database via DatabaseService (ignore if exists)
-        try:
-            self._db_stub.CreateDatabase(
-                pb.CreateDatabaseRequest(
-                    name=self._db_name,
-                    database_type="Lpg",
-                    storage_mode="InMemory",
-                )
-            )
-        except grpc.RpcError:
-            pass  # Already exists
-
-        # Create initial GWP session for the current (main) thread
-        resp = self._session_stub.Handshake(
-            pb.HandshakeRequest(
-                protocol_version=1,
-                client_info={"client": "graph-bench", "version": "1.0"},
-            )
-        )
-        self._session_stub.Configure(
-            pb.ConfigureRequest(
-                session_id=resp.session_id,
-                graph=self._db_name,
-            )
-        )
-        self._thread_sessions[threading.get_ident()] = resp.session_id
+        self._ensure_graph(replace=False)
         self._connected = True
-        # Pre-warm shared thread pool (sessions created lazily per thread)
+        self._procedures = frozenset(row["name"] for row in self._query("CALL grafeo.procedures() YIELD name"))
         self._pool = ThreadPoolExecutor(max_workers=16)
 
     def disconnect(self) -> None:
         if self._pool:
             self._pool.shutdown(wait=False)
             self._pool = None
-        self._close_all_sessions()
+        if self._session_stub is not None:
+            self._close_all_sessions()
         if self._channel:
             self._channel.close()
             self._channel = None
         self._session_stub = None
         self._gql_stub = None
-        self._db_stub = None
+        self._catalog_stub = None
+        self._admin_stub = None
+        self._search_stub = None
         self._connected = False
 
-    def _get_session_id(self) -> str:
-        """Get or create a GWP session for the current thread.
+    # ── Sessions and graph lifecycle ────────────────────────────
 
-        Each thread gets its own independent GWP session, enabling
-        true concurrent operations (separate transactions, streams).
-        """
+    def _ensure_graph(self, *, replace: bool) -> None:
+        """Create the benchmark graph, dropping an existing one when ``replace``."""
+        pb = _gwp().pb
+        listing = self._catalog_stub.ListGraphs(pb.ListGraphsRequest(schema=_SCHEMA))
+        if self._graph in {graph.name for graph in listing.graphs}:
+            if not replace:
+                return
+            self._catalog_stub.DropGraph(pb.DropGraphRequest(schema=_SCHEMA, name=self._graph))
+        self._catalog_stub.CreateGraph(
+            pb.CreateGraphRequest(schema=_SCHEMA, name=self._graph, open_type=True, storage_mode="InMemory")
+        )
+
+    def _new_session(self) -> str:
+        pb = _gwp().pb
+        resp = self._session_stub.Handshake(
+            pb.HandshakeRequest(protocol_version=1, client_info={"client": "graph-bench"})
+        )
+        if resp.HasField("server_info"):
+            self._server_version = f"gwp {resp.server_info.version}"
+        self._session_stub.Configure(pb.ConfigureRequest(session_id=resp.session_id, graph=self._graph))
+        return resp.session_id
+
+    def _get_session_id(self) -> str:
+        """Get or create the GWP session of the current thread."""
         tid = threading.get_ident()
         if tid not in self._thread_sessions:
             with self._session_lock:
                 if tid not in self._thread_sessions:
-                    resp = self._session_stub.Handshake(
-                        pb.HandshakeRequest(
-                            protocol_version=1,
-                            client_info={"client": "graph-bench", "version": "1.0"},
-                        )
-                    )
-                    self._session_stub.Configure(
-                        pb.ConfigureRequest(
-                            session_id=resp.session_id,
-                            graph=self._db_name,
-                        )
-                    )
-                    self._thread_sessions[tid] = resp.session_id
+                    self._thread_sessions[tid] = self._new_session()
         return self._thread_sessions[tid]
 
     def _close_all_sessions(self) -> None:
-        """Close all thread-local GWP sessions."""
+        """Close every thread's GWP session (closing also rolls back its transaction)."""
+        gwp = _gwp()
         with self._session_lock:
-            for sid in self._thread_sessions.values():
-                try:
-                    self._session_stub.Close(
-                        pb.CloseRequest(session_id=sid)
-                    )
-                except Exception:
-                    pass
+            sessions = list(self._thread_sessions.values())
             self._thread_sessions.clear()
+        for sid in sessions:
+            try:
+                self._session_stub.CloseSession(gwp.pb.CloseSessionRequest(session_id=sid))
+            except gwp.grpc.RpcError as error:
+                # The server already ended it (idle timeout); there is nothing left to close.
+                if error.code() != gwp.grpc.StatusCode.NOT_FOUND:
+                    raise
 
-    # ── GWP query helpers ───────────────────────────────────────
+    def clear(self) -> None:
+        """Drop and recreate the benchmark graph.
 
-    def _query(
-        self, gql: str, *, parameters: dict[str, Any] | None = None
-    ) -> list[dict[str, Any]]:
-        """Execute a GQL query via GWP and return rows as dicts."""
-        columns, rows = _execute_and_collect(
-            self._gql_stub, self._get_session_id(), gql,
-            parameters=parameters,
-        )
-        return [
-            {col: row[i] for i, col in enumerate(columns)}
-            for row in rows
-        ]
+        Dropping the graph ends every session on it, so all thread sessions are
+        closed first; each thread opens a new one on its next query.
+        """
+        self._close_all_sessions()
+        self._ensure_graph(replace=True)
 
-    def _exec(
-        self, gql: str, *, parameters: dict[str, Any] | None = None
-    ) -> Any:
-        """Execute a GQL query via GWP and return raw result."""
-        columns, rows = _execute_and_collect(
-            self._gql_stub, self._get_session_id(), gql,
-            parameters=parameters,
-        )
-        return {"columns": columns, "rows": rows}
+    # ── Query helpers ───────────────────────────────────────────
 
-    def _tx_begin(self) -> str:
-        """Begin a transaction via GWP, return transaction_id."""
-        resp = self._gql_stub.BeginTransaction(
-            pb.BeginRequest(
-                session_id=self._get_session_id(),
-                mode=pb.READ_WRITE,
-            )
-        )
-        return resp.transaction_id
-
-    def _tx_query(
-        self, tx_id: str, gql: str, *, parameters: dict[str, Any] | None = None
-    ) -> Any:
-        """Execute a query within a GWP transaction."""
-        columns, rows = _execute_and_collect(
+    def _run(self, gql: str, *, parameters: dict[str, Any] | None = None, transaction_id: str = "") -> _Result:
+        return _execute_and_collect(
             self._gql_stub,
             self._get_session_id(),
             gql,
-            transaction_id=tx_id,
+            transaction_id=transaction_id,
             parameters=parameters,
         )
-        return {"columns": columns, "rows": rows}
 
-    def _tx_commit(self, tx_id: str) -> None:
-        """Commit a GWP transaction."""
-        self._gql_stub.Commit(
-            pb.CommitRequest(
-                session_id=self._get_session_id(),
-                transaction_id=tx_id,
-            )
-        )
+    def _query(self, gql: str, *, parameters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        """Execute a GQL query (auto-commit) and return rows as dicts."""
+        return self._run(gql, parameters=parameters).records()
 
-    # ── Database lifecycle ──────────────────────────────────────
-
-    def clear(self) -> None:
-        """Drop and recreate the benchmark database.
-
-        Closes ALL thread sessions (database is being dropped), then
-        creates a fresh session for the current thread. Other threads
-        will lazily create new sessions on next access.
-        """
-        self._close_all_sessions()
-
+    @contextmanager
+    def _transaction(self) -> Iterator[str]:
+        """Run the block in a read-write transaction: commit on success, roll back on error."""
+        pb = _gwp().pb
+        sid = self._get_session_id()
+        begin = self._gql_stub.BeginTransaction(pb.BeginRequest(session_id=sid, mode=pb.READ_WRITE))
+        _check_status(begin)
+        tx_id = begin.transaction_id
         try:
-            self._db_stub.DeleteDatabase(
-                pb.DeleteDatabaseRequest(name=self._db_name)
-            )
-        except grpc.RpcError:
-            pass
-
-        self._db_stub.CreateDatabase(
-            pb.CreateDatabaseRequest(
-                name=self._db_name,
-                database_type="Lpg",
-                storage_mode="InMemory",
-            )
-        )
-
-        # Create a fresh session for the current thread
-        resp = self._session_stub.Handshake(
-            pb.HandshakeRequest(
-                protocol_version=1,
-                client_info={"client": "graph-bench", "version": "1.0"},
-            )
-        )
-        self._session_stub.Configure(
-            pb.ConfigureRequest(
-                session_id=resp.session_id,
-                graph=self._db_name,
-            )
-        )
-        self._thread_sessions[threading.get_ident()] = resp.session_id
-
-    # ── Core operations ─────────────────────────────────────────
+            yield tx_id
+        except BaseException as error:
+            try:
+                self._gql_stub.Rollback(pb.RollbackRequest(session_id=sid, transaction_id=tx_id))
+            except Exception as rollback_error:
+                error.add_note(f"rollback also failed: {rollback_error}")
+            raise
+        _check_status(self._gql_stub.Commit(pb.CommitRequest(session_id=sid, transaction_id=tx_id)))
 
     @staticmethod
     def _strip_internal(node: Any) -> dict[str, Any]:
         """Strip internal fields (_id, _labels) from a node map."""
         if isinstance(node, dict):
-            return {k: v for k, v in node.items()
-                    if k not in ("_id", "_labels")}
+            return {k: v for k, v in node.items() if k not in ("_id", "_labels")}
         return {}
 
-    @staticmethod
-    def _gql_literal(value: Any) -> str:
-        """Convert a Python value to a GQL inline literal."""
-        if value is None:
-            return "null"
-        if isinstance(value, bool):
-            return "true" if value else "false"
-        if isinstance(value, int):
-            return str(value)
-        if isinstance(value, float):
-            if math.isnan(value) or math.isinf(value):
-                return "null"
-            return repr(value)
-        if isinstance(value, (list, tuple)):
-            return "[" + ", ".join(
-                GrafeoServerAdapter._gql_literal(v) for v in value
-            ) + "]"
-        # String: escape backslashes and double quotes
-        s = str(value).replace("\\", "\\\\").replace('"', '\\"')
-        return f'"{s}"'
-
-    @staticmethod
-    def _gql_map(props: dict[str, Any]) -> str:
-        """Format a dict as a GQL inline map {key: value, ...}."""
-        parts = [
-            f"{k}: {GrafeoServerAdapter._gql_literal(v)}"
-            for k, v in props.items()
-        ]
-        return "{" + ", ".join(parts) + "}"
+    # ── Core operations ─────────────────────────────────────────
 
     def insert_nodes(
         self,
@@ -448,63 +424,61 @@ class GrafeoServerAdapter(BaseAdapter):
         label: str = "Node",
         batch_size: int = 1000,
     ) -> int:
-        """Insert nodes using parameterized UNWIND.
-
-        Sends node dicts as $nodes parameter — GWP Record encoding
-        fixed in grafeo-server 0.4.4+ to correctly deserialize
-        list-of-maps parameters.
-        """
+        """Insert nodes with a parameterized UNWIND, one transaction per call."""
         if not nodes:
             return 0
-        prop_keys = list(nodes[0].keys())
+        labels = f"{label}:Node" if label != "Node" else "Node"
+        # The union of keys, so a property missing from the first node is kept.
+        keys = sorted({key for node in nodes for key in node})
+        # GWP has no vector type: a list parameter arrives as a list, which the
+        # vector index leaves out, so lists of numbers are stored with vector().
+        vectors = {key for key in keys if _all_number_lists(node.get(key) for node in nodes)}
+        assigns = ", ".join(f"{key}: vector(props.{key})" if key in vectors else f"{key}: props.{key}" for key in keys)
+        query = f"UNWIND $nodes AS props CREATE (:{labels} {{{assigns}}})"
 
         count = 0
-        assigns = ", ".join(f"{k}: props.{k}" for k in prop_keys)
-        query = f"UNWIND $nodes AS props CREATE (:{label}:Node {{{assigns}}})"
-
-        sid = self._tx_begin()
-        for i in range(0, len(nodes), batch_size):
-            batch = [dict(n) for n in nodes[i : i + batch_size]]
-            self._tx_query(sid, query, parameters={"nodes": batch})
-            count += len(batch)
-        self._tx_commit(sid)
+        with self._transaction() as tx_id:
+            for start in range(0, len(nodes), batch_size):
+                batch = [dict(node) for node in nodes[start : start + batch_size]]
+                result = self._run(query, parameters={"nodes": batch}, transaction_id=tx_id)
+                count += result.counters.get("nodes_created", 0)
+        self._ensure_id_index()
         return count
 
+    def _ensure_id_index(self) -> None:
+        # FAIRNESS.md allows one index on `id`, created after the insert.
+        indexes = self._query("SHOW INDEXES")
+        if not any(ix.get("label") == "Node" and ix.get("property") == "id" for ix in indexes):
+            self._query("CREATE INDEX idx_node_id FOR (n:Node) ON (n.id)")
+
     def get_node(self, node_id: str) -> dict[str, Any] | None:
-        rows = self._query(
-            "MATCH (n:Node {id: $id}) RETURN n",
-            parameters={"id": node_id},
-        )
+        rows = self._query("MATCH (n:Node {id: $id}) RETURN n", parameters={"id": node_id})
         if rows:
             return self._strip_internal(rows[0]["n"])
         return None
 
     def update_node(self, node_id: str, properties: dict[str, Any]) -> bool:
-        # SET n += $props is not supported; set each property individually
-        set_parts = []
-        params: dict[str, Any] = {"id": node_id}
-        for k, v in properties.items():
-            pname = f"prop_{k}"
-            params[pname] = v
-            set_parts.append(f"n.{k} = ${pname}")
-        sid = self._tx_begin()
-        try:
-            result = self._tx_query(
-                sid,
-                f"MATCH (n:Node {{id: $id}}) SET {', '.join(set_parts)} RETURN n.id AS id",
-                parameters=params,
-            )
-            self._tx_commit(sid)
-            return bool(result.get("rows"))
-        except Exception:
-            return False
+        """Merge properties in one auto-commit statement, like the embedded and Neo4j adapters.
 
-    def get_nodes_by_label(
-        self, label: str, *, limit: int = 100
-    ) -> list[dict[str, Any]]:
-        rows = self._query(
-            f"MATCH (n:{label}) RETURN n LIMIT {int(limit)}",
-        )
+        Concurrent updates of one node (the concurrent and ACID benchmarks) can
+        abort with a write-write conflict; a rolled-back statement is retried,
+        as a driver retries a transient error. grafeo-server 0.5.44 reports the
+        conflict as 42001 instead of class 40, so it is not retried there.
+        """
+        for attempt in range(_WRITE_ATTEMPTS):
+            try:
+                rows = self._query(
+                    "MATCH (n:Node {id: $id}) SET n += $props RETURN n.id AS id",
+                    parameters={"id": node_id, "props": dict(properties)},
+                )
+                return bool(rows)
+            except GrafeoServerError as error:
+                if not error.rolled_back or attempt == _WRITE_ATTEMPTS - 1:
+                    raise
+        return False
+
+    def get_nodes_by_label(self, label: str, *, limit: int = 100) -> list[dict[str, Any]]:
+        rows = self._query(f"MATCH (n:{label}) RETURN n LIMIT $limit", parameters={"limit": int(limit)})
         return [self._strip_internal(row["n"]) for row in rows]
 
     def insert_edges(
@@ -513,81 +487,36 @@ class GrafeoServerAdapter(BaseAdapter):
         *,
         batch_size: int = 500,
     ) -> int:
-        """Insert edges using internal node IDs for O(1) lookups.
+        """Insert edges with UNWIND + MATCH + CREATE and return how many were created.
 
-        Builds an app_id → internal_nid map first, then uses
-        MATCH (a) WHERE id(a) = e.src_nid to avoid full property scans
-        (property indexes not yet available via GQL DDL).
+        Endpoints are found through the `id` index. An edge whose endpoint does
+        not exist is not created and not counted (the server's write counters).
         """
         if not edges:
             return 0
-
-        # Build app_id → internal nid mapping (O(N) once)
-        nid_rows = self._query(
-            "MATCH (n:Node) RETURN n.id AS app_id, id(n) AS nid"
-        )
-        app_to_nid = {str(r["app_id"]): r["nid"] for r in nid_rows}
-
-        by_type: dict[
-            str, list[tuple[str, str, dict[str, Any]]]
-        ] = defaultdict(list)
-        for src, tgt, etype, props in edges:
-            by_type[etype].append((src, tgt, props))
+        by_type: dict[str, list[dict[str, Any]]] = {}
+        for src, tgt, edge_type, props in edges:
+            by_type.setdefault(edge_type, []).append({**props, "src": src, "dst": tgt})
 
         count = 0
-        sid = self._tx_begin()
-
-        for etype, type_edges in by_type.items():
-            # Detect extra edge properties
-            has_props = any(props for _, _, props in type_edges)
-            prop_keys: list[str] = []
-            if has_props:
-                for _, _, props in type_edges:
-                    if props:
-                        prop_keys = list(props.keys())
-                        break
-
-            if has_props and prop_keys:
-                prop_assigns = " {" + ", ".join(
-                    f"{k}: e.{k}" for k in prop_keys
-                ) + "}"
-            else:
-                prop_assigns = ""
-
-            query = (
-                f"UNWIND $edges AS e "
-                f"MATCH (a) WHERE id(a) = e.src_nid "
-                f"MATCH (b) WHERE id(b) = e.tgt_nid "
-                f"CREATE (a)-[:{etype}{prop_assigns}]->(b)"
-            )
-
-            for i in range(0, len(type_edges), batch_size):
-                batch = type_edges[i : i + batch_size]
-                edge_list = []
-                for src, tgt, props in batch:
-                    src_nid = app_to_nid.get(src)
-                    tgt_nid = app_to_nid.get(tgt)
-                    if src_nid is None or tgt_nid is None:
-                        continue
-                    m: dict[str, Any] = {"src_nid": src_nid, "tgt_nid": tgt_nid}
-                    if props:
-                        m.update(props)
-                    edge_list.append(m)
-                if edge_list:
-                    self._tx_query(sid, query, parameters={"edges": edge_list})
-                count += len(edge_list)
-
-        self._tx_commit(sid)
+        with self._transaction() as tx_id:
+            for edge_type, rows in by_type.items():
+                keys = sorted({key for row in rows for key in row} - {"src", "dst"})
+                props = " {" + ", ".join(f"{key}: e.{key}" for key in keys) + "}" if keys else ""
+                query = (
+                    "UNWIND $edges AS e "
+                    "MATCH (a:Node {id: e.src}) MATCH (b:Node {id: e.dst}) "
+                    f"CREATE (a)-[:{edge_type}{props}]->(b)"
+                )
+                for start in range(0, len(rows), batch_size):
+                    batch = rows[start : start + batch_size]
+                    result = self._run(query, parameters={"edges": batch}, transaction_id=tx_id)
+                    count += result.counters.get("edges_created", 0)
         return count
 
-    def get_neighbors(
-        self, node_id: str, *, edge_type: str | None = None
-    ) -> list[str]:
-        if edge_type:
-            query = f"MATCH (n:Node {{id: $id}})-[:{edge_type}]->(m) RETURN m.id AS id"
-        else:
-            query = "MATCH (n:Node {id: $id})-[r]->(m) RETURN m.id AS id"
-        rows = self._query(query, parameters={"id": node_id})
+    def get_neighbors(self, node_id: str, *, edge_type: str | None = None) -> list[str]:
+        rel = f"[:{edge_type}]" if edge_type else "[]"
+        rows = self._query(f"MATCH (n:Node {{id: $id}})-{rel}->(m) RETURN m.id AS id", parameters={"id": node_id})
         return [str(r["id"]) for r in rows if r.get("id") is not None]
 
     def shortest_path(
@@ -598,63 +527,80 @@ class GrafeoServerAdapter(BaseAdapter):
         edge_type: str | None = None,
         weighted: bool = False,
     ) -> list[str] | None:
-        # BFS fallback (same as base adapter)
-        from collections import deque
-
+        # BFS over get_neighbors (unweighted, as in the base adapter)
+        self._record_fallback("shortest_path")
         visited: set[str] = set()
-        queue: deque[tuple[str, list[str]]] = deque(
-            [(source, [source])]
-        )
+        queue: deque[list[str]] = deque([[source]])
         while queue:
-            current, path = queue.popleft()
+            path = queue.popleft()
+            current = path[-1]
             if current == target:
                 return path
             if current in visited:
                 continue
             visited.add(current)
-            for neighbor in self.get_neighbors(
-                current, edge_type=edge_type
-            ):
-                if neighbor not in visited:
-                    queue.append((neighbor, [*path, neighbor]))
+            neighbors = self.get_neighbors(current, edge_type=edge_type)
+            queue.extend([*path, neighbor] for neighbor in neighbors if neighbor not in visited)
         return None
+
+    def execute_query(self, query: str, *, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        q_upper = query.strip().upper()
+        is_write = any(kw in q_upper for kw in ["CREATE", "DELETE", "SET ", "REMOVE", "MERGE"])
+        if not is_write:
+            return self._query(query, parameters=params)
+        with self._transaction() as tx_id:
+            return self._run(query, parameters=params, transaction_id=tx_id).records()
+
+    def count_nodes(self, *, label: str | None = None) -> int:
+        query = f"MATCH (n:{label}) RETURN count(n) AS count" if label else "MATCH (n) RETURN count(n) AS count"
+        rows = self._query(query)
+        return int(rows[0]["count"]) if rows else 0
+
+    def count_edges(self, *, edge_type: str | None = None) -> int:
+        rel = f"[r:{edge_type}]" if edge_type else "[r]"
+        rows = self._query(f"MATCH ()-{rel}->() RETURN count(r) AS count")
+        return int(rows[0]["count"]) if rows else 0
+
+    # ── Native algorithms (CALL procedures) ─────────────────────
+
+    # grafeo 0.5.44 ignores query parameters passed as CALL arguments (optional
+    # ones silently fall back to their defaults), so the procedures below get
+    # their arguments as literals built from validated numbers and names.
+
+    def _has_procedure(self, name: str) -> bool:
+        return f"grafeo.{name}" in self._procedures
 
     def _nid_map(self) -> dict[int, str]:
         """Build internal node ID → app ID mapping."""
-        mapping = self._query(
-            "MATCH (n) RETURN id(n) AS nid, n.id AS app_id"
-        )
-        return {row["nid"]: str(row["app_id"]) for row in mapping}
+        rows = self._query("MATCH (n) RETURN id(n) AS nid, n.id AS app_id")
+        return {row["nid"]: str(row["app_id"]) for row in rows}
 
     def _resolve_nid(self, app_id: str) -> int | None:
         """Resolve app ID to internal node ID."""
-        rows = self._query(
-            "MATCH (n:Node {id: $id}) RETURN id(n) AS nid",
-            parameters={"id": app_id},
-        )
+        rows = self._query("MATCH (n:Node {id: $id}) RETURN id(n) AS nid", parameters={"id": app_id})
         return rows[0]["nid"] if rows else None
 
-    def sssp(
-        self, source: str, *, weight_attr: str = "weight",
-    ) -> dict[str, float]:
-        """LDBC SSSP using CALL grafeo.sssp()."""
+    def _groups(self, rows: list[dict[str, Any]], column: str) -> list[set[str]]:
+        nid_to_app = self._nid_map()
+        groups: dict[Any, set[str]] = {}
+        for row in rows:
+            app_id = nid_to_app.get(row["node_id"], str(row["node_id"]))
+            groups.setdefault(row[column], set()).add(app_id)
+        return list(groups.values())
+
+    def sssp(self, source: str, *, weight_attr: str = "weight") -> dict[str, float]:
+        """LDBC SSSP via CALL grafeo.dijkstra(); unreachable vertices are left out."""
         src_nid = self._resolve_nid(source)
-        if src_nid is None:
+        if src_nid is None or not self._has_procedure("dijkstra"):
             return super().sssp(source, weight_attr=weight_attr)
         nid_to_app = self._nid_map()
-        try:
-            results = self._query(
-                f"CALL grafeo.sssp('{src_nid}', "
-                f"'{weight_attr}') "
-                f"YIELD node_id, distance",
-            )
-            return {
-                nid_to_app.get(r["node_id"], str(r["node_id"])):
-                    float(r["distance"])
-                for r in results
-            }
-        except Exception:
-            return super().sssp(source, weight_attr=weight_attr)
+        if not weight_attr.isidentifier():
+            msg = f"weight_attr must be a property name, got {weight_attr!r}"
+            raise ValueError(msg)
+        rows = self._query(
+            f"CALL grafeo.dijkstra({{source: {int(src_nid)}, weight: '{weight_attr}'}}) YIELD node_id, distance"
+        )
+        return {nid_to_app.get(r["node_id"], str(r["node_id"])): float(r["distance"]) for r in rows}
 
     def pagerank(
         self,
@@ -664,50 +610,19 @@ class GrafeoServerAdapter(BaseAdapter):
         tolerance: float = 1e-6,
     ) -> dict[str, float]:
         """PageRank via CALL grafeo.pagerank()."""
+        if not self._has_procedure("pagerank"):
+            return super().pagerank(damping=damping, max_iterations=max_iterations, tolerance=tolerance)
         nid_to_app = self._nid_map()
-        try:
-            results = self._query(
-                "CALL grafeo.pagerank() YIELD node_id, score"
-            )
-            return {
-                nid_to_app.get(r["node_id"], str(r["node_id"])):
-                    float(r["score"])
-                for r in results
-            }
-        except Exception:
-            raise NotImplementedError(
-                f"{self.name} pagerank procedure failed"
-            )
+        args = f"damping: {float(damping)!r}, max_iterations: {int(max_iterations)}, tolerance: {float(tolerance)!r}"
+        rows = self._query(f"CALL grafeo.pagerank({{{args}}}) YIELD node_id, score")
+        return {nid_to_app.get(r["node_id"], str(r["node_id"])): float(r["score"]) for r in rows}
 
-    def community_detection(
-        self, *, algorithm: str = "louvain"
-    ) -> list[set[str]]:
-        """Community detection via CALL grafeo.louvain/label_propagation."""
-        nid_to_app = self._nid_map()
-        try:
-            if algorithm == "louvain":
-                results = self._query(
-                    "CALL grafeo.louvain() YIELD node_id, community_id"
-                )
-            else:
-                results = self._query(
-                    "CALL grafeo.label_propagation() "
-                    "YIELD node_id, community_id"
-                )
-            communities: dict[int, set[str]] = {}
-            for r in results:
-                cid = r["community_id"]
-                app_id = nid_to_app.get(
-                    r["node_id"], str(r["node_id"])
-                )
-                if cid not in communities:
-                    communities[cid] = set()
-                communities[cid].add(app_id)
-            return list(communities.values())
-        except Exception:
-            raise NotImplementedError(
-                f"{self.name} community detection failed"
-            )
+    def community_detection(self, *, algorithm: str = "louvain") -> list[set[str]]:
+        """Community detection via CALL grafeo.louvain() / grafeo.label_propagation()."""
+        if algorithm not in ("louvain", "label_propagation") or not self._has_procedure(algorithm):
+            return super().community_detection(algorithm=algorithm)
+        rows = self._query(f"CALL grafeo.{algorithm}() YIELD node_id, community_id")
+        return self._groups(rows, "community_id")
 
     def traverse_bfs(
         self,
@@ -716,61 +631,34 @@ class GrafeoServerAdapter(BaseAdapter):
         max_depth: int = 3,
         edge_type: str | None = None,
     ) -> list[str]:
-        """BFS traversal via CALL grafeo.bfs() or concurrent HTTP/2 BFS.
+        """BFS via CALL grafeo.bfs(), or a level-by-level fan-out for one edge type.
 
-        When edge_type is specified, fires all neighbor queries for each
-        BFS level concurrently via ThreadPoolExecutor — each thread gets
-        its own GWP session over the shared HTTP/2 channel (multiplexing).
+        With an edge type, all neighbor queries of a BFS level run concurrently,
+        each thread on its own GWP session over the shared HTTP/2 channel.
         """
         if edge_type:
-            pool = self._pool
-            if pool is None:
+            if self._pool is None:
                 return super().traverse_bfs(start, max_depth=max_depth, edge_type=edge_type)
-
+            self._record_fallback("traverse_bfs")
             visited: set[str] = set()
             current_level = {start}
             result: list[str] = []
-
             for depth in range(max_depth + 1):
                 new_nodes = current_level - visited
                 visited.update(new_nodes)
                 result.extend(new_nodes)
                 if depth == max_depth:
                     break
-                # Fire all get_neighbors concurrently over HTTP/2
-                futures = {
-                    pool.submit(self.get_neighbors, nid, edge_type=edge_type): nid
-                    for nid in new_nodes
-                }
-                next_level: set[str] = set()
-                for future in as_completed(futures):
-                    for n in future.result():
-                        if n not in visited:
-                            next_level.add(n)
-                current_level = next_level
-
+                futures = [self._pool.submit(self.get_neighbors, nid, edge_type=edge_type) for nid in new_nodes]
+                current_level = {n for future in as_completed(futures) for n in future.result() if n not in visited}
             return result
 
         src_nid = self._resolve_nid(start)
-        if src_nid is None:
-            return super().traverse_bfs(
-                start, max_depth=max_depth, edge_type=edge_type
-            )
+        if src_nid is None or not self._has_procedure("bfs"):
+            return super().traverse_bfs(start, max_depth=max_depth, edge_type=edge_type)
         nid_to_app = self._nid_map()
-        try:
-            results = self._query(
-                f"CALL grafeo.bfs({src_nid}) "
-                f"YIELD node_id, depth"
-            )
-            return [
-                nid_to_app.get(r["node_id"], str(r["node_id"]))
-                for r in results
-                if int(r["depth"]) <= max_depth
-            ]
-        except Exception:
-            return super().traverse_bfs(
-                start, max_depth=max_depth, edge_type=edge_type
-            )
+        rows = self._query(f"CALL grafeo.bfs({int(src_nid)}) YIELD node_id, depth")
+        return [nid_to_app.get(r["node_id"], str(r["node_id"])) for r in rows if int(r["depth"]) <= max_depth]
 
     def traverse_dfs(
         self,
@@ -779,162 +667,130 @@ class GrafeoServerAdapter(BaseAdapter):
         max_depth: int = 3,
         edge_type: str | None = None,
     ) -> list[str]:
-        """DFS traversal via CALL grafeo.dfs() or concurrent traversal.
+        """Depth-limited DFS with concurrent neighbor expansion.
 
-        When edge_type is specified, uses concurrent neighbor expansion
-        (same HTTP/2 multiplexing pattern as traverse_bfs).
+        ``CALL grafeo.dfs()`` has no depth limit and its ``depth`` column is the
+        node's finishing position, not its depth, so it cannot be used here.
         """
-        if edge_type:
-            pool = self._pool
-            if pool is None:
-                return super().traverse_dfs(start, max_depth=max_depth, edge_type=edge_type)
+        pool = self._pool
+        if pool is None:
+            return super().traverse_dfs(start, max_depth=max_depth, edge_type=edge_type)
 
-            visited: set[str] = set()
-            stack = [(start, 0)]
-            result: list[str] = []
-
+        self._record_fallback("traverse_dfs")
+        visited: set[str] = set()
+        stack = [(start, 0)]
+        result: list[str] = []
+        while stack:
+            # Take the whole stack and expand its nodes concurrently
+            batch = []
             while stack:
-                # Gather all nodes at current stack level for concurrent expansion
-                batch = []
-                while stack:
-                    nid, depth = stack.pop()
-                    if nid not in visited:
-                        visited.add(nid)
-                        result.append(nid)
-                        if depth < max_depth:
-                            batch.append((nid, depth))
-
-                if not batch:
-                    break
-
-                futures = {
-                    pool.submit(self.get_neighbors, nid, edge_type=edge_type): (nid, depth)
-                    for nid, depth in batch
-                }
-                for future in as_completed(futures):
-                    _, depth = futures[future]
-                    for n in future.result():
-                        if n not in visited:
-                            stack.append((n, depth + 1))
-
-            return result
-
-        src_nid = self._resolve_nid(start)
-        if src_nid is None:
-            return super().traverse_dfs(
-                start, max_depth=max_depth, edge_type=edge_type
-            )
-        nid_to_app = self._nid_map()
-        try:
-            results = self._query(
-                f"CALL grafeo.dfs({src_nid}) "
-                f"YIELD node_id, depth"
-            )
-            return [
-                nid_to_app.get(r["node_id"], str(r["node_id"]))
-                for r in results
-                if int(r["depth"]) <= max_depth
-            ]
-        except Exception:
-            return super().traverse_dfs(
-                start, max_depth=max_depth, edge_type=edge_type
-            )
+                nid, depth = stack.pop()
+                if nid not in visited:
+                    visited.add(nid)
+                    result.append(nid)
+                    if depth < max_depth:
+                        batch.append((nid, depth))
+            if not batch:
+                break
+            futures = {pool.submit(self.get_neighbors, nid, edge_type=edge_type): depth for nid, depth in batch}
+            for future in as_completed(futures):
+                depth = futures[future]
+                stack.extend((n, depth + 1) for n in future.result() if n not in visited)
+        return result
 
     def bfs_levels(self, source: str) -> dict[str, int]:
-        """LDBC BFS via CALL grafeo.bfs()."""
+        """LDBC BFS via CALL grafeo.bfs(); unreachable vertices are left out."""
         src_nid = self._resolve_nid(source)
-        if src_nid is None:
+        if src_nid is None or not self._has_procedure("bfs"):
             return super().bfs_levels(source)
         nid_to_app = self._nid_map()
-        try:
-            results = self._query(
-                f"CALL grafeo.bfs({src_nid}) "
-                f"YIELD node_id, depth"
-            )
-            return {
-                nid_to_app.get(r["node_id"], str(r["node_id"])):
-                    int(r["depth"])
-                for r in results
-            }
-        except Exception:
-            return super().bfs_levels(source)
+        rows = self._query(f"CALL grafeo.bfs({int(src_nid)}) YIELD node_id, depth")
+        return {nid_to_app.get(r["node_id"], str(r["node_id"])): int(r["depth"]) for r in rows}
 
     def weakly_connected_components(self) -> list[set[str]]:
         """LDBC WCC via CALL grafeo.connected_components()."""
-        nid_to_app = self._nid_map()
-        try:
-            results = self._query(
-                "CALL grafeo.connected_components() "
-                "YIELD node_id, component_id"
-            )
-            components: dict[int, set[str]] = {}
-            for r in results:
-                cid = r["component_id"]
-                app_id = nid_to_app.get(
-                    r["node_id"], str(r["node_id"])
-                )
-                if cid not in components:
-                    components[cid] = set()
-                components[cid].add(app_id)
-            return list(components.values())
-        except Exception:
+        if not self._has_procedure("connected_components"):
             return super().weakly_connected_components()
+        rows = self._query("CALL grafeo.connected_components() YIELD node_id, component_id")
+        return self._groups(rows, "component_id")
 
-    def local_clustering_coefficient(self) -> dict[str, float]:
-        """LDBC LCC via CALL grafeo.clustering_coefficient()."""
+    def local_clustering_coefficient(self, *, directed: bool = True) -> dict[str, float]:
+        """LCC via CALL grafeo.clustering_coefficient() (undirected only, like Neo4j GDS)."""
+        definition = "directed" if directed else "undirected"
+        if definition not in self.native_lcc_definitions or not self._has_procedure("clustering_coefficient"):
+            return super().local_clustering_coefficient(directed=directed)
         nid_to_app = self._nid_map()
-        try:
-            results = self._query(
-                "CALL grafeo.clustering_coefficient() "
-                "YIELD node_id, coefficient"
-            )
-            return {
-                nid_to_app.get(r["node_id"], str(r["node_id"])):
-                    float(r["coefficient"])
-                for r in results
-            }
-        except Exception:
-            return super().local_clustering_coefficient()
+        rows = self._query("CALL grafeo.clustering_coefficient() YIELD node_id, coefficient")
+        return {nid_to_app.get(r["node_id"], str(r["node_id"])): float(r["coefficient"]) for r in rows}
 
-    def execute_query(
-        self, query: str, *, params: dict[str, Any] | None = None
-    ) -> list[dict[str, Any]]:
-        q_upper = query.strip().upper()
-        is_write = any(
-            kw in q_upper
-            for kw in ["CREATE", "DELETE", "SET ", "REMOVE", "MERGE"]
+    # ── Native vector search (GWP AdminService / SearchService) ──
+
+    def _has_vector_index(self) -> bool:
+        # The search procedures exist only when the server has the vector-index feature.
+        return self._has_procedure("search.vector")
+
+    def create_vector_index(
+        self,
+        label: str,
+        property_name: str,
+        *,
+        dimensions: int = 128,
+        metric: str = "cosine",
+        m: int | None = None,
+        ef_construction: int | None = None,
+        quantization: str | None = None,
+    ) -> None:
+        """Build the HNSW index with AdminService.CreateIndex (m, ef_construction)."""
+        if not self._has_vector_index():
+            raise UnsupportedOperation(_NO_VECTOR_INDEX)
+        if quantization is not None:
+            raise UnsupportedOperation("GWP CreateIndex has no quantization option")
+        pb = _gwp().pb
+        index = pb.VectorIndexDef(label=label, property=property_name, dimensions=dimensions, metric=metric)
+        if m is not None:
+            index.m = m
+        if ef_construction is not None:
+            index.ef_construction = ef_construction
+        self._admin_stub.CreateIndex(pb.CreateIndexRequest(graph=self._graph, vector_index=index))
+        self._vector_metric = metric
+
+    def vector_ann_search(
+        self,
+        query_vector: list[float],
+        *,
+        label: str = "VectorNode",
+        property_name: str = "embedding",
+        k: int = 10,
+        ef: int | None = None,
+    ) -> list[tuple[str, float]]:
+        """HNSW k-NN with SearchService.VectorSearch, then one query for the hits' IDs.
+
+        The search returns internal node IDs and distances; mapping them to the
+        ``id`` property costs a second round trip, included in the timing.
+        """
+        if not self._has_vector_index():
+            raise UnsupportedOperation(_NO_VECTOR_INDEX)
+        pb = _gwp().pb
+        request = pb.VectorSearchRequest(
+            graph=self._graph, label=label, property=property_name, query_vector=query_vector, k=k
         )
-        if is_write:
-            sid = self._tx_begin()
-            try:
-                result = self._tx_query(sid, query, parameters=params)
-                self._tx_commit(sid)
-                columns = result.get("columns", [])
-                rows = result.get("rows", [])
-                return [
-                    {col: row[i] for i, col in enumerate(columns)}
-                    for row in rows
-                ]
-            except Exception:
-                return []
-        return self._query(query, parameters=params)
+        if ef is not None:
+            request.ef = ef
+        hits = self._search_stub.VectorSearch(request).hits
+        rows = self._query(
+            "UNWIND $nids AS nid MATCH (n) WHERE id(n) = nid RETURN nid, n.id AS app_id",
+            parameters={"nids": [hit.node_id for hit in hits]},
+        )
+        app = {row["nid"]: str(row["app_id"]) for row in rows}
+        cosine = self._vector_metric == "cosine"
+        return [(app[hit.node_id], 1.0 - hit.score if cosine else -hit.score) for hit in hits]
 
-    def count_nodes(self, *, label: str | None = None) -> int:
-        if label:
-            query = f"MATCH (n:{label}) RETURN count(n) AS count"
-        else:
-            query = "MATCH (n) RETURN count(n) AS count"
-        rows = self._query(query)
-        if rows:
-            return int(rows[0]["count"])
-        return 0
-
-    def count_edges(self, *, edge_type: str | None = None) -> int:
-        if edge_type:
-            query = f"MATCH ()-[r:{edge_type}]->() RETURN count(r) AS count"
-        else:
-            query = "MATCH ()-[r]->() RETURN count(r) AS count"
-        rows = self._query(query)
-        if rows:
-            return int(rows[0]["count"])
-        return 0
+    def delete_nodes(self, node_ids: Sequence[str]) -> int:
+        """Delete nodes and their edges (GQL DETACH DELETE); returns how many were deleted."""
+        with self._transaction() as tx_id:
+            result = self._run(
+                "UNWIND $keys AS key MATCH (n:Node {id: key}) DETACH DELETE n",
+                parameters={"keys": list(node_ids)},
+                transaction_id=tx_id,
+            )
+        return result.counters.get("nodes_deleted", 0)

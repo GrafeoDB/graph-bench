@@ -20,7 +20,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from graph_bench.reporting.formats import BaseExporter
+from graph_bench.reporting.collector import implementation_label
+from graph_bench.reporting.formats import BaseExporter, ann_section
+from graph_bench.types import Status
 
 if TYPE_CHECKING:
     from graph_bench.reporting.collector import ResultCollector
@@ -86,6 +88,7 @@ CATEGORY_BENCHMARKS = {
         "ldbc_cdlp",
         "ldbc_lcc",
         "ldbc_sssp",
+        "lcc_undirected",
     ],
     # Alias for summary tables
     "Graph Analytics": [
@@ -135,11 +138,16 @@ CATEGORY_BENCHMARKS = {
         "read_after_write",
         "concurrent_acid",
     ],
-    "Vector Search": [
-        "vector_insert",
-        "vector_knn",
-        "vector_batch_search",
-        "vector_recall",
+    "Vector Scan": [
+        "vector_scan_insert",
+        "vector_scan_knn",
+        "vector_scan_batch_search",
+        "vector_scan_recall",
+    ],
+    "Vector ANN": [
+        "vector_ann_build",
+        "vector_ann_knn",
+        "vector_ann_delete",
     ],
     "Hybrid Graph+Vector": [
         "hybrid_graph_to_vector",
@@ -147,7 +155,8 @@ CATEGORY_BENCHMARKS = {
     ],
 }
 
-# Databases with native graph analytics support (not using NetworkX fallback)
+# Native graph analytics support, for result files written before results were
+# labelled; newer results carry their own "implementation" label.
 NATIVE_ANALYTICS = {
     "Grafeo": [
         "ldbc_bfs", "ldbc_pagerank", "ldbc_wcc", "ldbc_cdlp", "ldbc_lcc",
@@ -165,10 +174,6 @@ NATIVE_ANALYTICS = {
         "ldbc_bfs", "ldbc_pagerank", "ldbc_wcc", "ldbc_cdlp", "ldbc_lcc", "ldbc_sssp"
     ],
 }
-
-# Databases with native vector search support
-# (Grafeo has native HNSW in Rust but Python bindings don't expose it yet)
-NATIVE_VECTOR: dict[str, list[str]] = {}
 
 # Database info for detailed sections
 DB_INFO = {
@@ -306,6 +311,9 @@ class TemplateExporter(BaseExporter):
         # Combinatorial summary
         self._add_combinatorial_summary(collector, lines, dbs)
 
+        # Vector ANN: latency next to recall
+        lines.extend(ann_section(collector))
+
         # Reading the results section
         self._add_reading_results(lines)
 
@@ -322,7 +330,7 @@ class TemplateExporter(BaseExporter):
         self._add_query_languages(lines, dbs)
 
         # Native Algorithm Support
-        self._add_native_support(lines, dbs)
+        self._add_native_support(collector, lines, dbs)
 
         # Methodology
         self._add_methodology(lines)
@@ -472,31 +480,38 @@ class TemplateExporter(BaseExporter):
 
         lines.append("")
 
+    def _is_native(self, result: BenchmarkResult[Any], db: str, bench: str) -> bool:
+        """Whether a successful result ran in the database (its label, or the old static map)."""
+        if not result.ok or not result.metrics:
+            return False
+        label = result.metrics.custom.get("implementation")
+        if label is not None:
+            return label == "native"
+        return bench in NATIVE_ANALYTICS.get(db, [])
+
     def _add_analytics_summary(
         self, collector: ResultCollector, lines: list[str], dbs: list[str]
     ) -> None:
-        """Add Graph Analytics summary (native only)."""
+        """Add Graph Analytics summary (native results only)."""
         lines.append("### Graph Analytics (native implementations only, total ms)")
         lines.append("")
 
         scale = collector.session.scale
-        lines.append(f"| Database | Type | {scale.title()} |")
-        lines.append("|----------|------|------:|")
+        benchmarks = CATEGORY_BENCHMARKS["Graph Analytics"]
+        lines.append(f"| Database | Type | {scale.title()} | Native |")
+        lines.append("|----------|------|------:|------:|")
 
-        # Only show databases with native support
-        native_dbs = [db for db in dbs if db in NATIVE_ANALYTICS]
-
-        for db in native_dbs:
+        for db in dbs:
             db_type = DB_TYPES.get(db, "Unknown")
             total = 0.0
-            for bench in CATEGORY_BENCHMARKS["Graph Analytics"]:
+            native = 0
+            for bench in benchmarks:
                 result = self._get_result(collector, bench, db)
-                if result and result.ok and result.metrics:
+                if result and self._is_native(result, db, bench) and result.metrics:
                     total += result.metrics.timing.mean_ms
-            if total > 0:
-                lines.append(f"| **{db}** | {db_type} | {total:,.1f} |")
-            else:
-                lines.append(f"| {db} | {db_type} | |")
+                    native += 1
+            if native:
+                lines.append(f"| **{db}** | {db_type} | {total:,.1f} | {native} of {len(benchmarks)} |")
 
         lines.append("")
         lines.append(
@@ -647,34 +662,37 @@ class TemplateExporter(BaseExporter):
             )
 
             if has_memory:
-                lines.append("| Benchmark | Time | Memory |")
-                lines.append("|-----------|-----:|-------:|")
+                lines.append("| Benchmark | Time | Implementation | Memory |")
+                lines.append("|-----------|-----:|----------------|-------:|")
             else:
-                lines.append("| Benchmark | Time |")
-                lines.append("|-----------|-----:|")
+                lines.append("| Benchmark | Time | Implementation |")
+                lines.append("|-----------|-----:|----------------|")
 
             total = 0.0
             for bench, result in results:
-                if result and result.ok and result.metrics:
+                if result is None:
+                    continue
+                impl = implementation_label(result)
+                if result.ok and result.metrics:
                     ms = result.metrics.timing.mean_ms
                     total += ms
-                    if has_memory:
-                        mem = result.metrics.memory_bytes
-                        mem_str = f"{mem / 1048576:.1f} MB" if mem else ""
-                        lines.append(f"| {bench} | {ms:.2f}ms | {mem_str} |")
-                    else:
-                        lines.append(f"| {bench} | {ms:.2f}ms |")
-                elif result and not result.ok:
-                    if has_memory:
-                        lines.append(f"| {bench} | FAILED | |")
-                    else:
-                        lines.append(f"| {bench} | FAILED |")
+                    time_str = f"{ms:.2f}ms"
+                elif result.status == Status.SKIPPED:
+                    time_str = "n/a"
+                else:
+                    time_str = "FAILED"
+                if has_memory:
+                    mem = result.metrics.memory_bytes if result.ok and result.metrics else None
+                    mem_str = f"{mem / 1048576:.1f} MB" if mem else ""
+                    lines.append(f"| {bench} | {time_str} | {impl} | {mem_str} |")
+                else:
+                    lines.append(f"| {bench} | {time_str} | {impl} |")
 
             if total > 0:
                 if has_memory:
-                    lines.append(f"| **Total** | **{total:.2f}ms** | |")
+                    lines.append(f"| **Total** | **{total:.2f}ms** | | |")
                 else:
-                    lines.append(f"| **Total** | **{total:.2f}ms** |")
+                    lines.append(f"| **Total** | **{total:.2f}ms** | |")
             lines.append("")
 
         lines.append("</details>")
@@ -715,21 +733,22 @@ class TemplateExporter(BaseExporter):
 
         lines.append("")
 
-    def _add_native_support(self, lines: list[str], dbs: list[str]) -> None:
-        """Add Native Algorithm Support section."""
+    def _add_native_support(self, collector: ResultCollector, lines: list[str], dbs: list[str]) -> None:
+        """What each algorithm benchmark measured: the database (native) or Python (fallback)."""
         lines.append("---")
         lines.append("")
         lines.append("## Native Algorithm Support")
         lines.append("")
+        lines.append(
+            "Measured, not declared: a result is *native* when every call in its timed "
+            "iterations ran in the database, *fallback* when part of it ran in Python "
+            "(NetworkX or a client-side traversal), *unsupported* when the database has no "
+            "native implementation and the benchmark has no fallback."
+        )
+        lines.append("")
 
-        native_dbs = [db for db in dbs if db in NATIVE_ANALYTICS]
-        if not native_dbs:
-            lines.append("No databases with native algorithm support in this run.")
-            lines.append("")
-            return
-
-        header = "| |" + " | ".join(native_dbs) + " |"
-        sep = "|---|" + "|".join(":---:" for _ in native_dbs) + "|"
+        header = "| |" + " | ".join(dbs) + " |"
+        sep = "|---|" + "|".join(":---:" for _ in dbs) + "|"
         lines.append(header)
         lines.append(sep)
 
@@ -738,17 +757,22 @@ class TemplateExporter(BaseExporter):
             ("PageRank", "ldbc_pagerank"),
             ("WCC", "ldbc_wcc"),
             ("CDLP", "ldbc_cdlp"),
-            ("LCC", "ldbc_lcc"),
+            ("LCC (directed, LDBC)", "ldbc_lcc"),
+            ("LCC (undirected)", "lcc_undirected"),
             ("SSSP", "ldbc_sssp"),
+            ("Vector ANN", "vector_ann_knn"),
         ]
 
         for algo_name, bench_name in algorithms:
             row = f"| {algo_name} |"
-            for db in native_dbs:
-                if bench_name in NATIVE_ANALYTICS.get(db, []):
-                    row += " ✅ |"
-                else:
+            for db in dbs:
+                result = self._get_result(collector, bench_name, db)
+                if result is None:
                     row += " |"
+                elif self._is_native(result, db, bench_name):
+                    row += " native |"
+                else:
+                    row += f" {implementation_label(result) or 'FAILED'} |"
             lines.append(row)
 
         lines.append("")
