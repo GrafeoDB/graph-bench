@@ -2,9 +2,14 @@ r"""
 Tests for graph_bench.adapters module.
 """
 
+from typing import ClassVar
+
+import networkx as nx
 import pytest
 
 from graph_bench.adapters import AdapterRegistry, BaseAdapter
+
+from .dict_adapter import DictAdapter
 
 
 class TestAdapterRegistry:
@@ -35,7 +40,7 @@ class TestAdapterRegistry:
 class TestBaseAdapter:
     def test_base_adapter_is_abstract(self):
         with pytest.raises(TypeError):
-            BaseAdapter()  # type: ignore
+            BaseAdapter()
 
     def test_adapter_repr(self):
         from graph_bench.adapters.neo4j import Neo4jAdapter
@@ -116,3 +121,46 @@ class TestGrafeoAdapter:
         adapter = GrafeoAdapter()
         assert adapter.name == "Grafeo"
         assert adapter.connected is False
+
+
+def _pagerank_reference(edges: list[tuple[str, str]], damping: float, iterations: int) -> dict[str, float]:
+    """Exactly `iterations` power-iteration steps, sink rank spread evenly (LDBC Graphalytics)."""
+    nodes = sorted({n for edge in edges for n in edge})
+    out = {n: [t for s, t in edges if s == n] for n in nodes}
+    rank = dict.fromkeys(nodes, 1.0 / len(nodes))
+    for _ in range(iterations):
+        sinks = sum(rank[n] for n in nodes if not out[n])
+        incoming = dict.fromkeys(nodes, 0.0)
+        for n in nodes:
+            for t in out[n]:
+                incoming[t] += rank[n] / len(out[n])
+        rank = {n: (1 - damping) / len(nodes) + damping * (incoming[n] + sinks / len(nodes)) for n in nodes}
+    return rank
+
+
+class TestBaseAdapterFallbacks:
+    EDGES: ClassVar[list[tuple[str, str]]] = [("a", "b"), ("b", "c"), ("c", "a"), ("c", "d")]  # d is a sink
+
+    def test_pagerank_fallback_runs(self):
+        # Regression: networkx needs scipy for pagerank, which was not a dependency.
+        scores = DictAdapter(self.EDGES).pagerank(damping=0.85, max_iterations=100, tolerance=1e-8)
+        assert set(scores) == {"a", "b", "c", "d"}
+        assert sum(scores.values()) == pytest.approx(1.0)
+
+    def test_pagerank_fallback_converges_like_networkx(self):
+        scores = DictAdapter(self.EDGES).pagerank(damping=0.85, max_iterations=1000, tolerance=1e-12)
+        graph = nx.DiGraph(self.EDGES)
+        assert scores == pytest.approx(nx.pagerank(graph, alpha=0.85, tol=1e-12, max_iter=1000), abs=1e-9)
+
+    @pytest.mark.parametrize("iterations", [1, 2, 20])
+    def test_pagerank_fallback_stops_after_max_iterations(self, iterations):
+        # Regression: LDBC PageRank asks for 20 iterations at tolerance 1e-10, and
+        # nx.pagerank raised PowerIterationFailedConvergence instead of returning them.
+        scores = DictAdapter(self.EDGES).pagerank(damping=0.85, max_iterations=iterations, tolerance=1e-10)
+        assert scores == pytest.approx(_pagerank_reference(self.EDGES, 0.85, iterations), abs=1e-12)
+
+    def test_ldbc_pagerank_benchmark_runs_on_the_fallback(self, tiny_scale):
+        from graph_bench.benchmarks.graphanalytics import LdbcPageRankBenchmark
+
+        metrics = LdbcPageRankBenchmark().run(DictAdapter(), tiny_scale)
+        assert metrics.items_processed == tiny_scale.measurement_iterations * 100  # a score per vertex

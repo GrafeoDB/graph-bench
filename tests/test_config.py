@@ -2,8 +2,6 @@ r"""
 Tests for graph_bench.config module.
 """
 
-import os
-
 import pytest
 
 from graph_bench.config import DEFAULT_SCALE, ENV_PREFIX, SCALES, get_env, get_scale
@@ -16,31 +14,32 @@ class TestScales:
         assert "large" in SCALES
 
     def test_small_scale(self):
+        # The aliases point at the LDBC SNB scale factors (see graph_bench/config.py).
         scale = SCALES["small"]
-        assert scale.name == "small"
-        assert scale.nodes == 10_000
-        assert scale.edges == 50_000
+        assert scale is SCALES["sf01"]
+        assert scale.nodes == 1_000
+        assert scale.edges == 18_000
 
     def test_medium_scale(self):
         scale = SCALES["medium"]
-        assert scale.name == "medium"
-        assert scale.nodes == 100_000
-        assert scale.edges == 500_000
+        assert scale is SCALES["sf1"]
+        assert scale.nodes == 10_000
+        assert scale.edges == 180_000
 
     def test_large_scale(self):
         scale = SCALES["large"]
-        assert scale.name == "large"
-        assert scale.nodes == 1_000_000
-        assert scale.edges == 5_000_000
+        assert scale is SCALES["sf100"]
+        assert scale.nodes == 280_000
+        assert scale.edges == 18_000_000
 
     def test_default_scale(self):
-        assert DEFAULT_SCALE == "medium"
+        assert DEFAULT_SCALE == "sf1"
 
 
 class TestGetScale:
     def test_get_valid_scale(self):
-        scale = get_scale("small")
-        assert scale.name == "small"
+        assert get_scale("small").name == "sf01"
+        assert get_scale("sf3").name == "sf3"
 
     def test_get_invalid_scale(self):
         with pytest.raises(ValueError, match="Unknown scale"):

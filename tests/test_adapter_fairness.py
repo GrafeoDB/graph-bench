@@ -33,6 +33,7 @@ _FALLBACK_METHODS = [
     "bfs_levels",
     "vector_search",
     "create_vector_index",
+    "vector_ann_search",
 ]
 
 # Shared helpers that should never be overridden.
@@ -40,6 +41,10 @@ _PRIVATE_HELPERS = [
     "_build_networkx_graph",
     "_cosine_similarity",
     "_synchronous_label_propagation",
+    "_record_fallback",
+    "take_fallbacks",
+    # The scan benchmarks compare the same brute-force search on every database.
+    "vector_scan",
 ]
 
 # Methods whose batch_size default must be <= 1000.
@@ -99,7 +104,8 @@ class TestFallbackMethodsCallSuper:
 
         source = inspect.getsource(adapter_method)
         has_super = "super()" in source or "super()." in source
-        has_raise = "raise NotImplementedError" in source
+        # UnsupportedOperation is the NotImplementedError of operations without a fallback.
+        has_raise = "raise NotImplementedError" in source or "raise UnsupportedOperation" in source
 
         assert has_super or has_raise, (
             f"{adapter_cls.__name__}.{method_name} overrides BaseAdapter "
