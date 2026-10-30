@@ -1,5 +1,7 @@
 # graph-bench
 
+[![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://app.codspeed.io/GrafeoDB/graph-bench?utm_source=badge)
+
 Benchmark suite for graph databases. Built to compare Grafeo against other options.
 
 ## Supported Databases
@@ -251,6 +253,17 @@ uv run ty check graph_bench/
 
 # Format
 uv run ruff format graph_bench/
+```
+
+### Performance tracking
+
+The suite's own code (dataset generators, reporting, the embedded Grafeo adapter) is
+benchmarked continuously with [CodSpeed](https://codspeed.io) via `pytest-codspeed`.
+The benchmarks live in `tests/benchmarks/` and run on every push and pull request.
+
+```bash
+uv sync --extra dev --extra grafeo
+uv run --with grpcio --with protobuf pytest tests/benchmarks --codspeed --no-cov
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for adding benchmarks or adapters.
