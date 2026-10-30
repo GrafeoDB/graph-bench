@@ -14,7 +14,7 @@ Reference = Literal["python", "networkx"]
 
 
 class GrafeoSource(TypedDict):
-    version: str
+    version: str | None
     source: str
     sha: str | None
 

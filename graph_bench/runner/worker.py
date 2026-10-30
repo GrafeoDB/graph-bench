@@ -7,6 +7,8 @@ Lines, appended to `--out` and flushed one by one:
 
 - `{"kind": "database", <DatabaseInfo fields>}`, always first;
 - `{"kind": "start", "id": ...}` before each case and each reported load, so a supervisor knows what hung or crashed;
+- `{"kind": "progress", "id": ...}` after a case's preflight, after each of its warm-up and timed runs, and after
+  each load iteration (`id` is null for an unreported load), so a supervisor can tell a long case from a hang;
 - `{"kind": "entry", "id": ..., "status": ..., ...}` with a load's `load_ns` or a case's result.
 
 The canonical answers of each case go to `<out dir>/<out stem>/answers/<sanitized id>.json`.
@@ -30,6 +32,7 @@ from graph_bench.databases import get_database
 from graph_bench.databases.base import Database, NotSupported
 from graph_bench.datasets import cache
 from graph_bench.datasets.schema import Dataset
+from graph_bench.results import Reference
 from graph_bench.runner.timing import measure
 from graph_bench.suites import Algorithm, Query, catalog
 from graph_bench.suites.catalog import Case, Selection
@@ -41,7 +44,7 @@ DEFAULT_CASE_TIMEOUT_S = 600.0
 Emit = Callable[[dict[str, Any]], None]
 
 
-def reference_kind(item: Query | Algorithm) -> str:
+def reference_kind(item: Query | Algorithm) -> Reference:
     """Where an item's reference answers come from: NetworkX for algorithms, plain Python for queries."""
     return "networkx" if isinstance(item, Algorithm) else "python"
 
@@ -146,8 +149,18 @@ class _Loaded:
     load_ns: int
 
 
-def _load(db_cls: type[Database], dataset: Dataset, workdir: Path, threads: int | None, iterations: int) -> _Loaded:
-    """Load `iterations` times, each into a fresh instance in a fresh directory; keep the last one."""
+def _load(
+    db_cls: type[Database],
+    dataset: Dataset,
+    workdir: Path,
+    threads: int | None,
+    iterations: int,
+    progress: Callable[[], None] = lambda: None,
+) -> _Loaded:
+    """Load `iterations` times, each into a fresh instance in a fresh directory; keep the last one.
+
+    `progress` is called after each load, outside its clock.
+    """
     times: list[int] = []
     previous: tuple[Database, Path] | None = None
     for i in range(iterations):
@@ -167,6 +180,7 @@ def _load(db_cls: type[Database], dataset: Dataset, workdir: Path, threads: int 
             _remove(db_dir)
             raise
         times.append(time.perf_counter_ns() - start)
+        progress()
     assert previous is not None
     return _Loaded(previous[0], previous[1], int(statistics.median(times)))
 
@@ -201,6 +215,8 @@ def _run_case(case: Case, db: Database, base: Path, settings: _Settings, emit: E
     reference_file = catalog.reference_path(case.item, case.scale, base=base)
     budget = settings.budgets.get(case.bench_id, settings.case_timeout_s)
     pf = preflight(case, db, reference_file, budget_s=budget)
+    progress = {"kind": "progress", "id": case.bench_id}
+    emit(progress)
     entry = _case_entry(
         case,
         status=pf.status,
@@ -218,7 +234,9 @@ def _run_case(case: Case, db: Database, base: Path, settings: _Settings, emit: E
     if pf.passed:
         sel = settings.selection
         try:
-            timing, _ = measure(pf.run, warmup=max(sel.warmup - 1, 0), iterations=sel.iterations)
+            timing, _ = measure(
+                pf.run, warmup=max(sel.warmup - 1, 0), iterations=sel.iterations, on_run=lambda: emit(progress)
+            )
             entry["timing"] = asdict(timing)
         except Exception as exc:
             entry["status"], entry["error"] = "failed", _message(exc)
@@ -296,7 +314,9 @@ def _run_dataset(
     if load_id is not None:
         emit({"kind": "start", "id": load_id})
     try:
-        loaded = _load(db_cls, dataset, workdir, threads, settings.selection.load_iterations)
+        progress = {"kind": "progress", "id": load_id}
+        iterations = settings.selection.load_iterations
+        loaded = _load(db_cls, dataset, workdir, threads, iterations, lambda: emit(progress))
     except Exception as exc:
         message = _message(exc)
         if load_id is not None:

@@ -82,9 +82,9 @@ These go into FAIRNESS.md, which is trimmed to embedded use.
 5. Answers are checked. Each query's answer is compared with a Python reference computed from the generated data (NetworkX for algorithms). A database with a different answer is marked `disagree` and left out of the ranking.
 6. Queries return scalar values only (no node or edge objects) and order fully, with tie-breakers, whenever they use `LIMIT`.
 7. PageRank is compared at convergence (damping 0.85), with the LDBC relative epsilon of 0.0001.
-8. The time budget per benchmark is 10x the average median of the 3 fastest databases with correct answers. With fewer than 3, the average is over those available.
-   - **During a run:** databases run one after another, so a later database's preflight is cut off at 10x the average of the earlier ones' times. When there's no earlier time, a hard cap applies (`--case-timeout`, default 600 s).
-   - **After the run:** the rule is applied again over all results. Any benchmark beyond 10x of the final top 3 becomes ⏱, so the run order never decides the marker.
+8. The time budget per benchmark is 10x the average median of the 3 fastest *other* databases with correct answers (the average over those available if fewer than 3; no budget when no other database has a correct result).
+   - **During a run:** databases run one after another. Once at least 3 earlier databases have correct times, a later database's preflight is cut off at 10x the average of their 3 fastest. With 3 or more earlier results this cutoff is never stricter than the final budget, so it can't mark a case the final rule would accept. Before that, only a hard cap applies (`--case-timeout`, default 600 s, measured as silence: the worker reports progress after every run).
+   - **After the run:** the rule is applied again over all results, each entry against the other databases. Any benchmark beyond its budget becomes ⏱, so the run order never decides the marker.
 
 ## Datasets
 

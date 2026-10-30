@@ -15,16 +15,21 @@ def _p99(samples: list[int]) -> float:
     return statistics.quantiles(samples, n=100, method="inclusive")[98]
 
 
-def measure(fn: Callable[[], Any], *, warmup: int, iterations: int) -> tuple[Timing, Any]:
+def measure(
+    fn: Callable[[], Any], *, warmup: int, iterations: int, on_run: Callable[[], None] | None = None
+) -> tuple[Timing, Any]:
     """Call `fn` `warmup` times untimed, then `iterations` times timed; return the timing and the last result.
 
-    The garbage collector is disabled during each timed call and run between calls.
+    The garbage collector is disabled during each timed call and run between calls. `on_run`, if given, is
+    called after every call, outside the timed region (the worker reports progress with it).
     """
     if iterations < 1:
         raise ValueError("iterations must be at least 1")
     result: Any = None
     for _ in range(warmup):
         result = fn()
+        if on_run is not None:
+            on_run()
     samples: list[int] = []
     was_enabled = gc.isenabled()
     try:
@@ -35,6 +40,8 @@ def measure(fn: Callable[[], Any], *, warmup: int, iterations: int) -> tuple[Tim
             result = fn()
             samples.append(time.perf_counter_ns() - start)
             gc.enable()
+            if on_run is not None:
+                on_run()
     finally:
         if was_enabled:
             gc.enable()

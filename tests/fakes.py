@@ -3,6 +3,7 @@
 Behaviour flags, a comma list in `GRAPH_BENCH_FAKE` (FakeDatabase) or `GRAPH_BENCH_FAKE2` (FakeDatabase2):
 `crash:<item_id>` exits the process with code 3, `hang:<item_id>` sleeps an hour, `slow:<item_id>` sleeps
 0.2 s per call, `wrong:<item_id>` returns a perturbed answer and `unsupported:<item_id>` raises NotSupported.
+`crash:load_<dataset>` and `hang:load_<dataset>` do the same while loading that dataset.
 """
 
 import os
@@ -28,7 +29,15 @@ class FakeDatabase(Database):
         return DatabaseInfo(self.name, "1.0", "in-process", False, "fake, no threads", "in-memory")
 
     def load(self, dataset: Dataset) -> None:
+        self._misbehave(self._flags(f"load_{dataset.name}"))
         self.dataset = dataset
+
+    @staticmethod
+    def _misbehave(flags: set[str]) -> None:
+        if "crash" in flags:
+            os._exit(3)
+        if "hang" in flags:
+            time.sleep(3600)
 
     def _flags(self, item_id: str) -> set[str]:
         flags = set()
@@ -41,10 +50,7 @@ class FakeDatabase(Database):
     def _answer(self, item: Query | Algorithm, params: Mapping[str, Any]) -> Any:
         assert self.dataset is not None, "query before load"
         flags = self._flags(item.id)
-        if "crash" in flags:
-            os._exit(3)
-        if "hang" in flags:
-            time.sleep(3600)
+        self._misbehave(flags)
         if "slow" in flags:
             time.sleep(0.2)
         if "unsupported" in flags:

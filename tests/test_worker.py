@@ -153,3 +153,17 @@ def test_worker_budget_marks_too_slow(standard: tuple[Lines, Path]) -> None:
     assert entry["status"] == "timeout"
     assert entry["error"].startswith("too slow")
     assert entry["timing"] is None
+
+
+def test_worker_emits_progress(standard: tuple[Lines, Path]) -> None:
+    lines = standard[0]
+    target = _id("snb_is4")
+    start = next(i for i, line in enumerate(lines) if line["kind"] == "start" and line["id"] == target)
+    end = next(i for i, line in enumerate(lines) if line["kind"] == "entry" and line["id"] == target)
+    between = lines[start + 1 : end]
+    sel = catalog.selection("push")
+    assert [line["kind"] for line in between] == ["progress"] * (1 + sel.warmup - 1 + sel.iterations)
+    assert all(line["id"] == target for line in between)
+    load_id = catalog.load_id("snb", "fake", "small", 1)
+    load_progress = [line for line in lines if line["kind"] == "progress" and line["id"] == load_id]
+    assert len(load_progress) == sel.load_iterations

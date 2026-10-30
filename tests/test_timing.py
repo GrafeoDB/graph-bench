@@ -16,3 +16,9 @@ def test_measure_counts_iterations() -> None:
     assert result == 7
     assert calls[2:] == [False] * 5
     assert gc.isenabled()
+
+
+def test_measure_reports_each_run() -> None:
+    reports: list[bool] = []
+    measure(lambda: None, warmup=2, iterations=3, on_run=lambda: reports.append(gc.isenabled()))
+    assert reports == [True] * 5
