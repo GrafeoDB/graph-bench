@@ -38,6 +38,7 @@ bench = ["pytest>=9.0.2", "pytest-codspeed>=4.0"]
 dev = [
     "pytest>=9.0.2",
     "pytest-cov>=7.0.0",
+    "pyyaml>=6.0",
     "ruff>=0.15.0",
     "prek>=0.3.2",
     "ty>=0.0.15",

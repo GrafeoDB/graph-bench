@@ -1,144 +1,137 @@
-# Fairness Policy
+# Fairness
 
-This document describes the rules that govern graph-bench benchmarks.
-Every adapter, whether maintained by the project or contributed externally, must comply with these rules.
-Pull requests that optimise an adapter are welcome and will be reviewed and merged provided they follow the guidelines below.
+The rules every database in graph-bench is measured under. Every adapter, whether maintained here or contributed,
+must follow them. Pull requests that improve an adapter are welcome when they do.
 
-## LDBC Attribution
+graph-bench compares **embedded** graph databases: databases that run inside the benchmark's process, or in a
+local process the Python package starts for it. The server comparison is out of scope here; the pre-0.3.0
+benchmark, servers included, is kept in [legacy/](legacy/README.md).
 
-Several benchmark categories in this suite (SNB Interactive, GraphAnalytics, ACID) are inspired by specifications published by the [Linked Data Benchmark Council (LDBC)](https://ldbcouncil.org/). These are **not official LDBC Benchmarks**, have not been audited by the LDBC Council, and do not follow the full LDBC methodology. See the [graph-bench README](README.md#ldbc-disclaimer) for details on specific differences.
+## The rules
 
-LDBC specifications are used under the [Creative Commons Attribution 4.0 International (CC-BY 4.0)](https://creativecommons.org/licenses/by/4.0/) license. LDBC and the LDBC logo are trademarks of the Linked Data Benchmark Council.
+1. **Each database runs in its own process.** A Python process can host only one JVM, and separate processes
+   keep allocators and caches from interfering. `graph-bench bench` starts one worker per database;
+   `graph-bench codspeed` starts one `pytest benches --codspeed` process per database.
+2. **JVM databases get the same warm-up as the others**, and JVM startup is not timed. A memory cap shared by
+   every database is planned: it arrives with the JVM adapters (ArcadeDB, Neo4j Community), none of which
+   exists yet.
+3. **Every database runs single-threaded.** A database whose thread count can't be set is marked as such, and
+   each database's `threads_note` in results.json says how the setting was applied:
+   - Grafeo: `RAYON_NUM_THREADS=1` in its worker, note "single-threaded executor". Grafeo's query executor is
+     single-threaded until parallel queries land in grafeo 0.6.4; only its rayon parts (vector batch,
+     clustering, folds) are parallel, and the variable sets those to one thread.
+   - LadybugDB: `max_num_threads=1`.
 
-## Standard Adapter Parameters
+   **Planned with grafeo 0.6.4:** the all-cores runs come back to the `full` selection, reported as a separate
+   set of tables, and Grafeo's adapter switches from `RAYON_NUM_THREADS` to the real thread setting 0.6.4
+   brings. Selections and benchmark ids already carry a threads value (an `-allcores` suffix), so this is a
+   data change, not a redesign.
+4. **Storage is in-memory where the database supports it.** A disk-only database runs on disk and is labelled
+   so. Loading is measured separately from queries: each database loads the same CSV files with its own
+   documented bulk-load path (see [Loading](#loading)).
+5. **Answers are checked.** Each query's answer is compared with a Python reference computed from the generated
+   data (NetworkX for algorithms). A database with a different answer is marked `disagree` (≠) and left out of
+   the ranking.
+6. **Queries return scalar values only** (no node or edge objects) and order fully, with tie-breakers, whenever
+   they use `LIMIT`.
+7. **PageRank is compared at convergence** (damping 0.85), with the LDBC relative epsilon of 0.0001.
+8. **The time budget per benchmark is 10x the average median of the 3 fastest *other* databases with correct
+   answers** (the average over those available if fewer than 3; no budget when no other database has a correct
+   result).
+   - **During a run:** databases run one after another. Once at least 3 earlier databases have correct times, a
+     later database's preflight is cut off at 10x the average of their 3 fastest. With 3 or more earlier
+     results this cutoff is never stricter than the final budget, so it can't mark a case the final rule would
+     accept. Before that, only a hard cap applies (`--case-timeout`, default 600 s, measured as silence: the
+     worker reports progress after every run).
+   - **After the run:** the rule is applied again over all results, each entry against the other databases.
+     Any benchmark beyond its budget becomes ⏱, so the run order never decides the marker.
 
-All adapters inherit from `BaseAdapter` and must respect the default method signatures.
+## The preflight
 
-| Parameter | Default | Rule |
-| --------- | ------- | ---- |
-| `batch_size` (node insert) | 1000 | May be lowered to work around driver limits (e.g. TuGraph uses 200), but must not be raised above 1000 |
-| `batch_size` (edge insert) | 1000 | Same as above (Grafeo Server uses 500 to avoid gRPC deadline) |
-| Indexing | Optional | Adapters may create a property index on `id` after bulk insert. No other pre-computation is allowed during `insert_nodes` / `insert_edges` |
-| Vector index | `vector_ann` only | Built by the benchmark itself through `create_vector_index`, with the run's shared HNSW parameters (see below). The `vector_scan` and hybrid benchmarks use no vector index |
-| HNSW parameters | `m` 16, `ef_construction` 128, `ef` 64, `k` 10 | Shared by every adapter in a run and set only with the `--ann-*` options. A parameter a database cannot take (for example quantization over GWP) makes the benchmark *unsupported*, not silently different |
-| Warmup iterations | Per scale | Defined in `ScaleConfig`, not adjustable per adapter |
-| Measurement iterations | Per scale | Defined in `ScaleConfig`, not adjustable per adapter |
-| Timeout | Per scale | 60 s (small) to 3600 s (sf100). CLI `--timeout` overrides apply equally to all adapters in a run |
+Each benchmark first runs once, untimed: the preflight. The answer check and the time budget are applied there,
+and only a benchmark that passes the preflight is timed, so a wrong or too slow result never reaches CodSpeed as
+a speed. The preflight also counts as the first warm-up run. Warm-up runs, timed runs and load repetitions are
+set per selection (`graph_bench/suites/catalog.py`) and are the same for every database.
 
-## Allowed Optimisations
+A ⏱ assigned only by the final budget rule comes after CodSpeed has measured the case: CodSpeed then shows it as
+measured, while results.json and the matrix show ⏱. A ⏱ from the in-run cutoff is never measured.
 
-The following optimisations are explicitly permitted.
+## What is timed
 
-1. **Native algorithms**: if the database ships a built-in algorithm (PageRank, BFS, SSSP, etc.), the adapter should use it instead of the NetworkX fallback. The algorithm must be a standard feature of the database, not a benchmark-specific plug-in.
+- **Queries:** the database call plus materializing its result into Python rows. This is identical for every
+  database. graph-bench's canonicalization of the rows and the answer check run outside the clock.
+- **Loads:** timed separately, each into a fresh in-memory instance, so no load benefits from an earlier one.
 
-2. **Native traversal**: adapters may use database-native BFS/DFS/shortest-path primitives. When the native primitive does not support a required parameter (e.g. `edge_type` filtering), the adapter must fall back to the `BaseAdapter` implementation. A built-in way to restrict the graph the primitive reads, such as a Grafeo projection of one edge type, counts as native support when it is created inside the timed call and dropped afterwards (no projection is kept between calls).
+## Loading
 
-3. **Batched writes**: adapters may batch `INSERT` / `CREATE` operations using `UNWIND`, multi-pattern `CREATE`, or the database's native bulk API, within the `batch_size` limit.
+Load uses each database's **fastest documented bulk path, CSV parsing included**:
 
-4. **Property indexes**: a single index on the `id` property is allowed to speed up `MATCH` lookups. It must be created after insert, not before.
+- Grafeo: the batch API (`batch_create_nodes_with_props`, `batch_create_edges`), with the CSVs parsed in Python.
+  Grafeo's query-language `LOAD CSV` is 2x to 3x slower today; it will be tracked as its own category, Load
+  (query language), so engine-side load fixes show up there. When Grafeo's native typed loader lands, it
+  replaces the batch API for Load.
+- LadybugDB: `COPY ... FROM` the CSV files.
 
-5. **Connection pooling / multiplexing**: adapters may maintain connection pools, session-per-thread maps, or reuse HTTP/2 streams, as long as these are standard features of the client driver.
+## Adapter rules
 
-6. **Native query language**: each adapter uses the database's own query language (Cypher, AQL, GQL, etc.). This is not an unfair advantage, it reflects real-world usage.
+- **Documented paths only.** An adapter uses the database's documented, publicly shipped API and query language,
+  never internal or undocumented calls.
+- **The vendor-recommended API.** Each database is called the way its documentation recommends. For example,
+  LadybugDB's binding deprecates a separate prepare plus execute ("The use of separate prepare + execute of
+  queries is deprecated. Please using a single call to the execute() API instead."), so its adapter calls
+  `execute()` once per binding. Its point lookups get ⏱ because execution alone is over 10x Grafeo's.
+- **Doc-recommended settings are allowed when they keep the comparison like for like.** For example, LadybugDB's
+  `var_length_extend_max_depth` is raised so unbounded variable-length paths keep their openCypher meaning.
+- **Nothing that gives one database an advantage**: no precomputed answers, no caching of results between runs,
+  no code paths that detect the benchmark, no plug-ins written for the benchmark.
+- **Native algorithms only.** Algorithms use the database's own implementation, as a procedure or a query in its
+  own language. graph-bench never falls back to NetworkX inside the comparison: a database without one gets ⊘.
+  NetworkX is only the reference for the answer check.
+- **A database's bugs are recorded, not worked around.** A wrong answer, a crash or a case that runs far too long
+  stays in the results as it is, and is described in [docs/known-disagreements.md](docs/known-disagreements.md)
+  with the data, the database's answer, the reference and the cause.
 
-7. **Native vector index (`vector_ann` only)**: adapters implement `create_vector_index` and `vector_ann_search` with the database's own approximate nearest neighbour index, using the shared HNSW parameters. Every `vector_ann` result reports recall@k against the exact ground truth next to its latency, so a faster but less accurate index is visible as such. Quantization is a run option (`--ann-quantization`) and is reported with the result.
+## Markers
 
-## Disallowed Optimisations
+| Marker | Meaning |
+| --- | --- |
+| time, fastest **bold** | completed, answer checked |
+| ⊘ | not available: the database lacks the capability or the data model |
+| ✗ | failing: an error or a crash |
+| ≠ | wrong answer: fails the answer check, not ranked |
+| ⏱ | too slow: beyond the budget of rule 8 |
 
-The following are not permitted.
+How each marker shows in CodSpeed is in the [README](README.md#markers).
 
-1. **Pre-computation during setup**: adapters must not pre-compute answers, build auxiliary data structures, or cache results during `insert_nodes` / `insert_edges` / `clear` that would give an unfair advantage to subsequent read or algorithm benchmarks.
+## Licensing and process kinds
 
-2. **Result caching**: no caching of query results between benchmark iterations. Each measurement iteration must perform the full operation.
+- **Neo4j** is measured as Neo4j Community only: the Enterprise terms restrict publishing benchmarks.
+- **FalkorDB** runs through `falkordblite`, which starts a Redis server subprocess; it is reported as a
+  "local process", not in-process.
 
-3. **Benchmark-specific code paths**: adapters must not detect which benchmark is running and switch behaviour accordingly. All optimisations must be general-purpose.
+## Datasets
 
-4. **Custom plug-ins or extensions**: only built-in, officially shipped features of the database may be used. External plug-ins, user-defined procedures, or custom modules written specifically for the benchmark are not allowed. Standard extensions that ship with the default install (e.g. Neo4j GDS, Memgraph MAGE) are permitted.
+- Every database in a run gets the same data, generated from a fixed seed or downloaded, never committed.
+- Each dataset is a directory of CSV files, one per node label and one per (edge type, source label, target
+  label), with a `schema.json` of typed columns and the reference answers.
+- Dates are integer epoch milliseconds, so date types never decide an answer.
+- Graphalytics uses the SNB `KNOWS` graph stored in both directions, so directed algorithm implementations give
+  the undirected answer.
 
-5. **Parallel execution within a single operation**: unless the database driver does it transparently, adapters must not spawn threads or processes to parallelise a single benchmark call (e.g. running multiple MATCH queries in parallel to speed up a single `pagerank()` call). Concurrent traversal using the driver's built-in multiplexing (e.g. gRPC HTTP/2 streams) is allowed.
+## LDBC attribution
 
-6. **Raising `batch_size` above 1000**: the default batch size is 1000. Adapters may lower it for stability but must not raise it.
+The SNB Interactive and Graphalytics workloads are **inspired by** specifications of the
+[Linked Data Benchmark Council (LDBC)](https://ldbcouncil.org/). They are **not official LDBC Benchmarks** and
+have not been audited by the LDBC Council; see the [README](README.md#ldbc-disclaimer). LDBC specifications are
+used under the [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/) license.
 
-7. **Skipping data verification**: adapters must not skip writes or silently drop data to appear faster. All `insert_nodes` / `insert_edges` calls must attempt to insert every item.
+## Contributing adapter changes
 
-## Algorithm Fallback Rules
+A pull request that changes an adapter must:
 
-`BaseAdapter` provides NetworkX-based fallback implementations for graph algorithms (PageRank, community detection, BFS levels, WCC, LCC, SSSP) and a brute-force fallback for vector search.
+1. follow the rules above;
+2. touch one adapter (changes to shared code go in a separate pull request);
+3. keep the adapter's push agreement test passing (see [CONTRIBUTING.md](CONTRIBUTING.md));
+4. say what changed and why, with a link to the database documentation it follows.
 
-- Databases **without** native support use the fallback automatically. The extraction + computation overhead is included in the benchmark time: this is by design and represents the real cost of missing native support.
-- Databases **with** native support should override the fallback methods. The override must produce semantically equivalent results (e.g. same community structure, correct shortest-path distances).
-- If a native implementation fails at runtime, the adapter may fall back to `super()`. This fallback penalty is also included in the timed result.
-
-### Labelling native and fallback results
-
-Every result is labelled with what its timed iterations ran, as recorded at run time:
-
-- **native**: every call ran in the database.
-- **fallback (operations)**: at least one call ran in Python. Every `BaseAdapter` fallback records itself
-  (`_record_fallback`), and so must any Python path in an adapter, such as a breadth-first search over
-  `get_neighbors` or a client-side shortest path.
-- **unsupported**: the database has no native implementation and the benchmark has no fallback (the
-  `vector_ann` family). The adapter raises `UnsupportedOperation` and the result is SKIPPED with the reason.
-
-Reports show the label next to each time. Compare native results with native results: a fallback measures
-extraction into Python as well as the database.
-
-### Algorithm definitions
-
-A native override must compute the same definition as the fallback it replaces. Where definitions differ
-between databases, the benchmark exists once per definition and each adapter declares which ones it computes
-natively. The local clustering coefficient is the current case: `ldbc_lcc` is the LDBC directed definition
-and `lcc_undirected` the undirected one; adapters list theirs in `native_lcc_definitions` and use the
-fallback for the other.
-
-### Vector scan versus vector ANN
-
-`vector_scan_*` measures the same brute-force search (`BaseAdapter.vector_scan`, which adapters must not
-override) on every database, so its results are comparable everywhere. `vector_ann_*` measures each
-database's native index and is never run through a fallback.
-
-## Test Inclusion / Exclusion Criteria
-
-### Including a benchmark
-
-A benchmark is included in a run when:
-
-- It matches the `--category` filter (or no filter is set, meaning all categories run).
-- It matches the `--benchmarks` name filter (or no filter is set).
-- The adapter successfully connects to the database.
-
-### Excluding / skipping a benchmark
-
-A benchmark is excluded when:
-
-- The adapter fails to connect (the entire database is skipped).
-- The category or name does not match the CLI filter.
-
-There is no mechanism for an adapter to selectively skip individual benchmarks. If a benchmark times out or throws an exception, it is recorded as `TIMEOUT` or `FAILED`, not silently omitted. The one exception is a benchmark without a fallback (`vector_ann_*`) on a database without the native feature: it is recorded as `SKIPPED` with the reason "unsupported: ...".
-
-### Timeout and failure handling
-
-- Each benchmark runs under the scale-defined timeout (enforced via `ThreadPoolExecutor`).
-- `TIMEOUT` and `FAILED` results are recorded and included in the report.
-- `continue_on_error = True` by default: one failure does not abort the remaining benchmarks.
-
-## Dataset Rules
-
-- All adapters in a run receive the **same generated dataset** for each benchmark.
-- Dataset generation is deterministic (seeded RNG) to ensure reproducibility.
-- LDBC Graphanalytics benchmarks use a reduced-scale synthetic directed graph (1/10th of the scale's node/edge count, capped at 10K nodes / 50K edges).
-- LDBC SNB benchmarks use a full multi-label social network dataset matching the LDBC specification.
-
-## Contributing Adapter Optimisations
-
-Pull requests that improve adapter performance are encouraged. To be merged, a PR must:
-
-1. **Follow this fairness policy**: no disallowed optimisations.
-2. **Touch a single adapter**: each PR may only optimise one adapter. Changes that affect `BaseAdapter` or shared infrastructure belong in a separate PR.
-3. **Reuse `BaseAdapter`**: adapters must inherit from `BaseAdapter` and call `super()` for any operation they do not natively support. Do not re-implement fallback logic that already exists in `base.py`.
-4. **Pass all existing benchmarks**: no regressions in correctness.
-5. **Be general-purpose**: the change must benefit all benchmarks, not just a specific one.
-6. **Document the change**: explain what was optimised and why (e.g. "use native SSSP instead of NetworkX fallback").
-7. **Include before/after results**: run `graph-bench run -d <adapter> -s small` before and after, and include the comparison in the PR description.
-
-If in doubt about whether an optimisation is fair, open an issue to discuss it before submitting a PR.
+If in doubt whether a change is fair, open an issue first.

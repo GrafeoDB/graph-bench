@@ -2,44 +2,52 @@
 
 ## [0.3.0] - Unreleased
 
-graph-bench 0.3 moves the Grafeo adapters to grafeo 0.6 and makes every result say what it measured.
+graph-bench 0.3 is rebuilt as a per-process, answer-checked comparison of embedded graph databases. The 0.2.x
+benchmark moves to `legacy/` untouched and is deleted once the new comparison replaces all of it.
 
 ### Added
 
-- **Native, fallback and unsupported labels**: every result records what its timed iterations ran, at run
-  time: *native* (every call ran in the database), *fallback (operations)* (part of it ran in Python, such as a
-  NetworkX algorithm, a client-side traversal or the vector scan) or *unsupported* (no native implementation
-  and no fallback, recorded as SKIPPED). The labels are in the JSON (`metrics.custom`), CSV and Markdown
-  reports. See [FAIRNESS.md](FAIRNESS.md#labelling-native-and-fallback-results).
-- **Native vector search, `vector_ann_*`**: `vector_ann_build`, `vector_ann_knn` and `vector_ann_delete` measure
-  the database's own approximate nearest neighbour index, with recall@k against exact search next to each
-  latency, and never fall back. The HNSW parameters are shared by every database in a run (`--ann-m`,
-  `--ann-ef-construction`, `--ann-ef`, `--ann-k`), with `--ann-quantization` (Grafeo embedded),
-  `--ann-delete-fraction`, `--ann-queries` and a recall versus latency sweep over `ef` (`--ann-sweep`,
-  `--ann-sweep-ef`).
-- **Both local clustering coefficients**: `ldbc_lcc` is the LDBC Graphalytics directed definition and
-  `lcc_undirected` the undirected one. Each adapter lists the definitions it computes natively
-  (`native_lcc_definitions`); the other runs the BaseAdapter fallback and is labelled as such.
-- **Uni-DB adapter** (`-d unidb`).
-- **Tests and CI**: correctness tests for the Grafeo adapters against NetworkX references, benchmark and label
-  tests, a CI workflow (lint, ty, tests on Python 3.12 to 3.15) and a weekly run against the newest grafeo on
-  PyPI.
-- **Python 3.15**: tested on Python 3.15, and the classifiers list 3.12 to 3.15.
+- **Embedded comparison**: ten embedded databases are planned (Grafeo, LadybugDB, TuringDB, FalkorDB through
+  falkordblite, NeuG, ArcadeDB, Neo4j Community, DuckDB + DuckPGQ, Oxigraph, HelixDB). Grafeo and LadybugDB are
+  implemented, on Load (SNB, Graphalytics), Complex queries (SNB IS1 to IS7, IC2, IC6), Hops (IC13) and
+  Algorithms (Graphalytics BFS, WCC, PageRank). See the README for the categories and their status.
+- **One process per database**: `graph-bench bench` runs one worker process per database, one after another, and
+  writes `results.json` (schema in the design spec) with the machine, the Grafeo build and each database's
+  version, process kind, storage and thread setting.
+- **Answer check and preflight**: every query's answer is compared with a Python reference computed from the
+  generated data (NetworkX for algorithms, the LDBC epsilon for PageRank). Each benchmark first runs once,
+  untimed, where the answer check and the time budget apply; only a benchmark that passes is timed.
+- **Time budget**: 10x the average median of the 3 fastest other databases with correct answers, cut off during
+  the run once 3 earlier results exist and applied again over all results at the end, so the run order never
+  decides the marker. A hard cap (`--case-timeout`, default 600 s of worker silence) applies before that.
+- **Markers**: ⊘ not available, ✗ failing, ≠ wrong answer, ⏱ beyond the budget, each mapped to a fixed pytest
+  outcome and reason prefix for CodSpeed.
+- **Datasets**: an SNB-schema generator and the Graphalytics graph (the SNB `KNOWS` graph in both directions),
+  seeded, written as typed CSV files with their reference answers into `GRAPH_BENCH_DATA_DIR` (default
+  `~/.cache/graph-bench`). `graph-bench data prepare` fills the cache, `graph-bench data key` prints its key.
+- **Commands**: `setup --grafeo` (install a grafeo wheel, or build one from a checkout with maturin, and record
+  version and sha), `list`, `bench`, `codspeed` (one `pytest benches --codspeed` process per database) and
+  `report --format summary|readme` (the summary block for grafeo's README, or the matrix for this README,
+  written between its results markers with `--write`).
+- **Selections**: `push` (small scale, the core property graph categories) and `full` (every category and
+  scale), both single-threaded.
+- **CI**: `ci.yml` (lint and tests on Python 3.12 and 3.13, including the adapter agreement tests) and
+  `bench.yml`, graph-bench's own CodSpeed project, separate from grafeo's CodSpeed benchmarks: the `push`
+  selection in wall-time mode on CodSpeed's macro runners against grafeo `main` built from source, and a daily
+  `full` run that opens a pull request updating the README results.
+- **Known disagreements**: `docs/known-disagreements.md` records wrong answers, slow cases and engine findings as
+  they are, instead of working around them in the adapters.
 
 ### Changed
 
-- **grafeo 0.6**: the `grafeo` extra requires `grafeo>=0.6.0b1,<0.7` (it was `grafeo>=0.5`). grafeo 0.6 has a
-  new single-file storage format, copy-on-write checkpoints and planner changes, so results measured with 0.5.x
-  are not comparable one to one. See the README section "Grafeo versions".
-- **Embedded Grafeo runs more natively**: a BFS or shortest path restricted to one edge type (`snb_ic1`) runs
-  Grafeo's algorithm on a projection of that edge type instead of the `get_neighbors` fallback. The adapter loads
-  data with the batch APIs, keeps a file database as one `.grafeo` file, and lets query errors fail the
-  benchmark instead of timing them.
-- **Grafeo Server**: the adapter follows the GWP protocol of grafeo-server 0.5.44 (`CatalogService` in place
-  of `DatabaseService`, native search through `AdminService` and `SearchService`), and
-  `GRAPH_BENCH_GRAFEO_SERVER_URI` defaults to `localhost:7688`, grafeo-server's GWP port (it was 7687).
-- **Vector scan renamed**: `vector_insert`, `vector_knn`, `vector_batch_search` and `vector_recall` are now
-  `vector_scan_insert`, `vector_scan_knn`, `vector_scan_batch_search` and `vector_scan_recall`: the same
-  brute-force search on every database, which adapters may not override. The old names and `-c vector` still
-  select them.
-- **Version**: `graph_bench.__version__` matches the package version (it said 0.1.0).
+- **Fairness rules**: FAIRNESS.md is rewritten for the embedded comparison: one process per database,
+  single-threaded runs (all-cores runs return with grafeo 0.6.4), in-memory storage where supported, each
+  database's fastest documented bulk load, its vendor-recommended API, checked answers and the budget rule.
+- **README and CONTRIBUTING**: rewritten for the new comparison and for adding a database adapter.
+- **Dependencies**: the extras are `grafeo`, `ladybug`, `embedded` (both), `bench` (pytest-codspeed) and `dev`.
+
+### Removed
+
+- **The 0.2.x benchmark** and its unreleased 0.3 work (native and fallback labels, `vector_ann_*`, the Uni-DB
+  adapter, the grafeo-server adapter) move to [legacy/](legacy/README.md), together with the server databases
+  and the Docker setup. Results measured with it are not comparable with the new comparison.
