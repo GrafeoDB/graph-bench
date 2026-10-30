@@ -53,3 +53,22 @@ the plans show avoidable work. They carry no `- id:` line, so the adapter test s
 - `snb_is4` on `snb-small` (median 45 ms for 10 bindings): `MATCH (m {id: $messageId}) WHERE m:Post OR m:Comment`
   is planned as `NodeScan (m:*)`, a label filter, then the `id` filter, so the property index on `id` is not
   used when the label is a disjunction or absent. Cause: Grafeo engine (query planner).
+
+## LadybugDB: slow point lookups under the 10x budget rule (not allowlisted)
+
+These cases agree with the reference in every run. In a `bench` run next to Grafeo they are marked `timeout`
+(⏱) by the budget rule (slower than 10x the mean of the 3 fastest other databases), not by a hang. They carry
+no `- id:` line because the adapter test runs LadybugDB alone, where no budget applies and they must agree.
+
+- Queries: `snb_is1`, `snb_is2`, `snb_is5`, `snb_is6` (`snb_is6` with its `ladybug` override), on `snb-small`.
+- Binding: all 10 of each.
+- LadybugDB 0.15.3 answer: agrees. Medians for 10 bindings, `bench --selection push --db grafeo,ladybug`:
+  IS1 9.7 ms, IS2 43.0 ms, IS5 9.2 ms, IS6 39.7 ms (19.8x, 37.8x, 28.0x and 61.1x Grafeo's 0.49, 1.14, 0.33
+  and 0.65 ms).
+- Reference answer: matched.
+- Cause: LadybugDB engine, per-call overhead. `QueryResult.get_compiling_time()` shows every `execute()`
+  compiling the query again (IS1 about 0.4 ms compile and 0.2 to 0.5 ms execution per binding, IS2 about 1.3 ms
+  compile and 2 ms execution, IS6 about 1.5 ms compile and 0.8 ms execution), so a point lookup costs about
+  1 ms where Grafeo answers in about 0.05 ms. A separate `prepare()` plus `execute()` halves IS1 but emits
+  "The use of separate prepare + execute of queries is deprecated. Please using a single call to the execute()
+  API instead.", so the adapter keeps the documented single `execute()` call.

@@ -1,6 +1,6 @@
 """Grafeo adapter: the push selection agrees with the references, except the recorded known disagreements."""
 
-import re
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -12,21 +12,16 @@ from graph_bench.runner.supervisor import run_bench
 
 pytestmark = pytest.mark.grafeo
 
-KNOWN_DISAGREEMENTS = Path(__file__).resolve().parent.parent / "docs" / "known-disagreements.md"
 
-
-def _known(db: str) -> set[str]:
-    """Benchmark ids recorded for `db` in docs/known-disagreements.md, from its `- id: <db>/<benchmark>` lines."""
-    if not KNOWN_DISAGREEMENTS.exists():
-        return set()
-    text = KNOWN_DISAGREEMENTS.read_text(encoding="utf-8")
-    return {m.group(2) for m in re.finditer(r"^- id: (\S+)/(\S+)\s*$", text, re.MULTILINE) if m.group(1) == db}
-
-
-def test_grafeo_push_agrees(push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_grafeo_push_agrees(
+    push_data_dir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    known_disagreements: Callable[[str], set[str]],
+) -> None:
     monkeypatch.setenv("GRAPH_BENCH_DATA_DIR", str(push_data_dir))
     results = run_bench("push", ["grafeo"], tmp_path / "out", workdir=tmp_path / "work", case_timeout_s=60)
-    known = _known("grafeo")
+    known = known_disagreements("grafeo")
     entries = [e for e in results.entries if e.database == "grafeo"]
     assert entries
     failing = []
