@@ -72,6 +72,8 @@ markers = [
 
 [tool.coverage.run]
 source = ["graph_bench"]
+# The runner tests start the worker as a subprocess; measure it there too.
+patch = ["subprocess"]
 omit = ["*/__init__.py", "graph_bench/databases/grafeo.py", "graph_bench/databases/ladybug.py"]
 
 [tool.coverage.report]

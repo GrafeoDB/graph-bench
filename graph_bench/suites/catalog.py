@@ -18,6 +18,7 @@ __all__ = [
     "Query",
     "Selection",
     "cases",
+    "load_id",
     "load_ids",
     "load_reference",
     "reference_path",
@@ -140,9 +141,13 @@ def load_ids(selection_name: str, dbs: Sequence[str]) -> list[str]:
         for dataset in datasets:
             for scale in sel.scales:
                 for threads in sel.threads:
-                    params = _params(db, scale, threads)
-                    result.append(f"benches/test_load.py::test_load_{dataset}[{params}]")
+                    result.append(load_id(dataset, db, scale, threads))
     return sorted(result)
+
+
+def load_id(dataset: str, db: str, scale: str, threads: int | None) -> str:
+    """The load benchmark id of one dataset: `benches/test_load.py::test_load_<dataset>[<params>]`."""
+    return f"benches/test_load.py::test_load_{dataset}[{_params(db, scale, threads)}]"
 
 
 def reference_path(item: Query | Algorithm, scale: str, *, base: Path) -> Path:

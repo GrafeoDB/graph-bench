@@ -6,7 +6,12 @@ import hashlib
 import json
 import math
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from graph_bench.suites.catalog import Case
+    from graph_bench.types import AnswerVerdict
 
 SNB_EPS = 1e-9
 LDBC_EPS = 1e-4
@@ -157,3 +162,22 @@ def verify(answer: Any, reference: Any, *, rel_eps: float) -> str | None:
     Booleans are never treated as numbers.
     """
     return _describe(answer, reference, rel_eps, "", 0)
+
+
+def check_case(case: Case, answers: list[Any], reference_file: Path) -> tuple[AnswerVerdict, str | None]:
+    """Check a case's canonical per-binding answers against its reference file.
+
+    WCC labels are first normalized to the smallest member of each component. Returns the verdict and,
+    for "disagree", the first difference.
+    """
+    # Imported here: the catalog and the suites import this module.
+    from graph_bench.suites import Algorithm
+    from graph_bench.suites.catalog import load_reference
+    from graph_bench.suites.graphalytics import min_member
+
+    item = case.item
+    if isinstance(item, Algorithm) and item.name == "wcc":
+        answers = [min_member(answer) for answer in answers]
+    _, reference = load_reference(reference_file)
+    message = verify(answers, reference, rel_eps=item.rel_eps)
+    return ("agree", None) if message is None else ("disagree", message)
