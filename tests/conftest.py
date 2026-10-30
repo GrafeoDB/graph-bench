@@ -1,52 +1,33 @@
-r"""
-Shared pytest fixtures for graph-bench tests.
-"""
+import re
+from collections.abc import Callable, Iterator
+from pathlib import Path
 
 import pytest
 
-from graph_bench.config import SCALES
-from graph_bench.types import ScaleConfig
+from graph_bench.datasets import cache
+
+KNOWN_DISAGREEMENTS = Path(__file__).resolve().parent.parent / "docs" / "known-disagreements.md"
+
+
+@pytest.fixture(scope="session")
+def push_data_dir(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
+    """A `GRAPH_BENCH_DATA_DIR` holding the push selection's datasets and references, generated once per session."""
+    root = tmp_path_factory.mktemp("push-data")
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("GRAPH_BENCH_DATA_DIR", str(root))
+        cache.prepare("push")
+    yield root
+
+
+def _known(db: str) -> set[str]:
+    """Benchmark ids recorded for `db` in docs/known-disagreements.md, from its `- id: <db>/<benchmark>` lines."""
+    if not KNOWN_DISAGREEMENTS.exists():
+        return set()
+    text = KNOWN_DISAGREEMENTS.read_text(encoding="utf-8")
+    return {m.group(2) for m in re.finditer(r"^- id: (\S+)/(\S+)\s*$", text, re.MULTILINE) if m.group(1) == db}
 
 
 @pytest.fixture
-def small_scale() -> ScaleConfig:
-    """Small scale configuration for testing."""
-    return SCALES["small"]
-
-
-@pytest.fixture
-def tiny_scale() -> ScaleConfig:
-    """Tiny scale for fast unit tests."""
-    return ScaleConfig(
-        name="tiny",
-        nodes=100,
-        edges=200,
-        warmup_iterations=1,
-        measurement_iterations=2,
-        timeout_seconds=10,
-    )
-
-
-@pytest.fixture
-def sample_nodes() -> list[dict]:
-    """Sample node data for testing."""
-    return [
-        {"id": "person_0", "name": "Alice", "age": 30},
-        {"id": "person_1", "name": "Bob", "age": 25},
-        {"id": "person_2", "name": "Charlie", "age": 35},
-        {"id": "person_3", "name": "Diana", "age": 28},
-        {"id": "person_4", "name": "Eve", "age": 32},
-    ]
-
-
-@pytest.fixture
-def sample_edges() -> list[tuple]:
-    """Sample edge data for testing."""
-    return [
-        ("person_0", "person_1", "FOLLOWS", {"since": 2020}),
-        ("person_0", "person_2", "FOLLOWS", {"since": 2021}),
-        ("person_1", "person_2", "FOLLOWS", {"since": 2019}),
-        ("person_2", "person_3", "FOLLOWS", {"since": 2022}),
-        ("person_3", "person_4", "FOLLOWS", {"since": 2020}),
-        ("person_4", "person_0", "FOLLOWS", {"since": 2021}),
-    ]
+def known_disagreements() -> Callable[[str], set[str]]:
+    """The allowlist reader: database name -> benchmark ids that may fail in the adapter tests."""
+    return _known

@@ -1,144 +1,84 @@
-r"""
-Core types for graph database benchmarks.
+"""Shared vocabulary: models, categories, result statuses, answer verdicts and display markers."""
 
-    from graph_bench.types import BenchmarkResult, Status, Metrics
+from dataclasses import dataclass
+from typing import Literal
 
-    result = run_benchmark(adapter, scale="medium")
-    if result.ok:
-        print(f"Throughput: {result.metrics.throughput}")
-"""
+Model = Literal["property_graph", "sql_pgq", "rdf"]
 
-from dataclasses import dataclass, field
-from enum import IntEnum, auto
-from typing import Any
-
-__all__ = [
-    "Status",
-    "TimingStats",
-    "Metrics",
-    "ScaleConfig",
-    "BenchmarkResult",
+Category = Literal[
+    "load",
+    "batch_writes",
+    "scans",
+    "hops",
+    "pattern_matching",
+    "complex_queries",
+    "algorithms",
+    "vector",
+    "hybrid",
+    "rdf",
+    "sql_pgq",
+    "crash_restore",
+    "deriva",
+    "project_suites",
 ]
 
+CATEGORY_ORDER: tuple[Category, ...] = (
+    "load",
+    "batch_writes",
+    "scans",
+    "hops",
+    "pattern_matching",
+    "complex_queries",
+    "algorithms",
+    "vector",
+    "hybrid",
+    "rdf",
+    "sql_pgq",
+    "crash_restore",
+    "deriva",
+    "project_suites",
+)
 
-class Status(IntEnum):
-    """Benchmark outcome status."""
+CATEGORY_NAMES: dict[Category, str] = {
+    "load": "Load",
+    "batch_writes": "Batch writes",
+    "scans": "Scans",
+    "hops": "Hops",
+    "pattern_matching": "Pattern matching",
+    "complex_queries": "Complex queries",
+    "algorithms": "Algorithms",
+    "vector": "Vector search",
+    "hybrid": "Hybrid",
+    "rdf": "RDF/SPARQL",
+    "sql_pgq": "SQL/PGQ",
+    "crash_restore": "Crash and restore",
+    "deriva": "Deriva workload",
+    "project_suites": "Project suites",
+}
 
-    SUCCESS = auto()
-    FAILED = auto()
-    TIMEOUT = auto()
-    SKIPPED = auto()
-    WARMUP = auto()
+Status = Literal["ok", "failed", "timeout", "not_supported"]
+AnswerVerdict = Literal["agree", "disagree", "unchecked"]
+Marker = Literal["", "⊘", "✗", "≠", "⏱"]
 
 
-@dataclass(frozen=True, slots=True)
-class TimingStats:
-    """Timing statistics for a benchmark run.
+def marker(status: Status, answer: AnswerVerdict) -> Marker:
+    """Return the display marker for a result cell."""
+    if status == "not_supported":
+        return "⊘"
+    if status == "failed":
+        return "✗"
+    if status == "timeout":
+        return "⏱"
+    if answer == "disagree":
+        return "≠"
+    return ""
 
-    Attributes:
-        min_ns: Minimum execution time in nanoseconds.
-        max_ns: Maximum execution time in nanoseconds.
-        mean_ns: Mean execution time in nanoseconds.
-        median_ns: Median execution time in nanoseconds.
-        std_ns: Standard deviation in nanoseconds.
-        p99_ns: 99th percentile in nanoseconds.
-        iterations: Number of iterations performed.
-    """
 
-    min_ns: int
-    max_ns: int
-    mean_ns: float
+@dataclass(frozen=True)
+class Timing:
+    """Timing summary of one measured query, in nanoseconds."""
+
     median_ns: float
-    std_ns: float
     p99_ns: float
+    min_ns: int
     iterations: int
-
-    @property
-    def mean_ms(self) -> float:
-        """Mean execution time in milliseconds."""
-        return self.mean_ns / 1_000_000
-
-    @property
-    def median_ms(self) -> float:
-        """Median execution time in milliseconds."""
-        return self.median_ns / 1_000_000
-
-    @property
-    def p99_ms(self) -> float:
-        """99th percentile in milliseconds."""
-        return self.p99_ns / 1_000_000
-
-    @property
-    def ops_per_second(self) -> float:
-        """Operations per second based on mean time."""
-        if self.mean_ns == 0:
-            return float("inf")
-        return 1_000_000_000 / self.mean_ns
-
-
-@dataclass(frozen=True, slots=True)
-class Metrics:
-    """Collected metrics from a benchmark.
-
-    Attributes:
-        timing: Timing statistics.
-        throughput: Operations per second.
-        items_processed: Number of items (nodes/edges) processed.
-        memory_bytes: Memory usage in bytes (if available).
-        custom: Additional custom metrics.
-    """
-
-    timing: TimingStats
-    throughput: float
-    items_processed: int
-    memory_bytes: int | None = None
-    custom: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True, slots=True)
-class ScaleConfig:
-    """Scale configuration for benchmarks.
-
-    Attributes:
-        name: Scale name (small, medium, large).
-        nodes: Number of nodes.
-        edges: Number of edges.
-        warmup_iterations: Warmup iterations before measurement.
-        measurement_iterations: Iterations for measurement.
-        timeout_seconds: Maximum time per benchmark.
-    """
-
-    name: str
-    nodes: int
-    edges: int
-    warmup_iterations: int = 3
-    measurement_iterations: int = 10
-    timeout_seconds: int = 300
-
-
-@dataclass(frozen=True, slots=True)
-class BenchmarkResult[T]:
-    """Result from a benchmark execution.
-
-    Attributes:
-        benchmark_name: Name of the benchmark.
-        database: Database adapter name.
-        scale: Scale configuration used.
-        metrics: Collected metrics.
-        status: Outcome status.
-        error: Error message if failed.
-        metadata: Additional result metadata.
-    """
-
-    benchmark_name: str
-    database: str
-    scale: ScaleConfig
-    metrics: Metrics | None
-    status: Status = Status.SUCCESS
-    error: str | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-    @property
-    def ok(self) -> bool:
-        """True if benchmark completed successfully."""
-        return self.status == Status.SUCCESS

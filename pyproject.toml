@@ -1,22 +1,16 @@
 [project]
 name = "graph-bench"
-version = "0.2.0"
+version = "0.3.0"
 description = "Extensive benchmark suite for graph databases"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = ["networkx>=3.0", "psutil>=5.9"]
+dependencies = ["networkx>=3.0", "numpy>=1.25", "scipy>=1.11", "psutil>=5.9", "typer>=0.15.0"]
 authors = [{ name = "S.T. Grond", email = "dev@grafeo.dev" }]
 license = "Apache-2.0"
 keywords = [
     "benchmark",
     "graph-database",
-    "neo4j",
-    "memgraph",
     "ladybug",
-    "arangodb",
-    "falkordb",
-    "nebula",
-    "tugraph",
     "grafeo",
     "performance",
 ]
@@ -27,6 +21,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "Topic :: Database",
     "Topic :: Software Development :: Testing",
 ]
@@ -36,41 +31,22 @@ Homepage = "https://grafeo.dev/"
 Repository = "https://github.com/GrafeoDB/graph-bench"
 
 [project.optional-dependencies]
+grafeo = ["grafeo>=0.6.0,<0.7"]
+ladybug = ["real_ladybug>=0.15"]
+embedded = ["graph-bench[grafeo,ladybug]"]
+bench = ["pytest>=9.0.2", "pytest-codspeed>=5.0.3"]
 dev = [
     "pytest>=9.0.2",
     "pytest-cov>=7.0.0",
+    "pyyaml>=6.0",
     "ruff>=0.15.0",
     "prek>=0.3.2",
     "ty>=0.0.15",
     "pytest-codspeed>=5.0.3",
 ]
-cli = ["typer>=0.15.0"]
-neo4j = ["neo4j>=5.0"]
-memgraph = ["neo4j>=5.0"]
-ladybug = ["real_ladybug>=0.14"]
-arangodb = ["python-arango>=7.0"]
-grafeo = ["grafeo>=0.5"]
-# grafeo-local: cd H:\GrafeoDB\grafeo && maturin develop --release
-falkordb = ["FalkorDB>=1.0"]
-falkordblite = ["falkordblite>=0.8"]
-nebula = ["nebula3-python>=3.0"]
-tugraph = ["neo4j>=5.0"]
-datasets = ["faker>=20.0"]
-reporting = ["matplotlib>=3.8", "pandas>=2.0"]
-all-adapters = [
-    "neo4j>=6",
-    "real_ladybug>=0.14.1",
-    "python-arango>=8.3",
-    "grafeo>=0.5",
-    "FalkorDB>=1.4.0",
-    "nebula3-python>=3.8.3",
-]
-all = [
-    "graph-bench[dev,cli,all-adapters,datasets,reporting]",
-]
 
 [project.scripts]
-graph-bench = "graph_bench.cli.main:main"
+graph-bench = "graph_bench.cli:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -82,6 +58,7 @@ packages = ["graph_bench"]
 [tool.ruff]
 line-length = 120
 target-version = "py312"
+extend-exclude = ["legacy"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
@@ -90,19 +67,16 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 addopts = "--cov=graph_bench --cov-report=term-missing --cov-fail-under=88"
 testpaths = ["tests"]
 markers = [
-    "slow: slow tests (run with --runslow)",
-    "integration: integration tests requiring database",
-    "neo4j: requires Neo4j",
-    "memgraph: requires Memgraph",
-    "kuzu: requires Kuzu",
-    "arangodb: requires ArangoDB",
-    "tugraph: requires TuGraph",
     "grafeo: requires Grafeo",
+    "ladybug: requires LadybugDB",
+    "slow: slow tests",
 ]
 
 [tool.coverage.run]
 source = ["graph_bench"]
-omit = ["*/__init__.py"]
+# The runner tests start the worker as a subprocess; measure it there too.
+patch = ["subprocess"]
+omit = ["*/__init__.py", "graph_bench/databases/grafeo.py", "graph_bench/databases/ladybug.py"]
 
 [tool.coverage.report]
 fail_under = 88

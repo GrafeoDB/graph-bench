@@ -42,3 +42,14 @@ data/
 
 # ── Results ───────────────────────────────────────────────────────────
 results/*
+legacy/results/
+
+# ── graph-bench run state ─────────────────────────────────────────────
+# grafeo build/install record and built wheels (graph-bench setup)
+.graph-bench/
+# default output dirs for bench/codspeed runs
+out/
+.codspeed/
+
+# ── Agent workspaces ─────────────────────────────────────────────────
+.superpowers/

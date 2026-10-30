@@ -2,290 +2,182 @@
 
 [![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://app.codspeed.io/GrafeoDB/graph-bench?utm_source=badge)
 
-Benchmark suite for graph databases. Built to compare Grafeo against other options.
+A head-to-head comparison of embedded graph databases. Every database runs in its own process, on the same
+generated data, single-threaded, and every query answer is checked against a reference before any time
+counts. A wrong answer is shown as wrong and never ranked.
 
-## Supported Databases
+graph-bench runs in its own CI on [CodSpeed](https://codspeed.io/) and locally with one command. Its results
+feed the [Results](#results) section below and a summary block in [Grafeo](https://github.com/GrafeoDB/grafeo)'s
+README at each Grafeo release. The rules every database is measured under are in [FAIRNESS.md](FAIRNESS.md).
 
-| Database | Type | Query Language | Status |
-|----------|------|----------------|--------|
-| **Grafeo** | Embedded | GQL (ISO) | Ready |
-| **Grafeo Server** | Server | GQL (ISO) | Ready |
-| **LadybugDB** | Embedded | Cypher | Ready |
-| **FalkorDB Lite** | Embedded | Cypher | Ready |
-| **Neo4j** | Server | Cypher | Ready |
-| **Memgraph** | Server | Cypher | Ready |
-| **ArangoDB** | Server | AQL | Ready |
-| **FalkorDB** | Server (Redis) | Cypher | Ready |
-| **TuGraph** | Server | Cypher | Ready |
-| **NebulaGraph** | Server (Distributed) | nGQL | Ready |
+## Databases
 
-## Quick Start
+| Database | Package | Process | Status |
+| --- | --- | --- | --- |
+| Grafeo | `grafeo` | in-process | implemented |
+| LadybugDB | `real_ladybug` | in-process | implemented |
+| TuringDB | `turingdb` (embedded mode) | in-process | planned |
+| FalkorDB | `falkordblite` | local process (a Redis server subprocess) | planned |
+| NeuG | `neug` | in-process | planned |
+| ArcadeDB | `arcadedb-embedded` | in-process (JVM) | planned |
+| Neo4j Community | Maven jars through JPype | in-process (JVM) | planned |
+| DuckDB + DuckPGQ | `duckdb` | in-process | planned |
+| Oxigraph | `pyoxigraph` | in-process | planned |
+| HelixDB | `helix-db` + `helix-db-embedded` | in-process (embedded mode) | planned |
 
-```bash
-# Install with all adapters
-uv sync --all-extras
+Neo4j is measured as Community only: the Enterprise terms restrict publishing benchmarks. The JVM databases
+fetch their jars and a Temurin 21 JRE into the data cache; nothing is committed. HelixDB is deferred if its
+embedded wheel is unusable on the benchmark platforms, as server-only databases are not part of the run.
 
-# Run small benchmark on Grafeo
-uv run graph-bench run -d grafeo -s small --verbose
+## The matrix
 
-# Compare embedded databases
-uv run graph-bench run -d grafeo,ladybug,duckdb -s small --verbose
+The results are a capability matrix covering everything Grafeo does: one column per database, an overview with
+one row per category, and one detail table per category with one row per benchmark. There is never one combined
+score across categories. Each benchmark belongs to one data model (property graph, SQL/PGQ or RDF), which
+decides the databases that take part; the others get ⊘.
 
-# Run core benchmarks
-uv run graph-bench run -d grafeo -s medium
-```
+| Category | Benchmarks | Databases | Status |
+| --- | --- | --- | --- |
+| Load | bulk load per dataset (SNB, Graphalytics), each database's fastest documented bulk path | all | implemented |
+| Load (query language) | bulk load through the query language (`LOAD CSV`, `COPY` from a query) | databases with a query-language loader | planned |
+| Batch writes | batch insert, update, delete, upsert | property graph | planned |
+| Scans | label scan, property filter, aggregation, order and limit | property graph | planned |
+| Hops | 1, 2 and 3 hop expansion, variable-length paths, shortest path | property graph | IC13 implemented, the rest planned |
+| Pattern matching | triangles, cycles, multi-pattern joins | property graph | planned |
+| Complex queries | LDBC SNB Interactive short reads IS1 to IS7 and complex reads | property graph | IS1 to IS7, IC2, IC6 implemented |
+| Algorithms | Graphalytics BFS, WCC, PageRank, then CDLP, LCC, SSSP, Louvain, betweenness | databases with native algorithms | BFS, WCC, PR implemented |
+| Vector search | kNN, batch kNN, recall@k, filtered kNN | databases with vector indexes | planned |
+| Hybrid | graph then vector, vector then graph | databases with both | planned |
+| RDF/SPARQL | Berlin SPARQL Benchmark (BSBM) | Grafeo, Oxigraph | planned |
+| SQL/PGQ | SNB queries in SQL/PGQ, DuckPGQ's published queries | Grafeo, DuckDB + DuckPGQ | planned |
+| Crash and restore | on disk: reopen, crash mid-transaction, rollback, snapshot isolation, torn WAL tail, backup and restore | all | planned |
+| Deriva workload | a simulated multi-repo roundtrip using deriva's pipeline patterns | property graph | planned |
+| Project suites | each project's own published queries, as written | the owning database and any that can run them | planned |
 
-## Benchmarks
+Algorithms always use the database's native implementation, as a procedure or as a query in its own language. A
+database without one gets ⊘; NetworkX is only the reference for the answer check.
 
-### Storage (4)
-| Benchmark | What it measures |
-|-----------|------------------|
-| `node_insertion` | Batch node insert throughput |
-| `edge_insertion` | Batch edge insert throughput |
-| `single_read` | Point lookup latency |
-| `batch_read` | Batch retrieval by label |
+### Markers
 
-### Traversal (5)
-| Benchmark | What it measures |
-|-----------|------------------|
-| `hop_1` | 1-hop neighbor expansion |
-| `hop_2` | 2-hop neighbor expansion |
-| `bfs` | Breadth-first search |
-| `dfs` | Depth-first search |
-| `shortest_path` | Path finding between nodes |
+CodSpeed records a benchmark as measured or skipped, so each marker maps to a fixed pytest outcome in
+`graph-bench codspeed`, with a reason prefix that shows in the CI log and in results.json.
 
-### Algorithms (4)
-| Benchmark | What it measures |
-|-----------|------------------|
-| `pagerank` | PageRank centrality |
-| `community_detection` | Louvain community detection |
-| `betweenness_centrality` | Bridge node identification |
-| `closeness_centrality` | Node reachability scoring |
+| Marker | Meaning | results.json `status` / `answer` | pytest outcome | CodSpeed |
+| --- | --- | --- | --- | --- |
+| time, fastest **bold** | completed, answer checked | `ok` / `agree` | passed | measured |
+| ⊘ | not available: the database lacks the capability or the data model | `not_supported` | skipped, `not available: ...` | absent |
+| ✗ | failing: an error or a crash | `failed` | failed, `error: ...` | Skipped if measured before, else absent |
+| ≠ | wrong answer: fails the answer check | `ok` / `disagree` | failed, `wrong answer: ...` | Skipped if measured before, else absent |
+| ⏱ | too slow: beyond 10x the average of the 3 fastest other databases | `timeout` | failed, `too slow: ...` | Skipped if measured before, else absent |
 
-### Query (3)
-| Benchmark | What it measures |
-|-----------|------------------|
-| `aggregation_count` | COUNT aggregation |
-| `filter_equality` | Equality filter performance |
-| `filter_range` | Range filter performance |
+Every benchmark first runs once, untimed: the preflight. The answer check and the time budget apply there, so a
+wrong or too slow result never reaches CodSpeed as a speed. One exception: a ⏱ assigned only by the final budget
+rule, applied after every database has run, comes after CodSpeed has measured the case. CodSpeed then shows that
+case as measured, while results.json and the matrix show ⏱. A ⏱ from the in-run cutoff is never measured.
 
-### Pattern Matching (2)
-| Benchmark | What it measures |
-|-----------|------------------|
-| `triangle_count` | Count triangles in graph |
-| `common_neighbors` | Find mutual connections |
-
-### Graph Structure (4)
-| Benchmark | What it measures |
-|-----------|------------------|
-| `connected_components` | Find disconnected subgraphs |
-| `degree_distribution` | Identify high-degree nodes |
-| `graph_density` | Calculate edge density |
-| `reachability` | Check node reachability |
-
-### Write Operations (3)
-| Benchmark | What it measures |
-|-----------|------------------|
-| `property_update` | Update node properties |
-| `edge_add_existing` | Add edges between existing nodes |
-| `mixed_workload` | 80% read / 20% write mix |
-
-### LDBC-Inspired: SNB Interactive (11)
-| Benchmark | What it measures |
-|-----------|------------------|
-| `snb_is1` - `snb_is7` | Short read queries (profile, posts, friends, content) |
-| `snb_ic1` - `snb_ic3`, `snb_ic6` | Complex read queries (multi-hop friends, messages, tags) |
-
-### LDBC-Inspired: GraphAnalytics (6)
-| Benchmark | What it measures |
-|-----------|------------------|
-| `ldbc_bfs` | Breadth-first search (vertex depths) |
-| `ldbc_pagerank` | PageRank centrality |
-| `ldbc_wcc` | Weakly connected components |
-| `ldbc_cdlp` | Community detection (label propagation) |
-| `ldbc_lcc` | Local clustering coefficient |
-| `ldbc_sssp` | Single-source shortest paths |
-
-### LDBC-Inspired: ACID (12)
-| Benchmark | What it measures |
-|-----------|------------------|
-| `acid_atomicity_c` | Commit visibility |
-| `acid_atomicity_rb` | Rollback correctness |
-| `acid_g0` | Dirty write detection |
-| `acid_g1a` - `acid_g1c` | Read anomalies (aborted, intermediate, circular) |
-| `acid_imp`, `acid_pmp` | Item/predicate many-preceders |
-| `acid_otv`, `acid_fr` | Observed transaction vanishes, fractured read |
-| `acid_lu`, `acid_ws` | Lost update, write skew |
-
-### Concurrent (5)
-| Benchmark | What it measures |
-|-----------|------------------|
-| `throughput_scaling` | Multi-threaded throughput |
-| `lost_update` | Lost update under concurrency |
-| `read_after_write` | Read-your-writes consistency |
-| `concurrent_mixed` | Concurrent 80/20 read-write mix |
-| `concurrent_acid` | ACID under concurrent load |
-
-## Scales
-
-| Scale | Nodes | Edges | Warmup | Iterations |
-|-------|-------|-------|--------|------------|
-| small | 10K | 50K | 2 | 5 |
-| medium | 100K | 500K | 3 | 10 |
-| large | 1M | 5M | 1 | 1 |
-
-## Installation
+## Running it
 
 ```bash
 git clone https://github.com/GrafeoDB/graph-bench
 cd graph-bench
-
-# Install everything
-uv sync --all-extras
-
-# Or just what you need
-uv sync --extra grafeo --extra cli
+uv sync --extra embedded --extra bench --extra dev
 ```
 
-## CLI Usage
+`uv sync` installs Grafeo from PyPI. To measure another Grafeo, install it with `setup`, then use
+`uv run --no-sync` so uv keeps it in place:
 
 ```bash
-# Run on specific databases
-uv run graph-bench run -d grafeo -s small --verbose
-uv run graph-bench run -d grafeo,ladybug,arangodb -s medium
+# A wheel, or a grafeo checkout built with maturin (set CARGO_TARGET_DIR to a drive with plenty of free space)
+uv run --no-sync graph-bench setup --grafeo path/to/grafeo
 
-# Run specific categories
-uv run graph-bench run -d grafeo -c storage -s small
-uv run graph-bench run -d grafeo -c traversal,pattern -s small
+# Generate the datasets and reference answers into the cache (GRAPH_BENCH_DATA_DIR, default ~/.cache/graph-bench)
+uv run --no-sync graph-bench data prepare --selection push
 
-# Run specific benchmarks
-uv run graph-bench run -d grafeo -b triangle_count,common_neighbors -s small
+# The plan: one benchmark id per line
+uv run --no-sync graph-bench list --selection push
 
-# Output to specific directory
-uv run graph-bench run -d grafeo -s small -o ./my_results/
+# Run every database, one worker process each, and write out/results.json
+uv run --no-sync graph-bench bench --selection push --out out
+
+# Only some databases, in this order
+uv run --no-sync graph-bench bench --selection push --db grafeo,ladybug --out out
+
+# The results as this README's section, or as the summary block for grafeo's README
+uv run --no-sync graph-bench report --format readme --in out/results.json
+uv run --no-sync graph-bench report --format summary --in out/results.json
 ```
 
-## Python API
+Selections:
 
-```python
-from graph_bench.adapters import GrafeoAdapter
-from graph_bench.benchmarks import BenchmarkRegistry
-from graph_bench.config import get_scale
+- `push`: small scale, the property graph core categories, single-threaded. Runs on every push to `main`.
+- `full`: every category and scale, single-threaded. Feeds the [Results](#results) section.
+- `release` (planned): `full` plus LDBC Graphalytics' wiki-Talk graph, checked against LDBC's published
+  validation outputs, for Grafeo release runs.
 
-# Connect
-adapter = GrafeoAdapter()
-adapter.connect()  # Uses :memory: by default
+`graph-bench codspeed --selection S --out DIR` is the CI entry point: one `pytest benches --codspeed` process
+per database, under the CodSpeed runner. `graph-bench data key --selection S` prints the dataset cache key.
+`GRAPH_BENCH_GRAFEO=<path>` installs that Grafeo at the start of `bench` and `codspeed`, like `--grafeo`.
 
-# Run a benchmark
-scale = get_scale("small")
-benchmark_cls = BenchmarkRegistry.get("triangle_count")
-benchmark = benchmark_cls()
-metrics = benchmark.run(adapter, scale)
+### Grafeo's README summary
 
-print(f"Mean time: {metrics.timing.mean_ns / 1_000_000:.2f}ms")
-print(f"Throughput: {metrics.throughput:.2f} ops/sec")
-
-adapter.disconnect()
-```
-
-## Configuration
-
-Create a `.env` file (copy from `.env.example`):
+grafeo's README carries a summary block (between `<!-- graph-bench:start -->` and `<!-- graph-bench:end -->`)
+with counts per category: how many databases took part, on how many benchmarks Grafeo was fastest, and its
+median rank. It names no other database; this README names them all. At each Grafeo release the pre-release
+checklist runs, locally:
 
 ```bash
-# Embedded (no server needed)
-GRAPH_BENCH_GRAFEO_PATH=:memory:
-GRAPH_BENCH_LADYBUG_PATH=:memory:
-
-# Server databases (needs Docker or local install)
-GRAPH_BENCH_NEO4J_URI=bolt://localhost:7687
-GRAPH_BENCH_NEO4J_USER=neo4j
-GRAPH_BENCH_NEO4J_PASSWORD=benchmark
-
-GRAPH_BENCH_MEMGRAPH_URI=bolt://localhost:7688
-
-GRAPH_BENCH_ARANGO_URI=http://localhost:8529
-GRAPH_BENCH_ARANGO_USER=root
-GRAPH_BENCH_ARANGO_PASSWORD=benchmark
-GRAPH_BENCH_ARANGO_DATABASE=benchmark
-
-GRAPH_BENCH_FALKORDB_HOST=localhost
-GRAPH_BENCH_FALKORDB_PORT=6379
-
-GRAPH_BENCH_NEBULA_HOST=localhost
-GRAPH_BENCH_NEBULA_PORT=9669
-GRAPH_BENCH_NEBULA_USER=root
-GRAPH_BENCH_NEBULA_PASSWORD=nebula
+uv run --no-sync graph-bench setup --grafeo path/to/grafeo.whl
+uv run --no-sync graph-bench bench --selection full --out out
+uv run --no-sync graph-bench report --format summary --in out/results.json
 ```
 
-## Docker Setup
+and commits the block on grafeo's release branch. No automation writes to grafeo.
 
-```bash
-# Start all server databases
-docker compose up -d
+### CI
 
-# Or just some
-docker compose up -d neo4j memgraph arangodb
+- `.github/workflows/ci.yml`: lint and the test suite on Python 3.12 and 3.13, including the adapter tests
+  against Grafeo and LadybugDB from PyPI.
+- `.github/workflows/bench.yml`: graph-bench's own CodSpeed project, separate from grafeo's CodSpeed benchmarks,
+  which it does not replace. It builds grafeo `main` from source and runs the `push` selection on CodSpeed's
+  macro runners in wall-time mode on every push to `main`, daily and on demand. The daily run also runs `full`
+  with `graph-bench bench` and opens a pull request on `bot/results` that updates the section below. Needs the
+  CodSpeed app on graph-bench and codspeed-macro runners enabled for the org; authentication uses GitHub OIDC
+  (no token secret).
 
-# Check status
-docker compose ps
-```
+## Results
 
-## Latest Results
+<!-- results:start -->
+No results yet: this section is written by the scheduled `full` run (`graph-bench report --format readme`).
+<!-- results:end -->
 
-See latest Results at [RESULTS_EMBEDDED.md](RESULTS_EMBEDDED.md) and [RESULTS_SERVER.md](RESULTS_SERVER.md) for the most recent benchmark run.
+## Documentation
 
-Results are saved as JSON in `results/`.
+- [FAIRNESS.md](FAIRNESS.md): the rules every database is measured under.
+- [CONTRIBUTING.md](CONTRIBUTING.md): adding a database, running the tests and lint.
+- [docs/known-disagreements.md](docs/known-disagreements.md): wrong answers, slow cases and engine findings,
+  recorded as they are instead of worked around.
+- [CHANGELOG.md](CHANGELOG.md).
 
-## Development
+The pre-0.3.0 benchmark, including the server databases, is kept in [legacy/](legacy/README.md).
 
-```bash
-uv sync --all-extras
+## LDBC disclaimer
 
-# Run tests
-uv run pytest
+Several categories use workloads **inspired by** [LDBC](https://ldbcouncil.org/) specifications: the
+[Social Network Benchmark (SNB)](https://ldbcouncil.org/benchmarks/snb/) Interactive queries and
+[Graphalytics](https://ldbcouncil.org/benchmarks/graphalytics/). These are **not official LDBC Benchmark
+results** and have not been audited or endorsed by the LDBC Council. Differences from official LDBC benchmarks:
 
-# Lint
-uv run ruff check graph_bench/
-
-# Type check
-uv run ty check graph_bench/
-
-# Format
-uv run ruff format graph_bench/
-```
-
-### Performance tracking
-
-The suite's own code (dataset generators, reporting, the embedded Grafeo adapter) is
-benchmarked continuously with [CodSpeed](https://codspeed.io) via `pytest-codspeed`.
-The benchmarks live in `tests/benchmarks/` and run on every push and pull request.
-
-```bash
-uv sync --extra dev --extra grafeo
-uv run --with grpcio --with protobuf pytest tests/benchmarks --codspeed --no-cov
-```
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for adding benchmarks or adapters.
-
-## Related
-
-- [Grafeo](https://github.com/GrafeoDB/grafeo), the graph database being benchmarked
-- [anywidget-graph](https://github.com/GrafeoDB/anywidget-graph), interactive graph visualization for notebooks
-
-## LDBC Disclaimer
-
-This benchmark suite includes workloads **inspired by** [LDBC](https://ldbcouncil.org/) specifications, including the [Social Network Benchmark (SNB)](https://ldbcouncil.org/benchmarks/snb/), [Graphalytics](https://ldbcouncil.org/benchmarks/graphalytics/), and the [ACID test suite](https://ldbcouncil.org/benchmarks/snb/). These are **not official LDBC Benchmark results**. The results have not been audited or endorsed by the LDBC Council.
-
-Key differences from official LDBC benchmarks:
-
-- **No LDBC audit**: official LDBC results require formal auditing under the [LDBC Byelaws](https://ldbcouncil.org/benchmarks/fair-use-policies/).
-- **Synthetic datasets**: graph-bench generates its own datasets that follow the LDBC SNB schema but are not produced by the official LDBC SNB data generator (Datagen).
-- **Reduced scale**: default runs use SF0.1, far below the scale factors used in official LDBC publications.
-- **Simplified query set**: only a subset of the official SNB Interactive queries are implemented.
+- **No LDBC audit**: official LDBC results require formal auditing under the
+  [LDBC Byelaws](https://ldbcouncil.org/benchmarks/fair-use-policies/).
+- **Synthetic datasets**: graph-bench generates its own data following the SNB schema, not with the official
+  LDBC SNB data generator (Datagen). Graphalytics runs on the SNB `KNOWS` graph.
+- **Reduced scale**: far below the scale factors used in official LDBC publications.
+- **Subset of queries**: only part of the SNB Interactive and Graphalytics workloads is implemented.
 - **No cost-of-ownership reporting**: official LDBC results include pricing and hardware disclosure.
 
-LDBC specifications are used under the [Creative Commons Attribution 4.0 (CC-BY 4.0)](https://creativecommons.org/licenses/by/4.0/) license. LDBC and the LDBC logo are trademarks of the Linked Data Benchmark Council. See the [LDBC fair use policy](https://ldbcouncil.org/benchmarks/fair-use-policies/) for details.
+LDBC specifications are used under the [Creative Commons Attribution 4.0 (CC-BY 4.0)](https://creativecommons.org/licenses/by/4.0/)
+license. LDBC and the LDBC logo are trademarks of the Linked Data Benchmark Council. See the
+[LDBC fair use policy](https://ldbcouncil.org/benchmarks/fair-use-policies/).
 
 ## License
 

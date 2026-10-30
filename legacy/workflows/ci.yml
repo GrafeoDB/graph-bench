@@ -1,0 +1,71 @@
+# Lint, then the unit and correctness tests against embedded Grafeo.
+# No other database runs here: the grafeo-server tests skip with the reason
+# "no grafeo-server GWP endpoint answers at ..." unless GRAPH_BENCH_GRAFEO_SERVER_URI
+# points at a running server.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Files that pass the full ruff rule set and ty; add files as they are cleaned up.
+  CLEAN_FILES: >-
+    graph_bench/adapters/grafeo.py
+    graph_bench/adapters/grafeo_server.py
+    graph_bench/benchmarks/query.py
+    graph_bench/benchmarks/vector.py
+    graph_bench/protocols.py
+    graph_bench/reporting/collector.py
+    graph_bench/types.py
+    tests/conftest.py
+    tests/dict_adapter.py
+    tests/grafeo_dataset.py
+    tests/test_adapters.py
+    tests/test_benchmark_failures.py
+    tests/test_config.py
+    tests/test_grafeo_adapter.py
+    tests/test_grafeo_benchmarks.py
+    tests/test_grafeo_correctness.py
+    tests/test_grafeo_server_protocol.py
+    tests/test_lcc.py
+    tests/test_result_labels.py
+    tests/test_vector_ann.py
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          python-version: "3.12"
+      - run: uv sync --locked --extra dev --extra grafeo --extra grafeo-server --extra cli
+      # Syntax errors and undefined names, everywhere
+      - run: uv run --no-sync ruff check --select E9,F63,F7,F82 .
+      - run: uv run --no-sync ruff check $CLEAN_FILES
+      - run: uv run --no-sync ruff format --check $CLEAN_FILES
+      - run: uv run --no-sync ty check $CLEAN_FILES
+
+  test:
+    name: test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13", "3.14", "3.15"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --locked --extra dev --extra grafeo --extra grafeo-server --extra cli
+      - run: uv run --no-sync python -c "import grafeo; print('grafeo', grafeo.__version__)"
+      # Coverage is measured but not enforced: most adapters need their database to run.
+      - run: uv run --no-sync pytest -v -rs --cov-fail-under=0

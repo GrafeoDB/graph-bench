@@ -1,0 +1,33 @@
+# Runs the test suite against the newest grafeo on PyPI, pre-releases included,
+# so an engine release that breaks the Grafeo adapters shows up before a benchmark run does.
+#   pinned: the newest grafeo the requirement in pyproject.toml accepts (grafeo>=0.6.0b1,<0.7)
+#   newest: the newest grafeo on PyPI, also past that requirement (the next minor)
+name: Grafeo latest
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: grafeo ${{ matrix.grafeo }} (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.15"]
+        grafeo: [pinned, newest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --extra dev --extra grafeo --extra grafeo-server --extra cli --upgrade-package grafeo --prerelease allow
+      - if: matrix.grafeo == 'newest'
+        run: uv pip install --upgrade --prerelease allow grafeo
+      - run: uv run --no-sync python -c "import grafeo; print('grafeo', grafeo.__version__, grafeo.build_info())"
+      - run: uv run --no-sync pytest -v -rs --cov-fail-under=0
