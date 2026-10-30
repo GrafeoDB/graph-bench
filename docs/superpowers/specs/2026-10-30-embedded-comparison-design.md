@@ -4,7 +4,7 @@ Status: agreed 2026-10-30 between the user, grafeo-31 (grafeo repo side) and gra
 
 ## Goal
 
-Rebuild graph-bench as a head-to-head comparison of nine embedded graph databases. It runs in graph-bench's own CI on CodSpeed and locally with one command. It feeds full results to graph-bench's README and a summary block to grafeo's README at each grafeo release.
+Rebuild graph-bench as a head-to-head comparison of ten embedded graph databases. It runs in graph-bench's own CI on CodSpeed and locally with one command. It feeds full results to graph-bench's README and a summary block to grafeo's README at each grafeo release.
 
 The new code fully replaces the current benchmark. The current code moves to `legacy/` untouched and is deleted once everything is replaced. The server comparison (Neo4j, Memgraph, FalkorDB, TuGraph, grafeo-server) is out of scope. It will later follow the same pattern, triggered from the grafeo-server repo.
 
@@ -21,6 +21,7 @@ The new code fully replaces the current benchmark. The current code moves to `le
 | Neo4j Community | JPype + Maven jars | in-process (JVM) | Community only (Enterprise terms restrict publishing benchmarks); jars and a Temurin 21 JRE fetched into the data cache, never committed |
 | DuckDB + DuckPGQ | `duckdb` | in-process | SQL/PGQ only |
 | Oxigraph | `pyoxigraph` | in-process | RDF only |
+| HelixDB | `helix-py` + the `helix` runtime | local process (to verify) | graph + vector database in Rust with its own query language (HelixQL); added by the user 2026-10-30. If it has no in-process mode it runs as a local server like FalkorDB-lite and is labelled "local process"; HelixQL queries are written per benchmark, so categories without a HelixQL equivalent get ⊘ |
 
 New dependencies in graph-bench need no approval (user, 2026-10-30).
 
@@ -170,7 +171,7 @@ grafeo's README never names other graph databases unless the user decides on tha
 
 1. **Foundation** (plan `2026-10-30-embedded-foundation.md`): legacy move, datasets, answer check with preflight and the 10x budget, per-process runner, results.json, Grafeo + Ladybug on Load, Complex queries, Hops (IC13) and Algorithms (BFS, WCC, PR), `setup`, `report` (matrix + summary), pytest-codspeed entry point, CI workflow. grafeo-31 is told when this works locally.
 2. **Core graph categories:** Batch writes, Scans, Hops, Pattern matching (ported from the legacy suites, rewritten as checked queries).
-3. **In-process Python adapters:** TuringDB embedded, FalkorDB (falkordblite), NeuG.
+3. **In-process Python adapters:** TuringDB embedded, FalkorDB (falkordblite), NeuG, HelixDB.
 4. **JVM adapters:** ArcadeDB, Neo4j Community via JPype, JRE and jar fetching, memory cap.
 5. **Vector search and Hybrid.**
 6. **Deriva workload** (after the deriva session's input).

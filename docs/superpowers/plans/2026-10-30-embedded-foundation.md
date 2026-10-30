@@ -653,7 +653,7 @@ class Database(ABC):
 
 **Files:**
 - Create: `.github/workflows/ci.yml`, `.github/workflows/bench.yml`
-- Modify: `README.md` (rewrite: what it is, the matrix categories, the nine planned databases and their status, the marker legend with its CodSpeed mapping, commands, a `<!-- results:start -->` / `<!-- results:end -->` section), `FAIRNESS.md` (trim to embedded use; add the spec's rules 1 to 8, the preflight, and the planned all-cores change with grafeo 0.6.4), `CONTRIBUTING.md` (how to add an adapter: subclass `Database`, register, pass the push agreement test), `CHANGELOG.md`
+- Modify: `README.md` (rewrite: what it is, the matrix categories, the ten planned databases and their status, the marker legend with its CodSpeed mapping, commands, a `<!-- results:start -->` / `<!-- results:end -->` section), `FAIRNESS.md` (trim to embedded use; add the spec's rules 1 to 8, the preflight, and the planned all-cores change with grafeo 0.6.4), `CONTRIBUTING.md` (how to add an adapter: subclass `Database`, register, pass the push agreement test), `CHANGELOG.md`
 - Test: `tests/test_workflows.py`
 
 **Interfaces:**
