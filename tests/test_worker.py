@@ -167,3 +167,26 @@ def test_worker_emits_progress(standard: tuple[Lines, Path]) -> None:
     load_id = catalog.load_id("snb", "fake", "small", 1)
     load_progress = [line for line in lines if line["kind"] == "progress" and line["id"] == load_id]
     assert len(load_progress) == sel.load_iterations
+
+
+def test_worker_prepares_environment_once_before_loads(
+    push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    trace = tmp_path / "trace.txt"
+    monkeypatch.setenv("GRAPH_BENCH_FAKE_TRACE", str(trace))
+    _, proc = run_worker(tmp_path / "fake.jsonl", push_data_dir)
+    assert proc.returncode == 0, proc.stderr
+    calls = trace.read_text(encoding="utf-8").split()
+    loads = catalog.selection("push").load_iterations * len(catalog.load_ids("push", ["fake"]))
+    assert calls == ["environment"] + ["load"] * loads
+
+
+def test_worker_environment_failure_fails_the_loads(push_data_dir: Path, tmp_path: Path) -> None:
+    lines, proc = run_worker(tmp_path / "fake.jsonl", push_data_dir, fake="crash_soft:environment")
+    assert proc.returncode == 0, proc.stderr
+    entries = _entries(lines)
+    error = "preparing the environment: RuntimeError: soft crash"
+    for load_id in catalog.load_ids("push", ["fake"]):
+        assert (entries[load_id]["status"], entries[load_id]["error"]) == ("failed", error)
+    cases = [c.bench_id for c in catalog.cases("push", ["fake"])]
+    assert all((entries[i]["status"], entries[i]["error"]) == ("failed", f"load failed: {error}") for i in cases)

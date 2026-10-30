@@ -34,6 +34,7 @@ from graph_bench.runner.worker import (
     fresh_instance,
     load,
     message,
+    prepare_environment,
     remove,
     start_case,
 )
@@ -60,6 +61,15 @@ class LoadCase:
 
 class LoadFailed(Exception):
     """The dataset a case needs could not be loaded."""
+
+
+class EnvironmentFailed(Exception):
+    """The database's `prepare_environment` failed; the message is the worker's load error text."""
+
+
+def _load_error(exc: Exception) -> str:
+    """A failed load's error text, as the worker writes it."""
+    return str(exc) if isinstance(exc, EnvironmentFailed) else message(exc)
 
 
 class Bench:
@@ -89,6 +99,7 @@ class Bench:
         self._datasets: dict[tuple[str, str], Dataset] | None = None
         self._loaded: tuple[DataKey, Loaded] | None = None
         self._failed: dict[DataKey, str] = {}
+        self._setup: tuple[str | None] | None = None  # (error,) once `prepare_environment` ran
 
     # The plan, as `graph-bench list` prints it.
 
@@ -150,6 +161,13 @@ class Bench:
             self._datasets = cache.prepare(self.selection.name)
         return self._datasets[(key[0], key[1])]
 
+    def prepare(self) -> None:
+        """Run the database's `prepare_environment` once per session, before the first load; re-raise its error."""
+        if self._setup is None:
+            self._setup = (prepare_environment(self.db_cls),)
+        if self._setup[0] is not None:
+            raise EnvironmentFailed(self._setup[0])
+
     def budget(self, bench_id: str) -> float:
         return self.budgets.get(bench_id, self.case_timeout_s)
 
@@ -162,9 +180,10 @@ class Bench:
         self.release()
         progress = {"kind": "progress", "id": None}
         try:
+            self.prepare()
             loaded = load(self.db_cls, self.dataset(key), self.workdir, key[2], 1, lambda: self.emit(progress))
         except Exception as exc:
-            self._failed[key] = message(exc)
+            self._failed[key] = _load_error(exc)
             raise LoadFailed(self._failed[key]) from exc
         self._loaded = (key, loaded)
         return loaded.db
@@ -269,10 +288,11 @@ def run_load(benchmark: Any, bench: Bench, lc: LoadCase) -> None:
 
     try:
         datasets.append(bench.dataset(key))
+        bench.prepare()
         benchmark.pedantic(target, setup=setup, rounds=bench.selection.load_iterations)
     except Exception as exc:
         drop()
-        error = message(exc)
+        error = _load_error(exc)
         bench.load_failed(key, error)
         bench.emit({"kind": "entry", "id": lc.bench_id, "status": "failed", "error": error})
         _fail("error: ", error)

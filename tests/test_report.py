@@ -142,6 +142,20 @@ def test_summary_excludes_disagree_from_ranking(results: Results) -> None:
     assert [db for db, _ in ic6.order] == ["ladybug"]
 
 
+def test_summary_counts_grafeo_timeouts_that_agree(results: Results) -> None:
+    """n counts every benchmark where Grafeo's answer agreed, ⏱ included; k still counts first places only."""
+    results.entries += [
+        _entry("algorithms", "graphalytics_wcc", "grafeo", "timeout", "agree", 300.0),
+        _entry("algorithms", "graphalytics_wcc", "ladybug", "ok", "agree", 3.0),
+        # A ⏱ killed before its answer was checked does not count.
+        _entry("algorithms", "graphalytics_cdlp", "grafeo", "timeout", "unchecked"),
+        _entry("algorithms", "graphalytics_cdlp", "ladybug", "ok", "agree", 3.0),
+    ]
+    text = render_summary(results)
+    assert _row(text, "Algorithms") == ["2", "1 / 3", "1.5"]
+    assert "Grafeo: ⏱ on graphalytics_wcc" in text.splitlines()
+
+
 def test_summary_has_no_combined_score(results: Results) -> None:
     for line in render_summary(results).lower().splitlines():
         assert "overall" not in line

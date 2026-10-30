@@ -17,9 +17,11 @@ benchmark moves to `legacy/` untouched and is deleted once the new comparison re
 - **Answer check and preflight**: every query's answer is compared with a Python reference computed from the
   generated data (NetworkX for algorithms, the LDBC epsilon for PageRank). Each benchmark first runs once,
   untimed, where the answer check and the time budget apply; only a benchmark that passes is timed.
-- **Time budget**: 10x the average median of the 3 fastest other databases with correct answers, cut off during
-  the run once 3 earlier results exist and applied again over all results at the end, so the run order never
-  decides the marker. A hard cap (`--case-timeout`, default 600 s of worker silence) applies before that.
+- **Time budget**: 10x the average median of the 3 fastest other databases with correct answers, applied over
+  all results at the end, so the run order never decides the marker. During the run a runaway guard cuts a
+  preflight (cold first run) off at 30x the average of the 3 fastest earlier preflights, once 3 earlier results
+  exist; before that a hard cap applies (`--case-timeout`, default 600 s of worker silence). Loads are timed but
+  not answer-checked and are exempt from the budget.
 - **Markers**: ⊘ not available, ✗ failing, ≠ wrong answer, ⏱ beyond the budget, each mapped to a fixed pytest
   outcome and reason prefix for CodSpeed.
 - **Datasets**: an SNB-schema generator and the Graphalytics graph (the SNB `KNOWS` graph in both directions),

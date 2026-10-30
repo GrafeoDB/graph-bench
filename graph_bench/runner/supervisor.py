@@ -16,14 +16,18 @@ budget. Before the worker's first `start` line (startup, driver import, dataset 
 `STARTUP_TIMEOUT_S`.
 
 Time budgets (spec rule 8, order independent): a case gets an in-run `--budget` only when at least 3 earlier
-databases have an ok/agree preflight for it; at the end `apply_budget_rule` compares every entry with the
-other databases only.
+databases have an ok/agree preflight for it: 30x the mean of their 3 fastest, a runaway guard on first (cold)
+runs. The supervisor enforces it too: a worker silent for longer than that budget after the case's `start`
+line is killed and the case becomes `timeout` ("too slow: cut off at ..."). At the end `apply_budget_rule`
+compares every entry with the other databases only, at 10x on the final timings; that decides the marker.
 
 Resume rule: when a worker exits non-zero or is killed for silence, the last `start` id without an entry
 becomes `failed` ("worker exited with code <n>") or `timeout`. When that id is a load, every not yet recorded
 case of that dataset becomes `failed` ("load failed: <load id>") too, so a broken load is not retried. A new
 worker then starts with `--skip` for every recorded id. Without an open `start` id, every unrecorded id gets
-the failure and the database is done; so every restart records at least one id and the loop ends.
+the failure and the database is done; so every restart records at least one id and the loop ends. With
+`Runner.rerun_passed` (CodSpeed), a killed or crashed process is relaunched even when every id is recorded, as
+long as a passed id is not retired, so CodSpeed measures the passed cases again (see `_Run._again`).
 """
 
 import importlib.metadata
@@ -56,6 +60,7 @@ RESULTS_FILE = "results.json"
 GRAFEO_FILE = Path(".graph-bench") / "grafeo.json"
 STARTUP_TIMEOUT_S = 120.0
 BUDGET_FACTOR = 10
+IN_RUN_FACTOR = 30
 _POLL_S = 0.05
 _ROOT = Path(__file__).resolve().parents[2]
 
@@ -156,10 +161,11 @@ def _top3_mean(values: Sequence[float]) -> float:
 
 
 def _budgets(entries: Sequence[Entry], db: str, meta: dict[str, _Meta]) -> dict[str, float]:
-    """Seconds per case: 10x the mean of the 3 smallest `preflight_ns` among earlier databases' ok/agree entries.
+    """Seconds per case: 30x the mean of the 3 smallest `preflight_ns` among earlier databases' ok/agree entries.
 
-    Only cases with at least 3 such entries get a budget, so the in-run budget never depends on which one or
-    two databases happened to run first.
+    This in-run cutoff is a runaway guard on first (cold) runs; `apply_budget_rule` at 10x on the final timings
+    decides the marker. Only cases with at least 3 such entries get a budget, so the in-run budget never depends
+    on which one or two databases happened to run first.
     """
     found: dict[tuple[str, str, int | None], list[int]] = {}
     for e in entries:
@@ -169,7 +175,7 @@ def _budgets(entries: Sequence[Entry], db: str, meta: dict[str, _Meta]) -> dict[
     for bench_id, m in meta.items():
         values = found.get((m.benchmark, m.scale, m.threads))
         if values and len(values) >= 3 and not m.load:
-            budgets[bench_id] = BUDGET_FACTOR * _top3_mean(values) / 1e9
+            budgets[bench_id] = IN_RUN_FACTOR * _top3_mean(values) / 1e9
     return budgets
 
 
@@ -214,14 +220,19 @@ def graph_bench_commit() -> str:
 
 
 def grafeo_source() -> GrafeoSource:
-    """The Grafeo under test: `.graph-bench/grafeo.json` (cwd-relative) when present, else the installed wheel."""
-    if GRAFEO_FILE.is_file():
-        doc = json.loads(GRAFEO_FILE.read_text(encoding="utf-8"))
-        return {"version": doc.get("version"), "source": doc.get("source", "unknown"), "sha": doc.get("sha")}
+    """The Grafeo under test: `.graph-bench/grafeo.json` (cwd-relative), else the installed wheel.
+
+    The file counts only while its version is the installed one: after a later `uv sync` replaced the recorded
+    build it is stale, and the installed version is reported with source "pypi".
+    """
     try:
         version: str | None = importlib.metadata.version("grafeo")
     except importlib.metadata.PackageNotFoundError:
         version = None
+    if GRAFEO_FILE.is_file():
+        doc = json.loads(GRAFEO_FILE.read_text(encoding="utf-8"))
+        if doc.get("version") == version:
+            return {"version": version, "source": doc.get("source", "unknown"), "sha": doc.get("sha")}
     return {"version": version, "source": "pypi", "sha": None}
 
 
@@ -383,6 +394,7 @@ class _Attempt:
     hung: bool = False
     silence_s: float = 0.0
     pending: str | None = None
+    cutoff_s: float | None = None  # set when killed at the pending case's in-run budget
 
 
 @dataclass
@@ -426,7 +438,8 @@ class _Run:
         budgets = _budgets(self.results.entries, db, meta)
         env = {**os.environ, **dict(self.runner.env), **extra_env}
         try:
-            while [i for i in meta if i not in self.recorded]:
+            launch = any(i not in self.recorded for i in meta)
+            while launch:
                 skip = self._skip(meta)
                 request = LaunchRequest(
                     db=db,
@@ -438,11 +451,25 @@ class _Run:
                     skip=skip,
                     budgets={i: budgets[i] for i in meta if i in budgets and i not in skip},
                 )
-                attempt = self._attempt(self.runner.argv(request), env, out, raw / f"{name}.log", db, meta)
-                if not self._settle(attempt, meta):
-                    break
+                argv = self.runner.argv(request)
+                attempt = self._attempt(argv, env, out, raw / f"{name}.log", db, meta, request.budgets)
+                launch = self._settle(attempt, meta) and self._again(attempt, meta)
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
+
+    def _again(self, attempt: _Attempt, meta: dict[str, _Meta]) -> bool:
+        """Whether to relaunch after a hung or crashed attempt that `_settle` let continue.
+
+        While ids are unrecorded, always. With `rerun_passed`, also when every id is recorded but a passed one
+        is not retired: the killed process took its CodSpeed measurements with it (e.g. its last case hung), so
+        the relaunch measures them again. Each such attempt retired its killed id, and a clean exit never gets
+        here (`_settle` returns False), so the loop ends.
+        """
+        if any(i not in self.recorded for i in meta):
+            return True
+        if not self.runner.rerun_passed or not (attempt.hung or attempt.code):
+            return False
+        return any(i not in self.retired and _passed(e) for i, e in self.recorded.items() if i in meta)
 
     def _skip(self, meta: dict[str, _Meta]) -> list[str]:
         """The ids a (re)launch must not run: every recorded id, or with `rerun_passed` only the marked ones.
@@ -458,7 +485,13 @@ class _Run:
 
     def _settle(self, attempt: _Attempt, meta: dict[str, _Meta]) -> bool:
         """Record what a finished attempt left open; whether to start another worker."""
-        if attempt.hung:
+        if attempt.cutoff_s is not None:
+            budget = f"{attempt.cutoff_s:.3g}"
+            status, error = (
+                "timeout",
+                f"too slow: cut off at {budget} s ({IN_RUN_FACTOR}x the top-3 average of earlier databases)",
+            )
+        elif attempt.hung:
             status, error = "timeout", f"no output for {attempt.silence_s:g} s"
         elif attempt.code:
             status, error = "failed", f"{self.runner.name} exited with code {attempt.code}"
@@ -483,9 +516,16 @@ class _Run:
         return True
 
     def _attempt(
-        self, argv: list[str], env: dict[str, str], out: Path, log_path: Path, db: str, meta: dict[str, _Meta]
+        self,
+        argv: list[str],
+        env: dict[str, str],
+        out: Path,
+        log_path: Path,
+        db: str,
+        meta: dict[str, _Meta],
+        budgets: dict[str, float],
     ) -> _Attempt:
-        """Run one worker to its end, recording its lines as they arrive; kill it after `case_timeout_s` of silence."""
+        """Run one worker to its end, recording its lines as they arrive; kill it when silent too long (`_follow`)."""
         if out.exists() and out.stat().st_size:
             with out.open("rb+") as fh:  # a killed worker may leave half a line; end it
                 fh.seek(-1, os.SEEK_END)
@@ -497,7 +537,7 @@ class _Run:
         with log_path.open("ab") as log:
             proc = _launch(argv, env, log, self.runner.cwd)
             try:
-                return self._follow(proc, out, offset, attempt, db, meta, echo)
+                return self._follow(proc, out, offset, attempt, db, meta, echo, budgets)
             finally:
                 if proc.poll() is None:  # a harness error or Ctrl+C: leave no worker appending to `out`
                     proc.kill()
@@ -513,9 +553,15 @@ class _Run:
         db: str,
         meta: dict[str, _Meta],
         echo: _Echo,
+        budgets: dict[str, float],
     ) -> _Attempt:
-        """Read the worker's new lines until it exits or stays silent too long."""
+        """Read the worker's new lines until it exits or stays silent too long.
+
+        Silence is limited to `case_timeout_s`, and right after the `start` line of a case with an in-run budget
+        (its preflight) to that budget: a preflight beyond it is cut off there instead of running to its end.
+        """
         started = False
+        cutoff: float | None = None  # the in-run budget of the case whose `start` line came last
         buffer = b""
         last = time.monotonic()
         while True:
@@ -530,14 +576,20 @@ class _Run:
             buffer += chunk
             *lines, buffer = buffer.split(b"\n")
             for line in lines:
-                started |= self._line(line, attempt, db, meta)
+                is_start = self._line(line, attempt, db, meta)
+                started |= is_start
+                cutoff = budgets.get(attempt.pending or "") if is_start else None
             if lines:
                 last = time.monotonic()
             if code is not None:
                 attempt.code = code
                 return attempt
             limit = self.case_timeout_s if started else max(self.case_timeout_s, STARTUP_TIMEOUT_S)
-            if time.monotonic() - last > limit:  # `_attempt` kills it
+            silent = time.monotonic() - last
+            if cutoff is not None and cutoff < limit and silent > cutoff:  # `_attempt` kills it
+                attempt.hung, attempt.silence_s, attempt.cutoff_s = True, cutoff, cutoff
+                return attempt
+            if silent > limit:
                 attempt.hung, attempt.silence_s = True, limit
                 return attempt
             time.sleep(_POLL_S)

@@ -10,6 +10,7 @@ from pathlib import Path
 
 STATE_DIR = Path(".graph-bench")
 STATE_FILE = "grafeo.json"
+VERSION_SCRIPT = "import importlib.metadata as m; print(m.version('grafeo'))"
 _ERR_TAIL = 2000
 
 
@@ -60,7 +61,9 @@ def install_grafeo(
         sha = run(["git", "-C", str(source), "rev-parse", "HEAD"]).strip()
     else:
         raise ValueError(f"expected a .whl file or a grafeo checkout: {source}")
-    version = run([sys.executable, "-c", "import grafeo; print(grafeo.__version__)"]).strip()
+    # The distribution version, as `supervisor.grafeo_source` compares it (grafeo.__version__ is the Cargo
+    # version, spelled differently for pre-releases).
+    version = run([sys.executable, "-c", VERSION_SCRIPT]).strip()
     info = {"version": version, "source": str(source), "sha": sha}
     state_dir.mkdir(parents=True, exist_ok=True)
     (state_dir / STATE_FILE).write_text(json.dumps(info), encoding="utf-8")

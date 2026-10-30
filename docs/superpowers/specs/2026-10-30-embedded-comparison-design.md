@@ -85,9 +85,10 @@ These go into FAIRNESS.md, which is trimmed to embedded use.
 5. Answers are checked. Each query's answer is compared with a Python reference computed from the generated data (NetworkX for algorithms). A database with a different answer is marked `disagree` and left out of the ranking.
 6. Queries return scalar values only (no node or edge objects) and order fully, with tie-breakers, whenever they use `LIMIT`.
 7. PageRank is compared at convergence (damping 0.85), with the LDBC relative epsilon of 0.0001.
-8. The time budget per benchmark is 10x the average median of the 3 fastest *other* databases with correct answers (the average over those available if fewer than 3; no budget when no other database has a correct result).
-   - **During a run:** databases run one after another. Once at least 3 earlier databases have correct times, a later database's preflight is cut off at 10x the average of their 3 fastest. With 3 or more earlier results this cutoff is never stricter than the final budget, so it can't mark a case the final rule would accept. Before that, only a hard cap applies (`--case-timeout`, default 600 s, measured as silence: the worker reports progress after every run).
-   - **After the run:** the rule is applied again over all results, each entry against the other databases. Any benchmark beyond its budget becomes ⏱, so the run order never decides the marker.
+8. The time budget per benchmark is 10x the average median of the 3 fastest *other* databases with correct answers (the average over those available if fewer than 3; no budget when no other database has a correct result). This final rule, on medians, decides the ⏱ marker.
+   - **During a run, a runaway guard:** databases run one after another. Once at least 3 earlier databases have correct times, a later database's preflight, its first (cold) run, is cut off at 30x the average of their 3 fastest preflights: the supervisor kills the worker as soon as the preflight runs past that budget and records ⏱ with "too slow: cut off at <b> s (30x the top-3 average of earlier databases)". The cutoff only stops runaway cases early; because it measures cold first runs, it is set well above the final rule. Before 3 earlier results exist, only a hard cap applies (`--case-timeout`, default 600 s, measured as silence: the worker reports progress after every run).
+   - **After the run:** the 10x rule is applied over all results, each entry against the other databases. Any benchmark beyond its budget becomes ⏱, so the run order never decides the marker.
+   - Loads are timed but not answer-checked and are exempt from this rule; a node and edge count check is planned with the next adapters.
 
 ## Datasets
 
@@ -131,6 +132,7 @@ Top level:
 - `status`: `ok` | `failed` | `timeout` | `not_supported`
 - `error`
 - `timing` `{median_ns, p99_ns, min_ns, iterations}` (null in codspeed mode)
+- `preflight_ns` (the untimed first run, wall-clocked; null when it did not complete)
 - `load_ns`
 - `answer`: `agree` | `disagree` | `unchecked`
 - `reference`: `python` | `networkx`
@@ -158,7 +160,7 @@ grafeo's README never names other graph databases unless the user decides on tha
 
 - One row per matrix category where Grafeo has at least one benchmark, in the matrix's category order.
 - "DBs" counts the databases with at least one correct result in that row.
-- "Grafeo fastest" is `k / n`: n is the number of benchmarks where Grafeo agreed, and k the number where Grafeo has the lowest median time.
+- "Grafeo fastest" is `k / n`: n is the number of benchmarks where Grafeo's answer agreed, ⏱ included (a load, which has no answer check, counts when it completed), and k the number where Grafeo has the lowest median time.
 - "Median rank" is Grafeo's median position over those benchmarks.
 - When Grafeo itself has a marker, a line under the table names the benchmark and the marker, e.g. `Grafeo: ≠ on snb_ic6`, so Grafeo's own gaps are never hidden. The legend line `⊘ not available · ✗ failing · ≠ wrong answer · ⏱ beyond 10x the top-3 average` is added only when such a line exists.
 

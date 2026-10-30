@@ -152,6 +152,15 @@ def fresh_instance(
     return db_cls(db_dir, threads), db_dir
 
 
+def prepare_environment(db_cls: type[Database]) -> str | None:
+    """Run the database's one-time environment setup (outside any clock); its error message, or None."""
+    try:
+        db_cls.prepare_environment()
+    except Exception as exc:
+        return f"preparing the environment: {message(exc)}"
+    return None
+
+
 @dataclass
 class Loaded:
     """A loaded instance, its directory and the median load time."""
@@ -322,8 +331,12 @@ def run(
             return
         datasets = cache.prepare(sel.name)
         base = cache.data_dir() / cache.dataset_key(sel.name)
+        setup_error = prepare_environment(db_cls)
         for key in needed:
-            _run_dataset(db_cls, datasets[key], groups[key], reported.get(key), threads, workdir, base, settings, emit)
+            data = datasets[key]
+            _run_dataset(
+                db_cls, data, groups[key], reported.get(key), threads, workdir, base, settings, emit, setup_error
+            )
 
 
 def _run_dataset(
@@ -336,15 +349,21 @@ def _run_dataset(
     base: Path,
     settings: _Settings,
     emit: Emit,
+    setup_error: str | None = None,
 ) -> None:
+    """Load the dataset and run its cases; with `setup_error` (from `prepare_environment`) the load fails with it."""
     if load_id is not None:
         emit({"kind": "start", "id": load_id})
-    try:
-        progress = {"kind": "progress", "id": load_id}
-        iterations = settings.selection.load_iterations
-        loaded = load(db_cls, dataset, workdir, threads, iterations, lambda: emit(progress))
-    except Exception as exc:
-        text = message(exc)
+    loaded: Loaded | None = None
+    text = setup_error
+    if text is None:
+        try:
+            progress = {"kind": "progress", "id": load_id}
+            iterations = settings.selection.load_iterations
+            loaded = load(db_cls, dataset, workdir, threads, iterations, lambda: emit(progress))
+        except Exception as exc:
+            text = message(exc)
+    if loaded is None:  # `text` holds the setup or load error
         if load_id is not None:
             emit({"kind": "entry", "id": load_id, "status": "failed", "error": text})
         for case in cases:

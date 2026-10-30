@@ -6,7 +6,7 @@ score. It covers the single-threaded results at the largest scale present.
 
 import statistics
 
-from graph_bench.report.ranking import Ranked, rank, scale_key
+from graph_bench.report.ranking import Ranked, is_load, rank, scale_key
 from graph_bench.results import Entry, Results
 from graph_bench.types import CATEGORY_NAMES, CATEGORY_ORDER, marker
 
@@ -25,6 +25,14 @@ def grafeo_label(results: Results) -> str:
 def machine_label(results: Results) -> str:
     m = results.machine
     return f"{m['cpu']}, {m['cores']} cores, {m['os']}"
+
+
+def _agreed(entry: Entry) -> bool:
+    """Whether an entry counts towards n in "Grafeo fastest k / n": its answer agreed (⏱ included).
+
+    A load has no answer check, so it counts when it completed.
+    """
+    return entry.answer == "agree" or (is_load(entry) and entry.status == "ok")
 
 
 def _median_rank(positions: list[int]) -> str:
@@ -53,9 +61,8 @@ def render_summary(results: Results, *, results_url: str = RESULTS_URL) -> str:
         dbs = {db for r in in_row for db, _ in r.order}
         positions = [p for r in in_row if (p := r.position(GRAFEO)) is not None]
         fastest = sum(1 for p in positions if p == 1)
-        rows.append(
-            f"| {CATEGORY_NAMES[category]} | {len(dbs)} | {fastest} / {len(positions)} | {_median_rank(positions)} |"
-        )
+        agreed = sum(1 for e in grafeo_entries if e.category == category and _agreed(e))
+        rows.append(f"| {CATEGORY_NAMES[category]} | {len(dbs)} | {fastest} / {agreed} | {_median_rank(positions)} |")
 
     lines = [
         "<!-- graph-bench:start -->",

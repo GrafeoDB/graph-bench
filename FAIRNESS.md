@@ -37,14 +37,16 @@ benchmark, servers included, is kept in [legacy/](legacy/README.md).
 7. **PageRank is compared at convergence** (damping 0.85), with the LDBC relative epsilon of 0.0001.
 8. **The time budget per benchmark is 10x the average median of the 3 fastest *other* databases with correct
    answers** (the average over those available if fewer than 3; no budget when no other database has a correct
-   result).
-   - **During a run:** databases run one after another. Once at least 3 earlier databases have correct times, a
-     later database's preflight is cut off at 10x the average of their 3 fastest. With 3 or more earlier
-     results this cutoff is never stricter than the final budget, so it can't mark a case the final rule would
-     accept. Before that, only a hard cap applies (`--case-timeout`, default 600 s, measured as silence: the
-     worker reports progress after every run).
-   - **After the run:** the rule is applied again over all results, each entry against the other databases.
-     Any benchmark beyond its budget becomes ⏱, so the run order never decides the marker.
+   result). This final rule, on medians, decides the ⏱ marker.
+   - **During a run, a runaway guard:** databases run one after another. Once at least 3 earlier databases have
+     correct times, a later database's preflight, its first (cold) run, is cut off at 30x the average of their
+     3 fastest preflights: the supervisor stops the worker as soon as the preflight runs past that budget, and
+     the case becomes ⏱ ("too slow: cut off at ..."). The cutoff only stops runaway cases early; because it
+     measures cold first runs, it is set well above the final rule. Before 3 earlier results exist, only a hard
+     cap applies (`--case-timeout`, default 600 s, measured as silence: the worker reports progress after every
+     run).
+   - **After the run:** the 10x rule is applied over all results, each entry against the other databases. Any
+     benchmark beyond its budget becomes ⏱, so the run order never decides the marker.
 
 ## The preflight
 
@@ -61,6 +63,8 @@ measured, while results.json and the matrix show ⏱. A ⏱ from the in-run cuto
 - **Queries:** the database call plus materializing its result into Python rows. This is identical for every
   database. graph-bench's canonicalization of the rows and the answer check run outside the clock.
 - **Loads:** timed separately, each into a fresh in-memory instance, so no load benefits from an earlier one.
+  Loads are timed but not answer-checked, and the budget rule (rule 8) does not apply to them; a node and edge
+  count check is planned with the next adapters.
 
 ## Loading
 

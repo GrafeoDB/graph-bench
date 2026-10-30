@@ -43,7 +43,10 @@ def test_bench_workflow_shape() -> None:
     assert codspeed["runs-on"] == "codspeed-macro"
     action = next(step for step in codspeed["steps"] if step.get("uses", "").startswith("CodSpeedHQ/action@"))
     assert action["with"]["mode"] == "walltime"
-    assert action["with"]["token"] == "${{ secrets.CODSPEED_TOKEN }}"
+    # CodSpeed authenticates with GitHub OIDC: the job may mint an id token, and no token secret is passed.
+    assert codspeed["permissions"]["id-token"] == "write"
+    assert codspeed["permissions"]["contents"] == "read"
+    assert "token" not in action["with"]
     assert "graph-bench codspeed --selection push" in action["with"]["run"]
     runs = _runs(codspeed)
     assert any("graph-bench setup --grafeo grafeo" in run for run in runs)

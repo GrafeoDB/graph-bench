@@ -3,8 +3,8 @@
 [![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://app.codspeed.io/GrafeoDB/graph-bench?utm_source=badge)
 
 A head-to-head comparison of embedded graph databases. Every database runs in its own process, on the same
-generated data, single-threaded, and every answer is checked against a reference before any time counts. A
-wrong answer is shown as wrong and never ranked.
+generated data, single-threaded, and every query answer is checked against a reference before any time
+counts. A wrong answer is shown as wrong and never ranked.
 
 graph-bench runs in its own CI on [CodSpeed](https://codspeed.io/) and locally with one command. Its results
 feed the [Results](#results) section below and a summary block in [Grafeo](https://github.com/GrafeoDB/grafeo)'s
@@ -140,9 +140,9 @@ and commits the block on grafeo's release branch. No automation writes to grafeo
 - `.github/workflows/bench.yml`: graph-bench's own CodSpeed project, separate from grafeo's CodSpeed benchmarks,
   which it does not replace. It builds grafeo `main` from source and runs the `push` selection on CodSpeed's
   macro runners in wall-time mode on every push to `main`, daily and on demand. The daily run also runs `full`
-  with `graph-bench bench` and opens a pull request on `bot/results` that updates the section below. The
-  CodSpeed app on the repository, codspeed-macro runners enabled for the org and a `CODSPEED_TOKEN` repository
-  secret must be in place first.
+  with `graph-bench bench` and opens a pull request on `bot/results` that updates the section below. Needs the
+  CodSpeed app on graph-bench and codspeed-macro runners enabled for the org; authentication uses GitHub OIDC
+  (no token secret).
 
 ## Results
 

@@ -1,5 +1,6 @@
 # graph-bench's own CodSpeed project. Separate from grafeo's CodSpeed benchmarks, which it does not replace.
-# Needs the CodSpeed app on graph-bench, codspeed-macro runners enabled for the org, and a CODSPEED_TOKEN repository secret.
+# Needs the CodSpeed app on graph-bench and codspeed-macro runners enabled for the org; authentication uses
+# GitHub OIDC (no token secret).
 #
 # Both jobs measure grafeo `main`, built from source (graph-bench setup --grafeo grafeo), never the PyPI release.
 #   codspeed: the push selection under CodSpeed in wall-time mode, on every push to main, daily and on demand.
@@ -23,7 +24,8 @@ env:
 jobs:
   codspeed:
     name: CodSpeed (push selection)
-    # Needs the CodSpeed app on graph-bench, codspeed-macro runners enabled for the org, and a CODSPEED_TOKEN repository secret.
+    # Needs the CodSpeed app on graph-bench and codspeed-macro runners enabled for the org; authentication uses
+    # GitHub OIDC (no token secret), hence id-token: write.
     runs-on: codspeed-macro
     permissions:
       contents: read
@@ -60,7 +62,6 @@ jobs:
         uses: CodSpeedHQ/action@v5
         with:
           mode: walltime
-          token: ${{ secrets.CODSPEED_TOKEN }}
           run: uv run --no-sync graph-bench codspeed --selection push --out out
       - uses: actions/upload-artifact@v7
         if: always()

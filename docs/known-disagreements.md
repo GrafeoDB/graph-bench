@@ -21,7 +21,8 @@ entries may fail without failing the test.
 - Cause: Grafeo engine (query planner). `explain_cypher` shows the `OPTIONAL MATCH` becoming a `LeftJoin` whose
   right side is `ShortestPath (p1 -> p2)` over `NodeScan (p1:*)` and `NodeScan (p2:*)`, with the `id` filter on
   `p2` applied after it. `p1` and `p2` are not taken from the left side, so it computes shortest paths for all
-  node pairs of the graph and filters afterwards:
+  node pairs of the graph and filters afterwards. Plan excerpt from a reduced reproduction (parameters x/y,
+  simplified RETURN):
 
   ```text
   Return (length(path) AS l)

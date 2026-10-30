@@ -44,6 +44,16 @@ class Database(ABC):
         """Environment variables the worker process needs before the driver is imported."""
         return {}
 
+    @classmethod
+    def prepare_environment(cls) -> None:
+        """One-time environment setup such as extension downloads; never loads or opens data.
+
+        The worker (and the CodSpeed session) calls it once per process, before any timed load, so its cost never
+        lands in a load time. An exception fails every load of the process, and so their cases, with its error.
+        The default does nothing.
+        """
+        return None
+
     def __init__(self, workdir: Path, threads: int | None) -> None:
         """Only store the settings: adapters create their database instance in `load()`, inside the load clock."""
         self.workdir = workdir

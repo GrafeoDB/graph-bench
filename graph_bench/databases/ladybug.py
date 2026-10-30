@@ -37,7 +37,8 @@ class LadybugDatabase(Database):
     """An in-memory `real_ladybug.Database`, loaded with `COPY FROM` CSV and queried with parameterized Cypher.
 
     Node tables are keyed by their `id` column. Each edge type is one rel table with a `FROM a TO b` pair per
-    EdgeTable. On the graphalytics dataset the ALGO extension is loaded and the graph projected as `g`.
+    EdgeTable. The ALGO extension is installed once per process (`prepare_environment`, outside the load clock);
+    on the graphalytics dataset it is loaded and the graph projected as `g`.
     """
 
     name: ClassVar[str] = "ladybug"
@@ -47,7 +48,23 @@ class LadybugDatabase(Database):
 
     db: Any = None
     conn: Any = None
-    algo_error: str | None = "the ALGO extension is loaded only for the graphalytics dataset"
+    algo_loaded: bool = False
+
+    @classmethod
+    def prepare_environment(cls) -> None:
+        """Install the ALGO extension (INSTALL may download it) on a throwaway in-memory database.
+
+        Installing is a one-time download into LadybugDB's extension directory, so it stays out of the load clock;
+        each load still runs `LOAD EXTENSION ALGO`. A failure raises: the loads of this process fail (✗) with it.
+        https://docs.ladybugdb.com/get-started/graph-algorithms
+        """
+        db = lb.Database()
+        conn = lb.Connection(db)
+        try:
+            conn.execute("INSTALL ALGO").close()
+        finally:
+            conn.close()
+            db.close()
 
     @property
     def _num_threads(self) -> int:
@@ -89,18 +106,13 @@ class LadybugDatabase(Database):
             self._load_algo()
 
     def _load_algo(self) -> None:
-        """Load the ALGO extension (INSTALL may download it) and project `g`; a failure makes algorithms unsupported.
+        """Load the ALGO extension (installed by `prepare_environment`) and project `g`; a failure fails the load.
 
         https://docs.ladybugdb.com/get-started/graph-algorithms
         """
-        try:
-            self._run("INSTALL ALGO")
-            self._run("LOAD EXTENSION ALGO")
-        except RuntimeError as exc:
-            self.algo_error = f"ALGO extension unavailable: {exc}"
-            return
+        self._run("LOAD EXTENSION ALGO")
         self._run("CALL project_graph('g', ['V'], ['E'])")
-        self.algo_error = None
+        self.algo_loaded = True
 
     def query(self, text: str, params: Mapping[str, Any]) -> list[tuple[Any, ...]]:
         result = self.conn.execute(text, parameters=dict(params))
@@ -112,8 +124,8 @@ class LadybugDatabase(Database):
     def algorithm(self, name: str, params: Mapping[str, Any]) -> dict[Any, Any]:
         if name not in ("bfs", "wcc", "pr"):
             raise NotSupported(name)
-        if self.algo_error is not None and name != "bfs":
-            raise NotSupported(self.algo_error)
+        if not self.algo_loaded and name != "bfs":
+            raise RuntimeError("the ALGO extension is loaded only for the graphalytics dataset")
         if name == "pr":
             return dict(self.query(PAGE_RANK, {}))
         if name == "wcc":

@@ -18,7 +18,7 @@ class Recorder:
 
     def __call__(self, cmd: list[str]) -> str:
         self.commands.append(cmd)
-        if "import grafeo" in " ".join(cmd):
+        if grafeo_setup.VERSION_SCRIPT in cmd:
             return "0.6.0\n"
         if cmd[:1] == ["git"]:
             return SHA + "\n"
@@ -45,7 +45,7 @@ def test_install_wheel_commands(tmp_path: Path) -> None:
         "--no-deps",
         str(wheel),
     ]
-    assert run.commands[1][:3] == [sys.executable, "-c", "import grafeo; print(grafeo.__version__)"]
+    assert run.commands[1][:3] == [sys.executable, "-c", grafeo_setup.VERSION_SCRIPT]
     assert info["version"] == "0.6.0"
     assert info["source"] == str(wheel)
     assert len(info["sha"]) == 64

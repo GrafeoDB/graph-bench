@@ -1,10 +1,13 @@
 """Fake databases for the runner tests. They answer from the reference files, so they agree.
 
-Behaviour flags, a comma list in `GRAPH_BENCH_FAKE` (FakeDatabase) or `GRAPH_BENCH_FAKE2` (FakeDatabase2):
+Behaviour flags, a comma list in `GRAPH_BENCH_FAKE` (FakeDatabase), or `GRAPH_BENCH_FAKE2` to `GRAPH_BENCH_FAKE4`
+(FakeDatabase2 to FakeDatabase4):
 `crash:<item_id>` exits the process with code 3, `crash_soft:<item_id>` raises RuntimeError, `hang:<item_id>`
 sleeps an hour, `slow:<item_id>` sleeps 0.2 s per call, `wrong:<item_id>` returns a perturbed answer and
 `unsupported:<item_id>` raises NotSupported.
-`crash:load_<dataset>` and `hang:load_<dataset>` do the same while loading that dataset.
+`crash:load_<dataset>` and `hang:load_<dataset>` do the same while loading that dataset, and
+`crash_soft:environment` makes `prepare_environment` raise.
+With `GRAPH_BENCH_FAKE_TRACE` set to a file, `prepare_environment` and `load` append "environment" and "load" to it.
 """
 
 import os
@@ -26,12 +29,25 @@ class FakeDatabase(Database):
 
     dataset: Dataset | None = None
 
+    @classmethod
+    def prepare_environment(cls) -> None:
+        cls._trace("environment")
+        cls._misbehave(cls._flags("environment"))
+
     def info(self) -> DatabaseInfo:
         return DatabaseInfo(self.name, "1.0", "in-process", False, "fake, no threads", "in-memory")
 
     def load(self, dataset: Dataset) -> None:
+        self._trace("load")
         self._misbehave(self._flags(f"load_{dataset.name}"))
         self.dataset = dataset
+
+    @staticmethod
+    def _trace(call: str) -> None:
+        path = os.environ.get("GRAPH_BENCH_FAKE_TRACE")
+        if path:
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(call + "\n")
 
     @staticmethod
     def _misbehave(flags: set[str]) -> None:
@@ -42,9 +58,10 @@ class FakeDatabase(Database):
         if "hang" in flags:
             time.sleep(3600)
 
-    def _flags(self, item_id: str) -> set[str]:
+    @classmethod
+    def _flags(cls, item_id: str) -> set[str]:
         flags = set()
-        for part in os.environ.get(self.env_var, "").split(","):
+        for part in os.environ.get(cls.env_var, "").split(","):
             flag, _, target = part.strip().partition(":")
             if target == item_id:
                 flags.add(flag)
@@ -93,3 +110,15 @@ class FakeRdfDatabase(FakeDatabase):
     name: ClassVar[str] = "fake_rdf"
     display_name: ClassVar[str] = "Fake RDF"
     models: ClassVar[frozenset[Model]] = frozenset({"rdf"})
+
+
+class FakeDatabase3(FakeDatabase):
+    name: ClassVar[str] = "fake3"
+    display_name: ClassVar[str] = "Fake 3"
+    env_var: ClassVar[str] = "GRAPH_BENCH_FAKE3"
+
+
+class FakeDatabase4(FakeDatabase):
+    name: ClassVar[str] = "fake4"
+    display_name: ClassVar[str] = "Fake 4"
+    env_var: ClassVar[str] = "GRAPH_BENCH_FAKE4"

@@ -1,5 +1,6 @@
 import json
 import re
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ from graph_bench.types import Timing
 
 EXTRA = (
     "fake=tests.fakes:FakeDatabase,fake2=tests.fakes:FakeDatabase2,"
+    "fake3=tests.fakes:FakeDatabase3,fake4=tests.fakes:FakeDatabase4,"
     "ghost=tests.no_such_module:Ghost,ghost_rdf=tests.no_such_module:Ghost"
 )
 
@@ -113,12 +115,25 @@ def test_supervisor_metadata(two_dbs: tuple[Results, list[list[str]], Path]) -> 
     assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", results.started_at)
 
 
-def test_grafeo_source_from_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def _grafeo_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, installed: str) -> dict[str, str]:
+    """Write `.graph-bench/grafeo.json` for version 0.6.1.dev0 in the cwd and fake the installed grafeo version."""
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(supervisor.importlib.metadata, "version", lambda name: installed)
     (tmp_path / ".graph-bench").mkdir()
     doc = {"version": "0.6.1.dev0", "source": "git", "sha": "abc123"}
     (tmp_path / ".graph-bench" / "grafeo.json").write_text(json.dumps(doc), encoding="utf-8")
+    return doc
+
+
+def test_grafeo_source_from_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    doc = _grafeo_file(tmp_path, monkeypatch, installed="0.6.1.dev0")
     assert supervisor.grafeo_source() == doc
+
+
+def test_grafeo_source_ignores_a_stale_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A later `uv sync` replaced the recorded build: the installed version wins, from PyPI."""
+    _grafeo_file(tmp_path, monkeypatch, installed="0.6.0")
+    assert supervisor.grafeo_source() == {"version": "0.6.0", "source": "pypi", "sha": None}
 
 
 def test_supervisor_marks_wrong_answer(two_dbs: tuple[Results, list[list[str]], Path]) -> None:
@@ -168,8 +183,45 @@ def test_budgets_need_three_earlier_databases() -> None:
         _entry("e", 0.5, answer="disagree"),
         _entry("f", 0.5, status="failed"),
     ]
-    assert supervisor._budgets(four, "fake", meta) == {target: pytest.approx(10 * 2e6 / 1e9)}
-    assert supervisor._budgets([*four, _entry("fake", 0.1)], "fake", meta) == {target: pytest.approx(0.02)}
+    # 30x (a runaway guard on cold first runs), not the final rule's 10x
+    assert supervisor._budgets(four, "fake", meta) == {target: pytest.approx(30 * 2e6 / 1e9)}
+    assert supervisor._budgets([*four, _entry("fake", 0.1)], "fake", meta) == {target: pytest.approx(0.06)}
+
+
+def test_in_run_cutoff_kills_a_slow_preflight(bench_env: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """3 fast earlier databases give a 4th an in-run budget; its slow preflight is killed at that budget.
+
+    `slow:snb_is2` sleeps 0.2 s per binding (2 s in all), far beyond 30x the fakes' few-ms preflights, so only
+    the supervisor's cutoff can produce this error; `case_timeout_s` (60 s) never comes into play.
+    """
+    bench_env.setenv("GRAPH_BENCH_FAKE3", "")
+    bench_env.setenv("GRAPH_BENCH_FAKE4", "slow:snb_is2")
+    launches: list[list[str]] = []
+    launch = supervisor._launch
+
+    def recording(argv: list[str], *args: Any) -> Any:
+        launches.append(list(argv))
+        return launch(argv, *args)
+
+    bench_env.setattr(supervisor, "_launch", recording)
+    dbs = ["fake", "fake2", "fake3", "fake4"]
+    started = time.monotonic()
+    results = run_bench("push", dbs, tmp_path / "out", workdir=tmp_path / "work", case_timeout_s=60)
+    assert time.monotonic() - started < 60
+
+    entry = _by_id(results)[_id("snb_is2", "fake4")]
+    assert entry.status == "timeout", entry
+    pattern = r"too slow: cut off at (\S+) s \(30x the top-3 average of earlier databases\)"
+    match = re.fullmatch(pattern, entry.error or "")
+    assert match, entry.error
+    assert float(match.group(1)) < 2.0
+    assert entry.timing is None
+    fake4 = [argv for argv in launches if argv[argv.index("--db") + 1] == "fake4"]
+    assert len(fake4) == 2  # killed during the preflight, then relaunched for the rest
+    assert any(arg.startswith(_id("snb_is2", "fake4") + "=") for arg in fake4[0])  # its in-run budget
+    assert _id("snb_is2", "fake4") in fake4[1][fake4[1].index("--skip") + 1 :]
+    rest = [e for e in results.entries if e.database == "fake4" and e.id != entry.id]
+    assert all(e.status == "ok" for e in rest), [e for e in rest if e.status != "ok"]
 
 
 def test_supervisor_resumes_after_crash(bench_env: pytest.MonkeyPatch, tmp_path: Path) -> None:

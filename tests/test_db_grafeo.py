@@ -27,7 +27,10 @@ def test_grafeo_push_agrees(
     assert entries
     failing = []
     for entry in entries:
-        if entry.benchmark in known or entry.status == "not_supported":
+        # ⊘ passes only for the worker's model gate ("model <model> not supported"): the database lacks the data
+        # model. Any other ⊘ (a missing capability) must be allowlisted in docs/known-disagreements.md.
+        lacks_model = entry.status == "not_supported" and (entry.error or "").startswith("model ")
+        if entry.benchmark in known or lacks_model:
             continue
         good = entry.status == "ok" and (entry.category == "load" or entry.answer == "agree")
         if not good:

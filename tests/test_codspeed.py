@@ -176,6 +176,30 @@ def test_codspeed_marker_outcomes(push_data_dir: Path, tmp_path: Path) -> None:
     assert all(e["timing"] is None for e in entries.values())
 
 
+def test_codspeed_prepares_environment_once_before_loads(push_data_dir: Path, tmp_path: Path) -> None:
+    trace = tmp_path / "trace.txt"
+    env = {**_env(push_data_dir), "GRAPH_BENCH_FAKE_TRACE": str(trace)}
+    proc = _pytest(["--db", "fake", "--selection", "push", "--gb-out", str(tmp_path / "gb.jsonl")], env)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    loads = catalog.selection("push").load_iterations * len(catalog.load_ids("push", ["fake"]))
+    assert trace.read_text(encoding="utf-8").split() == ["environment"] + ["load"] * loads
+
+
+def test_codspeed_environment_failure_fails_the_loads(push_data_dir: Path, tmp_path: Path) -> None:
+    out = tmp_path / "gb.jsonl"
+    args = ["--db", "fake", "--selection", "push", "--gb-out", str(out)]
+    args += ["-k", "test_load_snb or test_snb_is1 or test_graphalytics_bfs"]
+    proc = _pytest(args, _env(push_data_dir, "crash_soft:environment"))
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    lines = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
+    entries = {line["id"]: line for line in lines if line["kind"] == "entry"}
+    error = "preparing the environment: RuntimeError: soft crash"
+    load_id = catalog.load_id("snb", "fake", "small", 1)
+    assert (entries[load_id]["status"], entries[load_id]["error"]) == ("failed", error)
+    for item in ("snb_is1", "graphalytics_bfs"):
+        assert (entries[_id(item)]["status"], entries[_id(item)]["error"]) == ("failed", f"load failed: {error}")
+
+
 def test_codspeed_rerun_remeasures_passed_cases(
     push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -212,6 +236,39 @@ def test_codspeed_rerun_remeasures_passed_cases(
     assert runs.count(catalog.load_id("snb", "fake", "small", 1)) == 2
     assert runs.count(_id("snb_is3")) == 1
     assert runs.count(_id("snb_is5")) == 1
+
+
+def test_codspeed_rerun_when_the_last_case_hangs(
+    push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The last case hangs, so nothing is left unrecorded; the passed cases still get a relaunch to be measured."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GRAPH_BENCH_DATA_DIR", str(push_data_dir))
+    monkeypatch.setenv("GRAPH_BENCH_FAKE", "hang:snb_ic13")
+    launches: list[tuple[list[str], dict[str, str]]] = []
+    monkeypatch.setattr(supervisor, "_launch", _without_codspeed(launches))
+    out = tmp_path / "out"
+    results = supervisor.run_codspeed("push", ["fake"], out, workdir=tmp_path / "work", case_timeout_s=3)
+
+    lines = [json.loads(line) for line in (out / "raw" / "fake-1" / "pytest.jsonl").read_text("utf-8").splitlines()]
+    hung = _id("snb_ic13")
+    second = next(i for i, line in enumerate(lines) if i > 0 and line["kind"] == "database")
+    first_starts = [line["id"] for line in lines[:second] if line["kind"] == "start"]
+    assert first_starts[-1] == hung  # the last case of the first process
+    assert set(first_starts) == _expected_ids("fake")
+
+    entries: dict[str, Entry] = {e.id: e for e in results.entries}
+    assert set(entries) == _expected_ids("fake")
+    assert entries.pop(hung).status == "timeout"
+    assert all(e.status == "ok" for e in entries.values()), [e for e in entries.values() if e.status != "ok"]
+
+    assert len(launches) == 2
+    rerun = launches[1][0]
+    deselected = {rerun[i + 1] for i, a in enumerate(rerun) if a == "--deselect"}
+    assert deselected == {hung}  # the passed cases are not deselected: they run again
+    runs = [line["id"] for line in lines if line["kind"] == "entry"]
+    assert runs.count(_id("snb_is1")) == 2
+    assert runs.count(hung) == 0
 
 
 def test_codspeed_rerun_retires_a_passed_case_that_hangs(tmp_path: Path) -> None:
