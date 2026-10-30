@@ -21,6 +21,7 @@ __all__ = [
     "load_id",
     "load_ids",
     "load_reference",
+    "param_id",
     "reference_path",
     "selection",
 ]
@@ -79,7 +80,8 @@ def selection(name: str) -> Selection:
         raise KeyError(f"unknown selection {name!r} (known: {', '.join(SELECTIONS)})") from None
 
 
-def _params(db: str, scale: str, threads: int | None) -> str:
+def param_id(db: str, scale: str, threads: int | None) -> str:
+    """The pytest parameter id of a benchmark: `<db>-<scale>`, with `-allcores` for the all-cores setting."""
     return f"{db}-{scale}" + ("-allcores" if threads is None else "")
 
 
@@ -98,7 +100,7 @@ class Case:
 
     @property
     def bench_id(self) -> str:
-        params = _params(self.db, self.scale, self.threads)
+        params = param_id(self.db, self.scale, self.threads)
         return f"benches/test_{self.item.category}.py::{self.test_name}[{params}]"
 
 
@@ -147,7 +149,7 @@ def load_ids(selection_name: str, dbs: Sequence[str]) -> list[str]:
 
 def load_id(dataset: str, db: str, scale: str, threads: int | None) -> str:
     """The load benchmark id of one dataset: `benches/test_load.py::test_load_<dataset>[<params>]`."""
-    return f"benches/test_load.py::test_load_{dataset}[{_params(db, scale, threads)}]"
+    return f"benches/test_load.py::test_load_{dataset}[{param_id(db, scale, threads)}]"
 
 
 def reference_path(item: Query | Algorithm, scale: str, *, base: Path) -> Path:

@@ -1,8 +1,9 @@
 """Fake databases for the runner tests. They answer from the reference files, so they agree.
 
 Behaviour flags, a comma list in `GRAPH_BENCH_FAKE` (FakeDatabase) or `GRAPH_BENCH_FAKE2` (FakeDatabase2):
-`crash:<item_id>` exits the process with code 3, `hang:<item_id>` sleeps an hour, `slow:<item_id>` sleeps
-0.2 s per call, `wrong:<item_id>` returns a perturbed answer and `unsupported:<item_id>` raises NotSupported.
+`crash:<item_id>` exits the process with code 3, `crash_soft:<item_id>` raises RuntimeError, `hang:<item_id>`
+sleeps an hour, `slow:<item_id>` sleeps 0.2 s per call, `wrong:<item_id>` returns a perturbed answer and
+`unsupported:<item_id>` raises NotSupported.
 `crash:load_<dataset>` and `hang:load_<dataset>` do the same while loading that dataset.
 """
 
@@ -36,6 +37,8 @@ class FakeDatabase(Database):
     def _misbehave(flags: set[str]) -> None:
         if "crash" in flags:
             os._exit(3)
+        if "crash_soft" in flags:
+            raise RuntimeError("soft crash")
         if "hang" in flags:
             time.sleep(3600)
 

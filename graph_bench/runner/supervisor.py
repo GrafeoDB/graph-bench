@@ -1,4 +1,8 @@
-"""The supervisor: runs one worker process per database and thread setting, in sequence, and writes results.json.
+"""The supervisor: runs one process per database and thread setting, in sequence, and writes results.json.
+
+The process is a `Runner`: the worker (`run_bench`, mode "bench") or `pytest benches --codspeed` (`run_codspeed`,
+mode "codspeed"). Both write the same JSON lines (see `graph_bench.runner.worker`) to their `--out` / `--gb-out`
+file, so the supervision below is the same for both; "worker" below means either.
 
 For each database it first probes, in a short subprocess, whether its driver imports (so this process never
 imports a driver) and which environment its worker needs. It then starts the worker, reads the worker's JSON
@@ -31,11 +35,11 @@ import statistics
 import subprocess
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import IO, Any
+from typing import IO, Any, Literal
 
 import psutil
 
@@ -139,6 +143,11 @@ def _expected(sel: Selection, db: str, threads: int | None) -> dict[str, _Meta]:
                     )
                     meta.setdefault(load_id, load)
     return meta
+
+
+def _passed(entry: Entry) -> bool:
+    """A result CodSpeed measures: ok/agree, or ok for a load (which has no answer check)."""
+    return entry.status == "ok" and (entry.answer == "agree" or entry.category == "load")
 
 
 def _top3_mean(values: Sequence[float]) -> float:
@@ -271,8 +280,99 @@ def _probe(db: str, timeout_s: float) -> dict[str, Any]:
         return {"error": f"probe exited with code {proc.returncode}" + (f": {tail[-1]}" if tail else "")}
 
 
-def _launch(argv: list[str], env: dict[str, str], log: IO[bytes]) -> "subprocess.Popen[bytes]":
-    return subprocess.Popen(argv, env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=log)
+def _launch(argv: list[str], env: dict[str, str], log: IO[bytes], cwd: Path | None = None) -> "subprocess.Popen[bytes]":
+    return subprocess.Popen(argv, env=env, cwd=cwd, stdin=subprocess.DEVNULL, stdout=log, stderr=log)
+
+
+@dataclass(frozen=True)
+class LaunchRequest:
+    """What one worker process is asked to do: the ids to skip and the in-run budgets of the rest."""
+
+    db: str
+    selection: str
+    threads: int | None
+    workdir: Path
+    out: Path
+    case_timeout_s: float
+    skip: list[str]
+    budgets: dict[str, float]
+
+
+def worker_argv(r: LaunchRequest) -> list[str]:
+    """`python -m graph_bench.runner.worker ...`; `--skip` and `--budget` take several values each."""
+    argv = [sys.executable, "-m", "graph_bench.runner.worker", "--db", r.db, "--selection", r.selection]
+    argv += ["--threads", _tag(r.threads), "--workdir", str(r.workdir), "--out", str(r.out)]
+    argv += ["--case-timeout", repr(r.case_timeout_s)]
+    if r.skip:
+        argv += ["--skip", *r.skip]
+    if r.budgets:
+        argv += ["--budget", *(f"{i}={s!r}" for i, s in r.budgets.items())]
+    return argv
+
+
+def pytest_argv(r: LaunchRequest) -> list[str]:
+    """`python -m pytest benches --codspeed ...`, run from the repository root; done ids are deselected.
+
+    `-o addopts=` drops the test suite's coverage options from pyproject.toml.
+    """
+    argv = [sys.executable, "-m", "pytest", "benches", "--codspeed", "-o", "addopts=", "-p", "no:cacheprovider"]
+    argv += ["-v", "-rfEs", "--db", r.db, "--selection", r.selection, "--threads", _tag(r.threads)]
+    argv += ["--workdir", str(r.workdir), "--gb-out", str(r.out), "--case-timeout", repr(r.case_timeout_s)]
+    for bench_id in r.skip:
+        argv += ["--deselect", bench_id]
+    for bench_id, seconds in r.budgets.items():
+        argv += ["--gb-budget", f"{bench_id}={seconds!r}"]
+    return argv
+
+
+@dataclass(frozen=True)
+class Runner:
+    """How to start the process for one database: its argv, working directory and extra environment.
+
+    `name` names its files under `raw/<db>-<threads>/` and its exit messages; with `echo` its output is copied
+    to this process's stdout as it arrives (for the CI log). With `rerun_passed`, a relaunch after a kill or crash
+    runs the passed ids again instead of skipping them (see `_Run._skip`).
+    """
+
+    name: str
+    argv: Callable[[LaunchRequest], list[str]]
+    mode: Literal["bench", "codspeed"]
+    cwd: Path | None = None
+    env: tuple[tuple[str, str], ...] = ()
+    echo: bool = False
+    rerun_passed: bool = False
+
+
+WORKER = Runner("worker", worker_argv, "bench")
+PYTEST = Runner(
+    "pytest", pytest_argv, "codspeed", cwd=_ROOT, env=(("PYTHONIOENCODING", "utf-8"),), echo=True, rerun_passed=True
+)
+
+
+class _Echo:
+    """Copies what a process appends to its log file to stdout."""
+
+    def __init__(self, path: Path, enabled: bool) -> None:
+        self.path = path
+        self.enabled = enabled
+        self.offset = path.stat().st_size if path.exists() else 0
+
+    def pump(self) -> None:
+        if not self.enabled or not self.path.exists():
+            return
+        with self.path.open("rb") as fh:
+            fh.seek(self.offset)
+            data = fh.read()
+        if not data:
+            return
+        self.offset += len(data)
+        buffer = getattr(sys.stdout, "buffer", None)
+        if buffer is None:
+            sys.stdout.write(data.decode("utf-8", errors="replace"))
+            return
+        sys.stdout.flush()
+        buffer.write(data)
+        buffer.flush()
 
 
 @dataclass
@@ -292,7 +392,9 @@ class _Run:
     workdir: Path
     case_timeout_s: float
     results: Results
+    runner: Runner = WORKER
     recorded: dict[str, Entry] = field(default_factory=dict)
+    retired: set[str] = field(default_factory=set)
 
     def record(self, entry: Entry) -> None:
         if entry.id not in self.recorded:
@@ -316,43 +418,61 @@ class _Run:
                 self.record(m.entry(bench_id, status="not_supported", error=f"model {m.model} not supported"))
 
     def _worker(self, db: str, threads: int | None, meta: dict[str, _Meta], extra_env: dict[str, str]) -> None:
+        name = self.runner.name
         raw = self.out_dir / "raw" / f"{db}-{_tag(threads)}"
         raw.mkdir(parents=True, exist_ok=True)
-        out = raw / "worker.jsonl"
+        out = raw / f"{name}.jsonl"
         workdir = self.workdir / f"{db}-{_tag(threads)}"
         budgets = _budgets(self.results.entries, db, meta)
-        env = {**os.environ, **extra_env}
+        env = {**os.environ, **dict(self.runner.env), **extra_env}
         try:
-            while remaining := [i for i in meta if i not in self.recorded]:
-                argv = [sys.executable, "-m", "graph_bench.runner.worker", "--db", db, "--selection", self.sel.name]
-                argv += ["--threads", _tag(threads), "--workdir", str(workdir), "--out", str(out)]
-                argv += ["--case-timeout", repr(self.case_timeout_s)]
-                skip = [i for i in meta if i in self.recorded]
-                if skip:
-                    argv += ["--skip", *skip]
-                todo = [f"{i}={budgets[i]!r}" for i in remaining if i in budgets]
-                if todo:
-                    argv += ["--budget", *todo]
-                attempt = self._attempt(argv, env, out, raw / "worker.log", db, meta)
+            while [i for i in meta if i not in self.recorded]:
+                skip = self._skip(meta)
+                request = LaunchRequest(
+                    db=db,
+                    selection=self.sel.name,
+                    threads=threads,
+                    workdir=workdir,
+                    out=out,
+                    case_timeout_s=self.case_timeout_s,
+                    skip=skip,
+                    budgets={i: budgets[i] for i in meta if i in budgets and i not in skip},
+                )
+                attempt = self._attempt(self.runner.argv(request), env, out, raw / f"{name}.log", db, meta)
                 if not self._settle(attempt, meta):
                     break
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
+
+    def _skip(self, meta: dict[str, _Meta]) -> list[str]:
+        """The ids a (re)launch must not run: every recorded id, or with `rerun_passed` only the marked ones.
+
+        pytest-codspeed writes its measurements when the session ends, so a killed pytest loses all of them;
+        the relaunch runs the passed cases (ok/agree, or ok for a load) again so CodSpeed measures them. Their
+        first entry stays (`record` keeps one per id). An id that was running when a process was killed or
+        crashed is retired: never run again, so every relaunch still makes progress.
+        """
+        if not self.runner.rerun_passed:
+            return [i for i in meta if i in self.recorded]
+        return [i for i in meta if i in self.retired or (i in self.recorded and not _passed(self.recorded[i]))]
 
     def _settle(self, attempt: _Attempt, meta: dict[str, _Meta]) -> bool:
         """Record what a finished attempt left open; whether to start another worker."""
         if attempt.hung:
             status, error = "timeout", f"no output for {attempt.silence_s:g} s"
         elif attempt.code:
-            status, error = "failed", f"worker exited with code {attempt.code}"
+            status, error = "failed", f"{self.runner.name} exited with code {attempt.code}"
         else:
-            status, error = "failed", "worker exited without a result"
+            status, error = "failed", f"{self.runner.name} exited without a result"
         pending = attempt.pending
         if pending is None or (not attempt.hung and not attempt.code):
             for bench_id, m in meta.items():
                 if bench_id not in self.recorded:
                     self.record(m.entry(bench_id, status=status, error=error))
             return False
+        self.retired.add(pending)
+        if pending in self.recorded:  # a passed id run again: keep its first verdict
+            return True
         failed = meta[pending]
         self.record(failed.entry(pending, status=status, error=error))
         if failed.load:
@@ -373,14 +493,16 @@ class _Run:
                     fh.write(b"\n")
         offset = out.stat().st_size if out.exists() else 0
         attempt = _Attempt()
+        echo = _Echo(log_path, self.runner.echo)
         with log_path.open("ab") as log:
-            proc = _launch(argv, env, log)
+            proc = _launch(argv, env, log, self.runner.cwd)
             try:
-                return self._follow(proc, out, offset, attempt, db, meta)
+                return self._follow(proc, out, offset, attempt, db, meta, echo)
             finally:
                 if proc.poll() is None:  # a harness error or Ctrl+C: leave no worker appending to `out`
                     proc.kill()
                     proc.wait()
+                echo.pump()
 
     def _follow(
         self,
@@ -390,6 +512,7 @@ class _Run:
         attempt: _Attempt,
         db: str,
         meta: dict[str, _Meta],
+        echo: _Echo,
     ) -> _Attempt:
         """Read the worker's new lines until it exits or stays silent too long."""
         started = False
@@ -397,6 +520,7 @@ class _Run:
         last = time.monotonic()
         while True:
             code = proc.poll()
+            echo.pump()
             chunk = b""
             if out.exists():
                 with out.open("rb") as fh:
@@ -456,6 +580,29 @@ def run_bench(
     Later databases get a preflight budget per case from the earlier ones; at the end `apply_budget_rule`
     marks entries far slower than the top 3. Worker lines, logs and answers go to `out_dir/raw/<db>-<threads>/`.
     """
+    return _run_all(selection, dbs, out_dir, workdir, case_timeout_s, WORKER)
+
+
+def run_codspeed(
+    selection: str,
+    dbs: Sequence[str],
+    out_dir: Path,
+    *,
+    workdir: Path,
+    case_timeout_s: float = DEFAULT_CASE_TIMEOUT_S,
+) -> Results:
+    """As `run_bench`, with one `pytest benches --codspeed` process per database and thread setting.
+
+    CodSpeed measures the benchmarks; results.json gets mode "codspeed": answers and `preflight_ns`, no
+    timings. The environment, CODSPEED_PROFILE_FOLDER included, passes to pytest unchanged. Pytest's exit code
+    does not matter: a failed or skipped benchmark is already an entry.
+    """
+    return _run_all(selection, dbs, out_dir, workdir, case_timeout_s, PYTEST)
+
+
+def _run_all(
+    selection: str, dbs: Sequence[str], out_dir: Path, workdir: Path, case_timeout_s: float, runner: Runner
+) -> Results:
     sel = catalog.selection(selection)
     catalog.cases(selection, dbs)  # unknown names fail here, before anything runs
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -466,11 +613,11 @@ def run_bench(
         grafeo=grafeo_source(),
         machine=machine(),
         selection=selection,
-        mode="bench",
+        mode=runner.mode,
         started_at=started_at,
         databases={},
     )
-    run = _Run(sel, out_dir, workdir, case_timeout_s, results)
+    run = _Run(sel, out_dir, workdir, case_timeout_s, results, runner)
     for db in dbs:
         run.database(db)
     results.entries.sort(key=lambda e: e.id)
@@ -479,4 +626,18 @@ def run_bench(
     return results
 
 
-__all__ = ["RESULTS_FILE", "apply_budget_rule", "grafeo_source", "graph_bench_commit", "machine", "run_bench"]
+__all__ = [
+    "PYTEST",
+    "RESULTS_FILE",
+    "WORKER",
+    "LaunchRequest",
+    "Runner",
+    "apply_budget_rule",
+    "grafeo_source",
+    "graph_bench_commit",
+    "machine",
+    "pytest_argv",
+    "run_bench",
+    "run_codspeed",
+    "worker_argv",
+]

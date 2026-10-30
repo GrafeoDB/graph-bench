@@ -68,6 +68,8 @@ CodSpeed records a benchmark as either measured or skipped. When a benchmark tha
 | ≠ | wrong answer: fails the answer check | `ok` / `disagree` | failed, reason `wrong answer: ...` | Skipped ⏩ if measured before, else absent |
 | ⏱ | too slow: did not finish within 10x the average of the top 3 | `timeout` | failed, reason `too slow: ...` | Skipped ⏩ if measured before, else absent |
 
+One exception: a ⏱ that only the final rule assigns (applied after every database has run, see fairness rule 8) comes after CodSpeed has already measured the case. CodSpeed then shows that case as measured, while results.json and the matrix show ⏱. A ⏱ from the in-run cutoff is never measured.
+
 Each benchmark first runs once, untimed: the **preflight**. The answer check and the time budget are applied there, and only a benchmark that passes the preflight is timed, so a wrong or too-slow result never reaches CodSpeed as a speed. The preflight also counts as the first warm-up iteration.
 
 ## Fairness rules

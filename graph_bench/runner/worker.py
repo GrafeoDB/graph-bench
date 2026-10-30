@@ -68,7 +68,7 @@ def canonical_answers(item: Query | Algorithm, raw: list[Any]) -> list[Any]:
     return answers
 
 
-def _message(exc: BaseException) -> str:
+def message(exc: BaseException) -> str:
     text = str(exc)
     if isinstance(exc, NotSupported):
         return text or "not supported"
@@ -107,16 +107,16 @@ def preflight(case: Case, db: Database, reference_file: Path, *, budget_s: float
         raw = result.run()
         result.preflight_ns = time.perf_counter_ns() - start
     except NotSupported as exc:
-        result.status, result.error = "not_supported", _message(exc)
+        result.status, result.error = "not_supported", message(exc)
         return result
     except Exception as exc:
-        result.status, result.error = "failed", _message(exc)
+        result.status, result.error = "failed", message(exc)
         return result
     try:
         result.answers = canonical_answers(case.item, raw)
         result.answer, result.detail = check_case(case, result.answers, reference_file)
     except Exception as exc:
-        result.status, result.error = "failed", f"checking the answer: {_message(exc)}"
+        result.status, result.error = "failed", f"checking the answer: {message(exc)}"
         return result
     seconds = result.preflight_ns / 1e9
     if seconds > budget_s:
@@ -129,7 +129,7 @@ def answers_path(out: Path, bench_id: str) -> Path:
     return out.parent / out.stem / "answers" / (re.sub(r"[^A-Za-z0-9._-]+", "_", bench_id) + ".json")
 
 
-def _emitter(fh: IO[str]) -> Emit:
+def emitter(fh: IO[str]) -> Emit:
     def emit(obj: dict[str, Any]) -> None:
         fh.write(json.dumps(obj, ensure_ascii=False) + "\n")
         fh.flush()
@@ -137,26 +137,38 @@ def _emitter(fh: IO[str]) -> Emit:
     return emit
 
 
-def _remove(path: Path | None) -> None:
+def remove(path: Path | None) -> None:
     if path is not None:
         shutil.rmtree(path, ignore_errors=True)
 
 
+def fresh_instance(
+    db_cls: type[Database], dataset: Dataset, workdir: Path, threads: int | None, i: int
+) -> tuple[Database, Path]:
+    """A new instance in an empty directory `workdir/<dataset>-<scale>-<i>`, for the i-th load of a dataset."""
+    db_dir = workdir / f"{dataset.name}-{dataset.scale}-{i}"
+    remove(db_dir)
+    db_dir.mkdir(parents=True)
+    return db_cls(db_dir, threads), db_dir
+
+
 @dataclass
-class _Loaded:
+class Loaded:
+    """A loaded instance, its directory and the median load time."""
+
     db: Database
     workdir: Path
     load_ns: int
 
 
-def _load(
+def load(
     db_cls: type[Database],
     dataset: Dataset,
     workdir: Path,
     threads: int | None,
     iterations: int,
     progress: Callable[[], None] = lambda: None,
-) -> _Loaded:
+) -> Loaded:
     """Load `iterations` times, each into a fresh instance in a fresh directory; keep the last one.
 
     `progress` is called after each load, outside its clock.
@@ -166,26 +178,36 @@ def _load(
     for i in range(iterations):
         if previous is not None:
             previous[0].close()
-            _remove(previous[1])
-        db_dir = workdir / f"{dataset.name}-{dataset.scale}-{i}"
-        _remove(db_dir)
-        db_dir.mkdir(parents=True)
-        db = db_cls(db_dir, threads)
+            remove(previous[1])
+        db, db_dir = fresh_instance(db_cls, dataset, workdir, threads, i)
         previous = (db, db_dir)
         start = time.perf_counter_ns()
         try:
             db.load(dataset)
         except BaseException:
             db.close()
-            _remove(db_dir)
+            remove(db_dir)
             raise
         times.append(time.perf_counter_ns() - start)
         progress()
     assert previous is not None
-    return _Loaded(previous[0], previous[1], int(statistics.median(times)))
+    return Loaded(previous[0], previous[1], int(statistics.median(times)))
 
 
-def _case_entry(case: Case, **fields: Any) -> dict[str, Any]:
+def database_line(db_cls: type[Database], workdir: Path, threads: int | None) -> dict[str, Any]:
+    """The `database` line: the info of a probe instance created (and removed) in `workdir/info`."""
+    probe_dir = workdir / "info"
+    probe_dir.mkdir(parents=True, exist_ok=True)
+    probe = db_cls(probe_dir, threads)
+    try:
+        info = probe.info()
+    finally:
+        probe.close()
+        remove(probe_dir)
+    return {"kind": "database", **asdict(info)}
+
+
+def case_entry(case: Case, **fields: Any) -> dict[str, Any]:
     entry: dict[str, Any] = {
         "kind": "entry",
         "id": case.bench_id,
@@ -210,14 +232,18 @@ class _Settings:
     case_timeout_s: float
 
 
-def _run_case(case: Case, db: Database, base: Path, settings: _Settings, emit: Emit) -> None:
+def start_case(
+    case: Case, db: Database, base: Path, out: Path | None, budget_s: float, emit: Emit
+) -> tuple[Preflight, dict[str, Any]]:
+    """Emit the case's `start` line, run its preflight, emit `progress` and build (not emit) its entry line.
+
+    The canonical answers go to `answers_path(out, ...)` when `out` is given. The entry has no timing yet.
+    """
     emit({"kind": "start", "id": case.bench_id})
     reference_file = catalog.reference_path(case.item, case.scale, base=base)
-    budget = settings.budgets.get(case.bench_id, settings.case_timeout_s)
-    pf = preflight(case, db, reference_file, budget_s=budget)
-    progress = {"kind": "progress", "id": case.bench_id}
-    emit(progress)
-    entry = _case_entry(
+    pf = preflight(case, db, reference_file, budget_s=budget_s)
+    emit({"kind": "progress", "id": case.bench_id})
+    entry = case_entry(
         case,
         status=pf.status,
         error=pf.error,
@@ -227,19 +253,27 @@ def _run_case(case: Case, db: Database, base: Path, settings: _Settings, emit: E
     )
     if pf.answers is not None:
         entry["answer_digest"] = digest(pf.answers)
-        path = answers_path(settings.out, case.bench_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        doc = catalog.reference_document(case.item, pf.bindings, pf.answers)
-        path.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8", newline="\n")
+        if out is not None:
+            path = answers_path(out, case.bench_id)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            doc = catalog.reference_document(case.item, pf.bindings, pf.answers)
+            path.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8", newline="\n")
+    return pf, entry
+
+
+def _run_case(case: Case, db: Database, base: Path, settings: _Settings, emit: Emit) -> None:
+    budget = settings.budgets.get(case.bench_id, settings.case_timeout_s)
+    pf, entry = start_case(case, db, base, settings.out, budget, emit)
     if pf.passed:
         sel = settings.selection
+        progress = {"kind": "progress", "id": case.bench_id}
         try:
             timing, _ = measure(
                 pf.run, warmup=max(sel.warmup - 1, 0), iterations=sel.iterations, on_run=lambda: emit(progress)
             )
             entry["timing"] = asdict(timing)
         except Exception as exc:
-            entry["status"], entry["error"] = "failed", _message(exc)
+            entry["status"], entry["error"] = "failed", message(exc)
     emit(entry)
 
 
@@ -261,16 +295,8 @@ def run(
     out.parent.mkdir(parents=True, exist_ok=True)
     workdir.mkdir(parents=True, exist_ok=True)
     with out.open("a", encoding="utf-8", newline="\n") as fh:
-        emit = _emitter(fh)
-        probe_dir = workdir / "info"
-        probe_dir.mkdir(exist_ok=True)
-        probe = db_cls(probe_dir, threads)
-        try:
-            info = probe.info()
-        finally:
-            probe.close()
-            _remove(probe_dir)
-        emit({"kind": "database", **asdict(info)})
+        emit = emitter(fh)
+        emit(database_line(db_cls, workdir, threads))
 
         # Every (dataset, scale) with a supported item gets a load, as in `catalog.load_ids`.
         groups: dict[tuple[str, str], list[Case]] = {}
@@ -285,7 +311,7 @@ def run(
             if case.item.model in db_cls.models:
                 groups[(case.item.dataset, case.scale)].append(case)
             else:
-                emit(_case_entry(case, status="not_supported", error=f"model {case.item.model} not supported"))
+                emit(case_entry(case, status="not_supported", error=f"model {case.item.model} not supported"))
 
         load_ids: dict[tuple[str, str], str] = {}
         if "load" in sel.categories:
@@ -316,14 +342,14 @@ def _run_dataset(
     try:
         progress = {"kind": "progress", "id": load_id}
         iterations = settings.selection.load_iterations
-        loaded = _load(db_cls, dataset, workdir, threads, iterations, lambda: emit(progress))
+        loaded = load(db_cls, dataset, workdir, threads, iterations, lambda: emit(progress))
     except Exception as exc:
-        message = _message(exc)
+        text = message(exc)
         if load_id is not None:
-            emit({"kind": "entry", "id": load_id, "status": "failed", "error": message})
+            emit({"kind": "entry", "id": load_id, "status": "failed", "error": text})
         for case in cases:
             emit({"kind": "start", "id": case.bench_id})
-            emit(_case_entry(case, status="failed", error=f"load failed: {message}"))
+            emit(case_entry(case, status="failed", error=f"load failed: {text}"))
         return
     if load_id is not None:
         emit({"kind": "entry", "id": load_id, "status": "ok", "load_ns": loaded.load_ns})
@@ -332,10 +358,10 @@ def _run_dataset(
             _run_case(case, loaded.db, base, settings, emit)
     finally:
         loaded.db.close()
-        _remove(loaded.workdir)
+        remove(loaded.workdir)
 
 
-def _budget(value: str) -> tuple[str, float]:
+def parse_budget(value: str) -> tuple[str, float]:
     bench_id, sep, seconds = value.rpartition("=")
     if not sep or not bench_id:
         raise argparse.ArgumentTypeError(f"expected ID=SECONDS, got {value!r}")
@@ -357,7 +383,13 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--out", required=True, help="JSON lines file to append to.")
     parser.add_argument("--skip", nargs="+", action="extend", default=[], metavar="ID", help="Ids not to run.")
     parser.add_argument(
-        "--budget", nargs="+", action="extend", default=[], type=_budget, metavar="ID=SECONDS", help="Case budgets."
+        "--budget",
+        nargs="+",
+        action="extend",
+        default=[],
+        type=parse_budget,
+        metavar="ID=SECONDS",
+        help="Case budgets.",
     )
     parser.add_argument(
         "--case-timeout",
@@ -386,7 +418,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     finally:
         if own_workdir:
-            _remove(workdir)
+            remove(workdir)
     return 0
 
 

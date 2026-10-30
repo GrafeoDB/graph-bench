@@ -5,6 +5,7 @@ import os
 import shutil
 import sys
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 import typer
@@ -99,28 +100,31 @@ def setup(
     typer.echo(json.dumps(info))
 
 
-@app.command()
-def bench(
-    selection: str = _SELECTION,
-    db: str | None = typer.Option(
-        None, "--db", help="Comma-separated database names, run in this order; default: all built-in."
+_RUN_DB = typer.Option(None, "--db", help="Comma-separated database names, run in this order; default: all built-in.")
+_RUN_GRAFEO = typer.Option(
+    None, "--grafeo", help="Grafeo wheel or checkout to install first; default: GRAPH_BENCH_GRAFEO."
+)
+_CASE_TIMEOUT = typer.Option(
+    DEFAULT_CASE_TIMEOUT_S,
+    "--case-timeout",
+    min=0.1,
+    help=(
+        "Seconds of worker silence before it is killed and the case marked timeout;"
+        " the worker reports progress after every run."
     ),
-    grafeo: str | None = typer.Option(
-        None, "--grafeo", help="Grafeo wheel or checkout to install first; default: GRAPH_BENCH_GRAFEO."
-    ),
-    case_timeout: float = typer.Option(
-        DEFAULT_CASE_TIMEOUT_S,
-        "--case-timeout",
-        min=0.1,
-        help=(
-            "Seconds of worker silence before it is killed and the case marked timeout;"
-            " the worker reports progress after every run."
-        ),
-    ),
-    workdir: Path | None = _WORKDIR,
-    out: Path = _OUT,
+)
+
+
+def _run(
+    run: Callable[..., Results],
+    selection: str,
+    db: str | None,
+    grafeo: str | None,
+    case_timeout: float,
+    workdir: Path | None,
+    out: Path,
 ) -> None:
-    """Run the databases one after another, one worker process each; write and print DIR/results.json."""
+    """Validate the selection and databases, then install Grafeo if asked, then run and print DIR/results.json."""
     name = _check_selection(selection)
     dbs = _dbs(db)
     try:
@@ -131,11 +135,42 @@ def bench(
     own_workdir = workdir is None
     work = Path(tempfile.mkdtemp(prefix="graph-bench-")) if workdir is None else workdir
     try:
-        supervisor.run_bench(name, dbs, out, workdir=work, case_timeout_s=case_timeout)
+        run(name, dbs, out, workdir=work, case_timeout_s=case_timeout)
     finally:
         if own_workdir:
             shutil.rmtree(work, ignore_errors=True)
     typer.echo(out / supervisor.RESULTS_FILE)
+
+
+@app.command()
+def bench(
+    selection: str = _SELECTION,
+    db: str | None = _RUN_DB,
+    grafeo: str | None = _RUN_GRAFEO,
+    case_timeout: float = _CASE_TIMEOUT,
+    workdir: Path | None = _WORKDIR,
+    out: Path = _OUT,
+) -> None:
+    """Run the databases one after another, one worker process each; write and print DIR/results.json."""
+    _run(supervisor.run_bench, selection, db, grafeo, case_timeout, workdir, out)
+
+
+@app.command()
+def codspeed(
+    selection: str = _SELECTION,
+    db: str | None = _RUN_DB,
+    grafeo: str | None = _RUN_GRAFEO,
+    case_timeout: float = _CASE_TIMEOUT,
+    workdir: Path | None = _WORKDIR,
+    out: Path = _OUT,
+) -> None:
+    """CI entry point: one `pytest benches --codspeed` process per database; write and print DIR/results.json.
+
+    Keeps CODSPEED_PROFILE_FOLDER as it is. results.json gets answers and preflight times, no timings.
+
+    Exits 0 once results.json is written, whatever pytest's exit codes.
+    """
+    _run(supervisor.run_codspeed, selection, db, grafeo, case_timeout, workdir, out)
 
 
 def _echo_utf8(text: str) -> None:
