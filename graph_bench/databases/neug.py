@@ -43,9 +43,9 @@ class NeugDatabase(Database):
     """An in-memory `neug.Database`, loaded with `COPY FROM` CSV and queried with parameterized Cypher.
 
     Node tables are keyed by their `id` column. Each edge type is one rel table with a `FROM a TO b` pair per
-    EdgeTable. The GDS extension (bundled in the wheel) is installed once per process (`prepare_environment`);
-    the first algorithm loads it and projects the graph `g`, both outside the load clock (the untimed preflight
-    call), so a broken extension fails only the algorithms (✗), not the load or the SNB queries.
+    EdgeTable. The GDS extension (bundled in the wheel) is installed once per process (`prepare_environment`).
+    On the graphalytics dataset the load also loads GDS and projects the graph `g`, inside the load clock, like
+    LadybugDB's projection: all three algorithms (BFS included) need it, so a GDS failure fails that load (✗).
     """
 
     name: ClassVar[str] = "neug"
@@ -107,14 +107,9 @@ class NeugDatabase(Database):
             # The first two CSV columns are the endpoints, matched to the primary keys of the `from`/`to` tables.
             options = f'from="{t.src}", to="{t.dst}", header=true, delim=","'
             self._run(f'COPY {t.type} FROM "{_path(dataset, t.file)}" ({options})')
-
-    def _load_gds(self) -> None:
-        """Load the GDS extension (installed by `prepare_environment`) and project `g`, once, before an algorithm.
-
-        It runs in the untimed preflight call. A failure raises, so that algorithm is ✗ with NeuG's error.
-        https://neug.io/docs/extensions/load_gds/
-        """
-        if not self.gds_ready:
+        if dataset.name == "graphalytics":
+            # The projection is part of making the graph queryable by the algorithms, so it is timed with the load
+            # (https://neug.io/docs/extensions/load_gds/).
             self._run("LOAD gds")
             self._run(PROJECT)
             self.gds_ready = True
@@ -132,7 +127,8 @@ class NeugDatabase(Database):
     def algorithm(self, name: str, params: Mapping[str, Any]) -> dict[Any, Any]:
         if name not in ("bfs", "wcc", "pr"):
             raise NotSupported(name)
-        self._load_gds()
+        if not self.gds_ready:
+            raise RuntimeError("the graph `g` is projected only for the graphalytics dataset")
         if name == "pr":
             return dict(self.query(PAGE_RANK, {}))
         if name == "wcc":
@@ -142,9 +138,11 @@ class NeugDatabase(Database):
         }
 
     def close(self) -> None:
-        if self.conn is not None:
-            self.conn.close()
-            self.conn = None
-        if self.db is not None:
-            self.db.close()
-            self.db = None
+        try:
+            if self.conn is not None:
+                self.conn.close()
+                self.conn = None
+        finally:
+            if self.db is not None:
+                self.db.close()
+                self.db = None

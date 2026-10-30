@@ -60,10 +60,10 @@ def test_neug_threads_settings(tmp_path: Path) -> None:
     assert cls(tmp_path, None).info().threads_note.startswith("max_thread_num=0")
 
 
-def test_neug_gds_load_failure_fails_only_the_algorithm(
+def test_neug_gds_load_failure_fails_the_graphalytics_load(
     push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A failing `LOAD gds` raises from the algorithm (a failure, not not-available); the load still works."""
+    """A failing `LOAD gds` fails the graphalytics load (a failure, not not-available); SNB loads without GDS."""
     monkeypatch.setenv("GRAPH_BENCH_DATA_DIR", str(push_data_dir))
     cls = get_database("neug")
     run = cls._run
@@ -74,18 +74,23 @@ def test_neug_gds_load_failure_fails_only_the_algorithm(
         run(self, text)
 
     monkeypatch.setattr(cls, "_run", failing)
+    data = cache.prepare("push")
     db = cls(tmp_path, 1)
     try:
-        db.load(cache.prepare("push")[("graphalytics", "small")])
-        assert db.counts()[0] > 0
         with pytest.raises(RuntimeError, match="not installed"):
-            db.algorithm("pr", {})
+            db.load(data[("graphalytics", "small")])
     finally:
         db.close()
+    snb = cls(tmp_path, 1)
+    try:
+        snb.load(data[("snb", "small")])
+        assert snb.counts()[0] > 0
+    finally:
+        snb.close()
 
 
-def test_neug_installs_gds_outside_load(push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """INSTALL gds runs in prepare_environment and LOAD gds in the first algorithm: neither in load()."""
+def test_neug_projects_graph_in_load(push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """INSTALL gds runs in prepare_environment; LOAD gds and the projection run in load(), so they are timed."""
     monkeypatch.setenv("GRAPH_BENCH_DATA_DIR", str(push_data_dir))
     cls = get_database("neug")
     cls.prepare_environment()
@@ -100,11 +105,11 @@ def test_neug_installs_gds_outside_load(push_data_dir: Path, tmp_path: Path, mon
     db = cls(tmp_path, 1)
     try:
         db.load(cache.prepare("push")[("graphalytics", "small")])
-        assert not [text for text in seen if text.startswith(("INSTALL", "LOAD", "CALL"))]
+        assert not [text for text in seen if text.startswith("INSTALL")]
+        assert seen[-2:] == ["LOAD gds", "CALL project_graph('g', ['V'], ['[V, E, V]'])"]
         assert db.algorithm("wcc", {})
         assert db.algorithm("bfs", {"source": 0})
         with pytest.raises(NotSupported):
             db.algorithm("cdlp", {})
     finally:
         db.close()
-    assert seen[-2:] == ["LOAD gds", "CALL project_graph('g', ['V'], ['[V, E, V]'])"]
