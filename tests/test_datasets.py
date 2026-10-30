@@ -1,6 +1,8 @@
 import filecmp
+import shutil
 from pathlib import Path
 
+import networkx
 import pytest
 
 from graph_bench.datasets import cache, graphalytics, snb
@@ -69,6 +71,25 @@ def test_key_changes_with_generator_source(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(cache, "_read_sources", lambda: [*original, "# changed"])
     assert cache.dataset_key("push") != before
     assert cache.dataset_key("push") != cache.dataset_key("full")
+
+
+def test_key_changes_with_answers_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The cached references are canonicalized by answers.py and computed with NetworkX: both are in the key."""
+    before = cache.dataset_key("push")
+    pkg = tmp_path / "graph_bench"
+    for sub in ("datasets", "suites"):
+        shutil.copytree(cache._PKG / sub, pkg / sub, ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copy2(cache._PKG / "answers.py", pkg / "answers.py")
+    monkeypatch.setattr(cache, "_PKG", pkg)
+    assert cache.dataset_key("push") == before
+
+    with (pkg / "answers.py").open("a", encoding="utf-8") as fh:
+        fh.write("\n# canonicalization changed\n")
+    changed_answers = cache.dataset_key("push")
+    assert changed_answers != before
+
+    monkeypatch.setattr(networkx, "__version__", "0.0.0-test")
+    assert cache.dataset_key("push") not in (before, changed_answers)
 
 
 def test_prepare_reuses_complete_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
