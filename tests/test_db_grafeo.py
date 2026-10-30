@@ -19,6 +19,7 @@ def test_grafeo_push_agrees(
     monkeypatch: pytest.MonkeyPatch,
     known_disagreements: Callable[[str], set[str]],
 ) -> None:
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("GRAPH_BENCH_DATA_DIR", str(push_data_dir))
     results = run_bench("push", ["grafeo"], tmp_path / "out", workdir=tmp_path / "work", case_timeout_s=60)
     known = known_disagreements("grafeo")

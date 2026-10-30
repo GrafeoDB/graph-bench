@@ -52,7 +52,8 @@ def _extra_databases() -> Iterator[None]:
 
 
 @pytest.fixture
-def bench_env(push_data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
+def bench_env(push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
+    monkeypatch.chdir(tmp_path)
     _set_env(monkeypatch, push_data_dir)
     return monkeypatch
 
@@ -70,6 +71,7 @@ def two_dbs(push_data_dir: Path, tmp_path_factory: pytest.TempPathFactory) -> tu
 
     with pytest.MonkeyPatch.context() as mp:
         _set_env(mp, push_data_dir, fake2="wrong:snb_is5")
+        mp.chdir(root)  # run_bench reads .graph-bench/grafeo.json from the cwd; keep the real one out of it
         mp.setattr(supervisor, "_launch", recording)
         results = run_bench("push", ["fake", "fake2"], root / "out", workdir=root / "work", case_timeout_s=60)
     return results, argvs, root / "out"

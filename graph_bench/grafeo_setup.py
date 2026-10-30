@@ -16,7 +16,7 @@ _ERR_TAIL = 2000
 def _run(cmd: list[str]) -> str:
     """Run a command and return its stdout; failures carry the command and the stderr tail."""
     try:
-        return subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
+        return subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8", errors="replace").stdout
     except subprocess.CalledProcessError as exc:
         tail = (exc.stderr or "")[-_ERR_TAIL:]
         raise RuntimeError(f"command failed ({exc.returncode}): {' '.join(cmd)}\n{tail}") from exc

@@ -138,6 +138,14 @@ def test_default_run_reports_stderr() -> None:
         grafeo_setup._run([sys.executable, "-c", "import sys; sys.stderr.write('boom'); sys.exit(3)"])
 
 
+def test_run_decodes_utf8_output_regardless_of_locale() -> None:
+    # Child writes raw UTF-8 bytes; a locale-codec decode (cp1252 on Windows) would mangle or reject them.
+    code = "import sys; sys.stdout.buffer.write('\\u2192 \\u00e9\\n'.encode('utf-8'))"
+    out = grafeo_setup._run([sys.executable, "-c", code])
+    assert "→" in out
+    assert "é" in out
+
+
 def _patch_bench(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
     calls: list[Path] = []
     monkeypatch.setattr(cli, "install_grafeo", lambda p: calls.append(p) or {"version": "0", "source": "", "sha": ""})
