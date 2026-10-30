@@ -33,7 +33,8 @@ Repository = "https://github.com/GrafeoDB/graph-bench"
 [project.optional-dependencies]
 grafeo = ["grafeo>=0.6.0,<0.7"]
 ladybug = ["ladybug>=0.22.1"]
-embedded = ["graph-bench[grafeo,ladybug]"]
+neug = ["neug>=0.3.0"]
+embedded = ["graph-bench[grafeo,ladybug,neug]"]
 bench = ["pytest>=9.0.2", "pytest-codspeed>=5.0.3"]
 dev = [
     "pytest>=9.0.2",
@@ -69,6 +70,7 @@ testpaths = ["tests"]
 markers = [
     "grafeo: requires Grafeo",
     "ladybug: requires LadybugDB",
+    "neug: requires NeuG",
     "slow: slow tests",
 ]
 
@@ -76,7 +78,12 @@ markers = [
 source = ["graph_bench"]
 # The runner tests start the worker as a subprocess; measure it there too.
 patch = ["subprocess"]
-omit = ["*/__init__.py", "graph_bench/databases/grafeo.py", "graph_bench/databases/ladybug.py"]
+omit = [
+    "*/__init__.py",
+    "graph_bench/databases/grafeo.py",
+    "graph_bench/databases/ladybug.py",
+    "graph_bench/databases/neug.py",
+]
 
 [tool.coverage.report]
 fail_under = 88

@@ -178,3 +178,30 @@ would likely show them.
   100 (https://docs.ladybugdb.com/extensions/algo/wcc), so a component whose diameter needs more rounds would be
   split. The adapter passes `maxIterations := 1000`, the bound it also gives PageRank; a component needing more
   than 1000 rounds would still be split. Cause: LadybugDB engine default; the adapter only raises the bound.
+
+## NeuG: PageRank is slow under the 10x budget rule (not allowlisted)
+
+The answer agrees with the reference in every run. In a `bench` run next to Grafeo it is marked `timeout` (⏱) by
+the budget rule (slower than 10x the mean of the 3 fastest other databases), not by a hang. It carries no `- id:`
+line because the adapter test runs NeuG alone, where no budget applies and it must agree.
+
+- Query: `graphalytics_pr` (`page_rank` of the GDS extension, https://neug.io/docs/extensions/load_gds/).
+- Dataset: `graphalytics-small`.
+- NeuG 0.3.0 answer: agrees. Median 25 to 59 ms over repeated `bench --selection push --db grafeo,ladybug,neug`
+  runs (about 28x to 53x the top-3 average), against Grafeo's 1.1 ms.
+- Cause: the adapter passes `max_iterations: 1000`, and `page_rank` has no tolerance option, so (as far as the
+  timing shows) it likely runs a fixed number of rounds instead of stopping at convergence. The default is 20
+  rounds, which is about 1e-5 off the converged ranks and so is not used: PageRank is compared at convergence.
+  The adapter does not lower the bound to win the budget.
+
+## NeuG: load is slow (not allowlisted)
+
+Node and edge counts match and every checked query agrees, but the load clock is long: about 2 to 4 s for
+`graphalytics-small` and 4 to 6 s for `snb-small` (Windows, Python 3.12), against Grafeo's 0.07 s and 0.13 s. A
+load entry has no answer, so there is no `- id:` line.
+
+- Statements: one explicit-schema `CREATE NODE TABLE` / `CREATE REL TABLE` per table, then `COPY ... (header=true,
+  delim=",")` per CSV (https://neug.io/docs/data_io/import_data/). Each COPY commits a private copy-on-write graph
+  with a checkpoint (visible in the engine log), and each in-memory database also keeps a temp directory.
+  Wrapping the COPY statements in one transaction did not make the load measurably faster.
+- Cause: NeuG engine (checkpoint per statement), not measured further.

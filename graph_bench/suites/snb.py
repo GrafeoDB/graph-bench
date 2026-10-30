@@ -45,6 +45,10 @@ MATCH (m {{id: $messageId}})
 WHERE m:Post OR m:Comment
 RETURN m.creationDate AS messageCreationDate, {_CONTENT} AS messageContent"""
 
+# NeuG (dialect "neug") reuses the two LadybugDB texts below, and only these: its parser rejects `WHERE m:Post OR
+# m:Comment` (IS4) and `shortestPath(...)` (IC13). A multi-label pattern `(m:Post:Comment)` means "either label" in
+# NeuG as well (https://neug.io/docs/cypher_manual/query_clauses/match_clause/), and `[:KNOWS* SHORTEST]` is its
+# shortest-path form, so both keep the meaning of the shared text.
 _IS4_LADYBUG = f"""\
 MATCH (m:Post:Comment {{id: $messageId}})
 RETURN m.creationDate AS messageCreationDate, {_CONTENT} AS messageContent"""
@@ -119,14 +123,22 @@ QUERIES: tuple[Query, ...] = (
     _q("snb_is1", "IS1 person profile", {"cypher": _IS1}, ordered=False),
     _q("snb_is2", "IS2 recent messages of a person", {"cypher": _IS2}, ordered=True),
     _q("snb_is3", "IS3 friends of a person", {"cypher": _IS3}, ordered=True),
-    _q("snb_is4", "IS4 message content", {"cypher": _IS4, "ladybug": _IS4_LADYBUG}, ordered=False),
+    _q(
+        "snb_is4", "IS4 message content", {"cypher": _IS4, "ladybug": _IS4_LADYBUG, "neug": _IS4_LADYBUG}, ordered=False
+    ),
     _q("snb_is5", "IS5 message creator", {"cypher": _IS5}, ordered=False),
     _q("snb_is6", "IS6 forum of a message", {"cypher": _IS6, "ladybug": _IS6_LADYBUG}, ordered=False),
     # The ORDER BY of IS7 leaves ties (same author, same day), so rows are compared as a multiset.
     _q("snb_is7", "IS7 replies of a message", {"cypher": _IS7}, ordered=False),
     _q("snb_ic2", "IC2 recent messages by friends", {"cypher": _IC2}, ordered=True),
     _q("snb_ic6", "IC6 tag co-occurrence", {"cypher": _IC6}, ordered=True),
-    _q("snb_ic13", "IC13 shortest path", {"cypher": _IC13, "ladybug": _IC13_LADYBUG}, ordered=False, category="hops"),
+    _q(
+        "snb_ic13",
+        "IC13 shortest path",
+        {"cypher": _IC13, "ladybug": _IC13_LADYBUG, "neug": _IC13_LADYBUG},
+        ordered=False,
+        category="hops",
+    ),
 )
 
 _BY_ID = {q.id: q for q in QUERIES}
