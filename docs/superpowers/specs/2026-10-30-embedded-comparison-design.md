@@ -21,7 +21,7 @@ The new code fully replaces the current benchmark. The current code moves to `le
 | Neo4j Community | JPype + Maven jars | in-process (JVM) | Community only (Enterprise terms restrict publishing benchmarks); jars and a Temurin 21 JRE fetched into the data cache, never committed |
 | DuckDB + DuckPGQ | `duckdb` | in-process | SQL/PGQ only |
 | Oxigraph | `pyoxigraph` | in-process | RDF only |
-| HelixDB | `helix-py` + the `helix` runtime | local process (to verify) | graph + vector database in Rust with its own query language (HelixQL); added by the user 2026-10-30. If it has no in-process mode it runs as a local server like FalkorDB-lite and is labelled "local process"; HelixQL queries are written per benchmark, so categories without a HelixQL equivalent get ⊘ |
+| HelixDB | `helix-db` + `helix-db-embedded` (native wheel) | in-process (embedded mode) | graph + vector database with its own query language (HelixQL); added by the user 2026-10-30. Uses `Client.embedded(...)` with in-memory storage (docs: https://docs.helix-db.com/database/helix-db/start-here/local-development/embedded-database.md). If the embedded wheel is unusable on the benchmark platforms, HelixDB is deferred (server-only databases are not part of the release run) |
 
 New dependencies in graph-bench need no approval (user, 2026-10-30).
 
@@ -95,6 +95,7 @@ These go into FAIRNESS.md, which is trimmed to embedded use.
 - Dates are stored as integer epoch milliseconds, so date types never decide an answer.
 - `graph-bench data key --selection S` prints a hash of the generator source, the parameters, the seeds and the pinned JRE/jar versions, for `actions/cache`.
 - Graphalytics uses the SNB `KNOWS` graph stored in both directions, so directed algorithm implementations give the undirected answer.
+- **wiki-Talk (release runs):** LDBC Graphalytics' wiki-Talk (about 2.4M vertices, 5M directed edges, unweighted) is downloaded from LDBC's published archive and cached under its own key. Its references are LDBC's published validation outputs for BFS, WCC, PageRank, CDLP and LCC (not NetworkX, which is too slow at this size); SSSP is skipped (no weights). It is directed, so the algorithms follow the LDBC Graphalytics directed definitions. It belongs to a separate `release` selection (= `full` + wiki-Talk), so `full` stays quick for local runs. Release runs get a generous hard cap per case; the 10x rule is the only ⏱ criterion (user decision, 2026-10-30).
 
 ## Interface (agreed with grafeo-31)
 
@@ -181,4 +182,6 @@ grafeo's README never names other graph databases unless the user decides on tha
 8. **RDF/SPARQL** with Oxigraph and BSBM.
 9. **Project-published suites.**
 10. **Remaining:** Graphalytics algorithms (CDLP, LCC, SSSP, Louvain, betweenness), `medium`/`large` scales.
+12. **Grafeo loader:** when grafeo's native typed COPY-style loader lands (0.6.1, API from grafeo-28), Grafeo's Load switches from the batch API to it; until then the batch API stays (user decision, 2026-10-30).
+13. **`release` selection with wiki-Talk** and LDBC validation references, before the 0.6.1 release run.
 11. **With grafeo 0.6.4:** all-cores runs and Grafeo's real thread setting.
