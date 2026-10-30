@@ -45,6 +45,7 @@ class Database(ABC):
         return {}
 
     def __init__(self, workdir: Path, threads: int | None) -> None:
+        """Only store the settings: adapters create their database instance in `load()`, inside the load clock."""
         self.workdir = workdir
         self.threads = threads
 
