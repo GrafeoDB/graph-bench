@@ -1,5 +1,7 @@
 """Command line entry point."""
 
+import json
+import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -9,6 +11,7 @@ import typer
 from graph_bench import __version__
 from graph_bench.databases import KNOWN
 from graph_bench.datasets import cache
+from graph_bench.grafeo_setup import install_grafeo
 from graph_bench.runner import supervisor
 from graph_bench.runner.worker import DEFAULT_CASE_TIMEOUT_S
 from graph_bench.suites import catalog
@@ -19,6 +22,7 @@ app.add_typer(data_app, name="data")
 
 _SELECTION = typer.Option(..., "--selection", help="Selection name: push or full.")
 _WORKDIR = typer.Option(None, "--workdir", help="Directory for database files; default: a temporary one.")
+_GRAFEO_SOURCE = typer.Option(..., "--grafeo", help="A grafeo .whl file or a grafeo checkout (built with maturin).")
 _OUT = typer.Option(..., "--out", help="Output directory for results.json and the raw worker output.")
 
 
@@ -39,6 +43,18 @@ def _dbs(value: str | None) -> list[str]:
     if value is None:
         return list(KNOWN)
     return [name.strip() for name in value.split(",") if name.strip()]
+
+
+def _install_requested(grafeo: str | None) -> dict[str, str] | None:
+    """Install the Grafeo from `--grafeo`, else from GRAPH_BENCH_GRAFEO; None when neither is given."""
+    source = grafeo or os.environ.get("GRAPH_BENCH_GRAFEO")
+    if not source:
+        return None
+    try:
+        return install_grafeo(Path(source))
+    except (ValueError, RuntimeError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(2) from None
 
 
 @app.command()
@@ -64,12 +80,26 @@ def list_benchmarks(
 
 
 @app.command()
+def setup(
+    grafeo: Path = _GRAFEO_SOURCE,
+) -> None:
+    """Install the Grafeo under test and print what was installed as JSON.
+
+    Building a checkout needs a lot of disk: set CARGO_TARGET_DIR to a drive with ~90 GB free.
+    """
+    info = _install_requested(str(grafeo))
+    typer.echo(json.dumps(info))
+
+
+@app.command()
 def bench(
     selection: str = _SELECTION,
     db: str | None = typer.Option(
         None, "--db", help="Comma-separated database names, run in this order; default: all built-in."
     ),
-    grafeo: str | None = typer.Option(None, "--grafeo", help="Grafeo source to install first (not available yet)."),
+    grafeo: str | None = typer.Option(
+        None, "--grafeo", help="Grafeo wheel or checkout to install first; default: GRAPH_BENCH_GRAFEO."
+    ),
     case_timeout: float = typer.Option(
         DEFAULT_CASE_TIMEOUT_S,
         "--case-timeout",
@@ -83,15 +113,13 @@ def bench(
     out: Path = _OUT,
 ) -> None:
     """Run the databases one after another, one worker process each; write and print DIR/results.json."""
-    if grafeo is not None:
-        typer.echo("--grafeo is not available yet", err=True)
-        raise typer.Exit(2)
     name = _check_selection(selection)
     dbs = _dbs(db)
     try:
         catalog.cases(name, dbs)
     except KeyError as exc:
         raise typer.BadParameter(str(exc.args[0]), param_hint="--db") from None
+    _install_requested(grafeo)
     own_workdir = workdir is None
     work = Path(tempfile.mkdtemp(prefix="graph-bench-")) if workdir is None else workdir
     try:

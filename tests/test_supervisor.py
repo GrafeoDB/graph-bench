@@ -312,11 +312,11 @@ def test_bench_exit_zero_on_disagree(bench_env: pytest.MonkeyPatch, tmp_path: Pa
     assert entry.answer == "disagree"
 
 
-def test_bench_grafeo_not_available(tmp_path: Path) -> None:
+def test_bench_rejects_bad_grafeo_source(tmp_path: Path) -> None:
     args = ["bench", "--selection", "push", "--grafeo", "x", "--out", str(tmp_path / "out")]
     result = CliRunner().invoke(app, args)
     assert result.exit_code == 2
-    assert "--grafeo is not available yet" in result.output
+    assert "expected a .whl file or a grafeo checkout" in result.output
 
 
 def test_bench_rejects_unknown_db(tmp_path: Path) -> None:
