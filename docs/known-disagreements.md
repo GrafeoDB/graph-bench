@@ -92,6 +92,30 @@ queries agree afterwards), but slower than the batch API. A load entry has no an
   (about 2 us per index probe), compared with `batch_create_edges` on internal ids. Grafeo has no documented
   bulk path for edges keyed by an external id that avoids the per-row probe.
 
+## LadybugDB: the ALGO extension does not load (PageRank, WCC)
+
+- id: ladybug/graphalytics_pr
+- id: ladybug/graphalytics_wcc
+- Benchmarks: `graphalytics_pr` (`page_rank`) and `graphalytics_wcc` (`weakly_connected_components`), the two
+  that need LadybugDB's ALGO extension. BFS is a Cypher `SHORTEST` pattern and does not need it.
+- Dataset: `graphalytics-small`; the dataset does not matter, the extension fails before any data is touched.
+- LadybugDB 0.22.1 (`ladybug` on PyPI) answer: none. `INSTALL ALGO` downloads the extension, then
+  `LOAD EXTENSION ALGO` fails, so both entries are `failed` (✗) with LadybugDB's error:
+  - Linux (`linux_amd64`, the CI runners): `Failed to load library: ~/.lbdb/extension/0.22.0/linux_amd64/algo/
+    libalgo.lbug_extension which is needed by extension: algo. Error: libnetworkit.so: cannot open shared object
+    file: No such file or directory.`
+  - Windows (`win_amd64`): the same `Failed to load library`, with "Extensions link against OpenSSL 3
+    (libssl-3-x64.dll and libcrypto-3-x64.dll), which is not distributed with them."
+- Reference answer: the NetworkX PageRank and WCC of the graph; nothing is compared.
+- Versions: `ladybug` 0.17.1, 0.18.3 and 0.19.1 load the extension on Linux; 0.20.4, 0.21.2 and 0.22.1 do not.
+  The older `real_ladybug` package (0.15.x) is no longer usable: its extensions were removed from
+  `extension.ladybugdb.com`, which serves only `v0.17.0` and later, so `INSTALL ALGO` returns HTTP 404.
+- Cause: LadybugDB packaging. The extension links NetworKit (and on macOS Arrow and OpenMP) without shipping
+  them. Upstream: https://github.com/LadybugDB/ladybug/issues/857 and
+  https://github.com/LadybugDB/ladybug/issues/1190, both open. The adapter does not install NetworKit itself:
+  LadybugDB documents no such step. It loads the extension in the first algorithm call (untimed preflight), so the
+  load and BFS are still measured; once the extension loads, these entries are measured and checked as usual.
+
 ## LadybugDB: slow point lookups under the 10x budget rule (not allowlisted)
 
 These cases agree with the reference in every run. In a `bench` run next to Grafeo they are marked `timeout`

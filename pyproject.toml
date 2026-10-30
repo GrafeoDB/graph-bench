@@ -32,7 +32,7 @@ Repository = "https://github.com/GrafeoDB/graph-bench"
 
 [project.optional-dependencies]
 grafeo = ["grafeo>=0.6.0,<0.7"]
-ladybug = ["real_ladybug>=0.15"]
+ladybug = ["ladybug>=0.22.1"]
 embedded = ["graph-bench[grafeo,ladybug]"]
 bench = ["pytest>=9.0.2", "pytest-codspeed>=5.0.3"]
 dev = [

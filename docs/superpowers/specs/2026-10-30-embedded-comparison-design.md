@@ -13,7 +13,7 @@ The new code fully replaces the current benchmark. The current code moves to `le
 | Database | Package | Process | Notes |
 |---|---|---|---|
 | Grafeo | `grafeo` | in-process | query executor is single-threaded until parallel queries land (0.6.4); only rayon parts (vector batch, clustering, folds) are parallel, set with `RAYON_NUM_THREADS` |
-| LadybugDB | `real_ladybug` | in-process | `max_num_threads`, `buffer_pool_size`; ALGO extension for algorithms |
+| LadybugDB | `ladybug` | in-process | `max_num_threads`, `buffer_pool_size`; ALGO extension for algorithms |
 | TuringDB | `turingdb` | in-process | new adapter for `TuringDB(type="embedded", data_dir=...)`; HTTP adapter is not comparable |
 | FalkorDB | `falkordblite` | local process | runs a Redis server subprocess, reported as "local process" |
 | NeuG | `neug` 0.3.0 | in-process | |
