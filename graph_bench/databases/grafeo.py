@@ -7,7 +7,7 @@ from typing import Any, ClassVar
 import grafeo
 
 from graph_bench.databases.base import Database, DatabaseInfo, NotSupported
-from graph_bench.datasets.schema import Dataset
+from graph_bench.datasets.schema import Dataset, EdgeTable, NodeTable
 from graph_bench.types import Model
 
 CHUNK = 10_000
@@ -18,11 +18,17 @@ def _chunks[T](items: Iterator[T], size: int) -> Iterator[list[T]]:
         yield chunk
 
 
+def _rows(dataset: Dataset, table: NodeTable | EdgeTable) -> Iterator[dict[str, Any]]:
+    # Dataset contract: an empty CSV field means "no property" (LadybugDB's COPY and Grafeo's LOAD CSV give null).
+    return ({k: v for k, v in row.items() if v != ""} for row in dataset.rows(table))
+
+
 class GrafeoDatabase(Database):
     """An in-memory `grafeo.GrafeoDB`, loaded with the batch APIs and queried with `execute_cypher`.
 
-    Node ids from the dataset are kept as the `id` property (with a property index); the native algorithms
-    return internal node ids, which are mapped back to the dataset ids through the map built while loading.
+    The batch APIs are Grafeo's fastest documented bulk path (CSV parsing included, in Python). Node ids from the
+    dataset are kept as the `id` property (with a property index). WCC and PageRank key their results by it
+    (`key="id"`); BFS takes and returns internal node ids, mapped through the ids the batch call returns.
     """
 
     name: ClassVar[str] = "grafeo"
@@ -46,24 +52,25 @@ class GrafeoDatabase(Database):
 
     def load(self, dataset: Dataset) -> None:
         db = self.db = grafeo.GrafeoDB()
-        # (label, dataset id) -> internal node id, and back.
-        self.ids: dict[tuple[str, Any], int] = {}
-        self.keys: dict[int, Any] = {}
+        # label -> dataset id -> internal node id, for the edge endpoints.
+        ids: dict[str, dict[Any, int]] = {}
         for table in dataset.nodes:
-            for rows in _chunks(dataset.rows(table), CHUNK):
+            label_ids = ids.setdefault(table.label, {})
+            for rows in _chunks(_rows(dataset, table), CHUNK):
                 created = db.batch_create_nodes_with_props(table.label, rows)
-                for row, nid in zip(rows, created, strict=True):
-                    self.ids[(table.label, row["id"])] = nid
-                    self.keys[nid] = row["id"]
-        ids = self.ids
+                label_ids.update(zip((row["id"] for row in rows), created, strict=True))
         for table in dataset.edges:
-            edges = (
-                (ids[(table.src, row.pop("src"))], ids[(table.dst, row.pop("dst"))], table.type, row)
-                for row in dataset.rows(table)
-            )
+            src, dst = ids[table.src], ids[table.dst]
+            edges = ((src[row.pop("src")], dst[row.pop("dst")], table.type, row) for row in _rows(dataset, table))
             for chunk in _chunks(edges, CHUNK):
                 db.batch_create_edges(chunk)
         db.create_property_index("id")
+        # bfs_layers has no `key=`: the graphalytics vertices keep their internal ids, and the way back.
+        self.ids: dict[Any, int] = {}
+        self.keys: dict[int, Any] = {}
+        if dataset.name == "graphalytics":
+            self.ids = ids["V"]
+            self.keys = {nid: key for key, nid in self.ids.items()}
 
     def query(self, text: str, params: Mapping[str, Any]) -> list[tuple[Any, ...]]:
         result = self.db.execute_cypher(text, dict(params))
@@ -72,15 +79,16 @@ class GrafeoDatabase(Database):
 
     def algorithm(self, name: str, params: Mapping[str, Any]) -> dict[Any, Any]:
         algorithms = self.db.algorithms
-        keys = self.keys
         if name == "bfs":
-            layers = algorithms.bfs_layers(self.ids[("V", params["source"])])
+            keys = self.keys
+            layers = algorithms.bfs_layers(self.ids[params["source"]])
             return {keys[nid]: depth for depth, layer in enumerate(layers) for nid in layer}
         if name == "wcc":
             return dict(algorithms.connected_components(key="id"))
         if name == "pr":
-            ranks = algorithms.pagerank(damping=0.85, max_iterations=1000, tolerance=1e-10)
-            return {keys[nid]: rank for nid, rank in ranks.items()}
+            # `key="id"` keys the result by the dataset id (grafeo docs/algorithms/index.md, "Results independent of
+            # the load order: `key=`").
+            return dict(algorithms.pagerank(damping=0.85, max_iterations=1000, tolerance=1e-10, key="id"))
         raise NotSupported(name)
 
     def close(self) -> None:

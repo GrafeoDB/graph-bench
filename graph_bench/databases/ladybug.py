@@ -16,7 +16,9 @@ from graph_bench.types import Model
 MAX_DEPTH = 10_000
 
 PAGE_RANK = "CALL page_rank('g', dampingFactor := 0.85, maxIterations := 1000, tolerance := 1e-10) RETURN node.id, rank"
-WCC = "CALL weakly_connected_components('g') RETURN node.id, group_id"
+# WCC stops after `maxIterations` (default 100, https://docs.ladybugdb.com/extensions/algo/wcc), which a component
+# with a long diameter could need more of; raised to PageRank's bound so that the result is the converged one.
+WCC = "CALL weakly_connected_components('g', maxIterations := 1000) RETURN node.id, group_id"
 BFS = f"MATCH p = (a:V {{id: $s}})-[:E* SHORTEST 1..{MAX_DEPTH}]->(b:V) RETURN b.id, length(p)"
 
 

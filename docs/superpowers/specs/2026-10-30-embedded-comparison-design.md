@@ -39,6 +39,7 @@ Each benchmark belongs to one category and one data model (property graph, SQL/P
 | Category | Benchmarks (first plan in brackets) | Databases |
 |---|---|---|
 | Load | bulk load per dataset [SNB, Graphalytics] | all |
+| Load (query language) | bulk load through the database's query language where it has one (Grafeo `LOAD CSV`, Neo4j `LOAD CSV`, Kùzu-family `COPY` from a query), tracked separately so engine-side load fixes show up; the Load row above uses each database's fastest documented bulk path | DBs with a query-language loader |
 | Batch writes | batch insert, update, delete, upsert | property graph DBs |
 | Scans | label scan, property filter, aggregation, order + limit | property graph DBs |
 | Hops | 1, 2, 3 hop expansion, variable-length paths, shortest path [IC13] | property graph DBs |

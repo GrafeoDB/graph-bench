@@ -62,7 +62,7 @@ MATCH (m {{id: $messageId}})-[:REPLY_OF*0..]->(p:Post)<-[:CONTAINER_OF]-(f:Forum
 {_IS6_RETURN}"""
 
 _IS6_LADYBUG = f"""\
-MATCH (m:Post:Comment {{id: $messageId}})-[:REPLY_OF*0..30]->(p:Post)<-[:CONTAINER_OF]-(f:Forum)
+MATCH (m:Post:Comment {{id: $messageId}})-[:REPLY_OF*0..]->(p:Post)<-[:CONTAINER_OF]-(f:Forum)
 MATCH (f)-[:HAS_MODERATOR]->(mod:Person)
 {_IS6_RETURN}"""
 
@@ -107,7 +107,7 @@ OPTIONAL MATCH path = shortestPath((p1)-[:KNOWS*]-(p2))
 
 _IC13_LADYBUG = f"""\
 MATCH (p1:Person {{id: $person1Id}}), (p2:Person {{id: $person2Id}})
-OPTIONAL MATCH path = (p1)-[:KNOWS* SHORTEST 1..30]-(p2)
+OPTIONAL MATCH path = (p1)-[:KNOWS* SHORTEST]-(p2)
 {_IC13_RETURN}"""
 
 
