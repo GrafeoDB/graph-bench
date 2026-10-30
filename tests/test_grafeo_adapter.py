@@ -105,6 +105,24 @@ def test_traverse_bfs_runs_natively(adapter: GrafeoAdapter, monkeypatch: pytest.
     assert set(adapter.traverse_bfs("p0", max_depth=1)) == {"p0", "p1", "p3", "c0"}
 
 
+def test_edge_type_traversals_run_natively(adapter: GrafeoAdapter, monkeypatch: pytest.MonkeyPatch) -> None:
+    # grafeo 0.6: a BFS or shortest path over one edge type runs on a projection,
+    # which is dropped again, instead of the get_neighbors fallback.
+    load(adapter)
+
+    def no_fallback(*args: Any, **kwargs: Any) -> list[str]:
+        raise AssertionError("an edge-type traversal used the get_neighbors fallback")
+
+    monkeypatch.setattr(adapter, "get_neighbors", no_fallback)
+    adapter.take_fallbacks()
+    assert set(adapter.traverse_bfs("p0", max_depth=1, edge_type="FOLLOWS")) == {"p0", "p1", "p3"}
+    assert adapter.shortest_path("p0", "p3", edge_type="FOLLOWS") == ["p0", "p3"]
+    assert adapter.shortest_path("p0", "p3", edge_type="FOLLOWS", weighted=True) == ["p0", "p1", "p2", "p3"]
+    assert adapter.shortest_path("p0", "c0", edge_type="FOLLOWS") is None
+    assert adapter.take_fallbacks() == set()
+    assert adapter._db.list_projections() == []
+
+
 def test_native_errors_are_not_swallowed(adapter: GrafeoAdapter, monkeypatch: pytest.MonkeyPatch) -> None:
     from grafeo import GrafeoError
 

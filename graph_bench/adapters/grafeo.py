@@ -4,7 +4,7 @@ Grafeo database adapter using GQL (ISO graph query language).
 Grafeo is an embedded graph database with Python bindings.
 Uses GQL as the default query language (ISO/IEC 39075).
 
-Requires: uv sync --extra grafeo (grafeo>=0.5.44,<0.7)
+Requires: uv sync --extra grafeo (grafeo>=0.6.0b1,<0.7)
 
 Environment variables:
     GRAPH_BENCH_GRAFEO_PATH: Database file (default: in-memory). A path without
@@ -25,8 +25,9 @@ whose query fails is recorded as FAILED instead of being timed.
 
 from __future__ import annotations
 
-from collections import deque
-from collections.abc import Iterable, Sequence
+import itertools
+from collections.abc import Generator, Iterable, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -38,11 +39,14 @@ __all__ = ["GrafeoAdapter"]
 # Every inserted node also gets this label, so lookups by `id` use one label.
 _NODE_LABEL = "Node"
 _FILE_SUFFIX = ".grafeo"
-_INSTALL_HINT = 'grafeo package not installed. Install with: uv pip install "grafeo>=0.5.44,<0.7"'
+_INSTALL_HINT = 'grafeo package not installed. Install with: uv pip install "grafeo>=0.6.0b1,<0.7"'
 
 _LOOKUP_NID = "MATCH (n:Node {id: $id}) RETURN id(n) AS nid"
 _LOOKUP_NIDS = "UNWIND $keys AS key MATCH (n:Node {id: key}) RETURN key, id(n) AS nid"
 _DELETE_NODES = "UNWIND $keys AS key MATCH (n:Node {id: key}) DETACH DELETE n"
+
+# Projection names are database-wide: each traversal takes its own.
+_PROJECTION_IDS = itertools.count()
 
 
 def _database_file(path: str) -> Path:
@@ -70,9 +74,11 @@ class GrafeoAdapter(BaseAdapter):
     results use internal node IDs, which are mapped back to the benchmark's
     ``id`` property.
 
+    A BFS or shortest path restricted to one edge type runs natively on a
+    projection of that edge type (grafeo 0.6 algorithms take ``projection=``).
+
     Runs in Python (and is labelled a fallback): depth-limited DFS (the native
-    DFS has no depth limit), BFS and shortest paths restricted to one edge type,
-    and the directed (LDBC) clustering coefficient.
+    DFS has no depth limit) and the directed (LDBC) clustering coefficient.
     """
 
     # algorithms.local_clustering_coefficient() ignores edge direction.
@@ -264,6 +270,23 @@ class GrafeoAdapter(BaseAdapter):
 
     # ── Traversal ───────────────────────────────────────────────
 
+    @contextmanager
+    def _edge_type_view(self, edge_type: str | None) -> Generator[str | None]:
+        """Yield a projection with only ``edge_type`` edges (None: the whole graph).
+
+        A projection is a filtered view, not a copy. It is created and dropped
+        inside the timed call, so its cost is measured and nothing outlives it.
+        """
+        if edge_type is None:
+            yield None
+            return
+        name = f"graph_bench_edges_{next(_PROJECTION_IDS)}"
+        self._db.create_projection(name, edge_types=[edge_type])
+        try:
+            yield name
+        finally:
+            self._db.drop_projection(name)
+
     def traverse_bfs(
         self,
         start: str,
@@ -271,11 +294,11 @@ class GrafeoAdapter(BaseAdapter):
         max_depth: int = 3,
         edge_type: str | None = None,
     ) -> list[str]:
-        # The native BFS follows every edge type, so filtering needs the fallback.
-        start_nid = None if edge_type else self._internal_id(start)
+        start_nid = self._internal_id(start)
         if start_nid is None or not hasattr(self._db.algorithms, "bfs_layers"):
             return super().traverse_bfs(start, max_depth=max_depth, edge_type=edge_type)
-        layers = self._db.algorithms.bfs_layers(start_nid)[: max_depth + 1]
+        with self._edge_type_view(edge_type) as projection:
+            layers = self._db.algorithms.bfs_layers(start_nid, projection=projection)[: max_depth + 1]
         visited = [nid for layer in layers for nid in layer]
         app = self._app_ids(visited)
         return [app[nid] for nid in visited]
@@ -288,34 +311,17 @@ class GrafeoAdapter(BaseAdapter):
         edge_type: str | None = None,
         weighted: bool = False,
     ) -> list[str] | None:
-        if edge_type:
-            # Native Dijkstra follows every edge type: filter with a BFS instead.
-            return self._bfs_path(source, target, edge_type)
         nids = self._internal_ids([source, target])
         if source not in nids or target not in nids:
             return None
-        found = self._db.algorithms.dijkstra(nids[source], nids[target], weight="weight" if weighted else None)
+        weight = "weight" if weighted else None
+        with self._edge_type_view(edge_type) as projection:
+            found = self._db.algorithms.dijkstra(nids[source], nids[target], weight=weight, projection=projection)
         if found is None:
             return None
         _, path = found
         app = self._app_ids(path)
         return [app[nid] for nid in path]
-
-    def _bfs_path(self, source: str, target: str, edge_type: str) -> list[str] | None:
-        self._record_fallback("shortest_path")
-        visited: set[str] = set()
-        queue: deque[list[str]] = deque([[source]])
-        while queue:
-            path = queue.popleft()
-            current = path[-1]
-            if current == target:
-                return path
-            if current in visited:
-                continue
-            visited.add(current)
-            neighbors = self.get_neighbors(current, edge_type=edge_type)
-            queue.extend([*path, neighbor] for neighbor in neighbors if neighbor not in visited)
-        return None
 
     # ── Algorithms (native, results keyed by benchmark ID) ──────
 

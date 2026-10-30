@@ -31,7 +31,7 @@ The following optimisations are explicitly permitted.
 
 1. **Native algorithms**: if the database ships a built-in algorithm (PageRank, BFS, SSSP, etc.), the adapter should use it instead of the NetworkX fallback. The algorithm must be a standard feature of the database, not a benchmark-specific plug-in.
 
-2. **Native traversal**: adapters may use database-native BFS/DFS/shortest-path primitives. When the native primitive does not support a required parameter (e.g. `edge_type` filtering), the adapter must fall back to the `BaseAdapter` implementation.
+2. **Native traversal**: adapters may use database-native BFS/DFS/shortest-path primitives. When the native primitive does not support a required parameter (e.g. `edge_type` filtering), the adapter must fall back to the `BaseAdapter` implementation. A built-in way to restrict the graph the primitive reads, such as a Grafeo projection of one edge type, counts as native support when it is created inside the timed call and dropped afterwards (no projection is kept between calls).
 
 3. **Batched writes**: adapters may batch `INSERT` / `CREATE` operations using `UNWIND`, multi-pattern `CREATE`, or the database's native bulk API, within the `batch_size` limit.
 

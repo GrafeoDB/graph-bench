@@ -2,7 +2,7 @@ r"""
 Tests for graph_bench.adapters module.
 """
 
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import networkx as nx
 import pytest
@@ -39,8 +39,9 @@ class TestAdapterRegistry:
 
 class TestBaseAdapter:
     def test_base_adapter_is_abstract(self):
+        abstract: type[Any] = BaseAdapter
         with pytest.raises(TypeError):
-            BaseAdapter()
+            abstract()
 
     def test_adapter_repr(self):
         from graph_bench.adapters.neo4j import Neo4jAdapter

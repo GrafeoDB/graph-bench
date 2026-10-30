@@ -1,6 +1,6 @@
 [project]
 name = "graph-bench"
-version = "0.2.0"
+version = "0.3.0"
 description = "Extensive benchmark suite for graph databases"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -28,6 +28,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "Topic :: Database",
     "Topic :: Software Development :: Testing",
 ]
@@ -49,8 +50,9 @@ neo4j = ["neo4j>=5.0"]
 memgraph = ["neo4j>=5.0"]
 ladybug = ["real_ladybug>=0.14"]
 arangodb = ["python-arango>=7.0"]
-# Pin the minor Grafeo version that is tested; tighten to grafeo~=0.6.0 once 0.6.0 is out
-grafeo = ["grafeo>=0.5.44,<0.7"]
+# Pin the minor Grafeo version that is tested (0.6; the lower bound admits the 0.6.0 pre-releases
+# until 0.6.0 is out, then it becomes grafeo~=0.6.0)
+grafeo = ["grafeo>=0.6.0b1,<0.7"]
 # grafeo-local: cd H:\GrafeoDB\grafeo && maturin develop --release
 # grafeo-server: the GWP stubs in graph_bench/adapters/proto need these versions or newer
 grafeo-server = ["grpcio>=1.78.0", "protobuf>=6.31.1,<7"]
@@ -64,7 +66,7 @@ all-adapters = [
     "neo4j>=6",
     "real_ladybug>=0.14.1",
     "python-arango>=8.3",
-    "grafeo>=0.5.44,<0.7",
+    "grafeo>=0.6.0b1,<0.7",
     "grpcio>=1.78.0",
     "protobuf>=6.31.1,<7",
     "FalkorDB>=1.4.0",

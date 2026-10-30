@@ -55,7 +55,7 @@ FALLBACKS: dict[str, dict[str, set[str]]] = {
     "embedded": {
         "dfs": {"traverse_dfs"},
         "ldbc_lcc": {"local_clustering_coefficient"},  # Grafeo's LCC is undirected
-        "snb_ic1": {"traverse_bfs"},  # BFS over one edge type
+        # snb_ic1 (BFS over one edge type) is native: grafeo 0.6 runs it on a projection
         "vector_scan_knn": {"vector_scan"},
         "vector_scan_batch_search": {"vector_scan"},
         "vector_scan_recall": {"vector_scan"},

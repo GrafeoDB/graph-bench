@@ -31,7 +31,7 @@ import functools
 import math
 import threading
 from collections import deque
-from collections.abc import Iterator, Sequence
+from collections.abc import Generator, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -391,7 +391,7 @@ class GrafeoServerAdapter(BaseAdapter):
         return self._run(gql, parameters=parameters).records()
 
     @contextmanager
-    def _transaction(self) -> Iterator[str]:
+    def _transaction(self) -> Generator[str]:
         """Run the block in a read-write transaction: commit on success, roll back on error."""
         pb = _gwp().pb
         sid = self._get_session_id()

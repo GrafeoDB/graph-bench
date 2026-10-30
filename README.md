@@ -198,19 +198,38 @@ uv sync --extra grafeo --extra grafeo-server --extra cli
 
 ### Grafeo versions
 
-The Grafeo adapters are tested against **grafeo 0.5.44** and accept `grafeo>=0.5.44,<0.7`. Grafeo is
-before 1.0, so a new minor version may break the adapters: the requirement pins the minor versions that are
-tested, and becomes `grafeo~=0.6.0` once grafeo 0.6.0 is released (write all three parts: `grafeo~=0.6`
-would also accept 0.7). A weekly CI run tests the newest grafeo on PyPI, pre-releases included.
+graph-bench 0.3 targets **grafeo 0.6**: the adapters are tested against grafeo 0.6.0b1 and require
+`grafeo>=0.6.0b1,<0.7`, which becomes `grafeo~=0.6.0` once grafeo 0.6.0 is released (write all three parts:
+`grafeo~=0.6` would also accept 0.7). Grafeo is before 1.0, so a new minor version may break the adapters:
+the requirement pins the minor version that is tested. A weekly CI run tests the newest grafeo on PyPI,
+pre-releases included. Results measured with grafeo 0.5.x (graph-bench 0.2) are not comparable one to one:
+0.6 has a new storage format, checkpoints and planner, and changes some results (see below).
 
 - **Embedded** (`-d grafeo`): in memory by default. `GRAPH_BENCH_GRAFEO_PATH` selects a database file; a path
-  without the `.grafeo` suffix gets it, because grafeo 0.6 replaces the WAL-directory layout with a single
-  file. A checkpoint writes `<file>.checkpoint` first, so keep free disk space for a second copy.
+  without the `.grafeo` suffix gets it, because every grafeo 0.6 database is a single file (with its WAL in
+  `<file>.wal/` while it is open), and opening a directory that is not a 0.5.x database fails. Checkpoints are
+  copy-on-write, so keep free disk space for a second copy of the data. A file written by grafeo 0.5.x is
+  migrated on its first read-write open, which keeps the old file as `<file>.pre-0.6`; 0.5.x cannot open the
+  migrated file.
 - **Server** (`-d grafeo-server`): GQL over GWP to a `grafeo/grafeo-server:<version>-gwp` or `-full` image,
   at `GRAPH_BENCH_GRAFEO_SERVER_URI` (default `localhost:7688`, grafeo-server's GWP port).
 
 A query that fails raises (`grafeo.GrafeoError`, or `GrafeoServerError` for the server), so its benchmark is
 recorded as FAILED instead of being timed.
+
+What grafeo 0.6 changes for the benchmarks:
+
+- **Native on embedded Grafeo**: a BFS or shortest path restricted to one edge type (`snb_ic1`) runs Grafeo's
+  own algorithm on a projection of that edge type (created and dropped inside the timed call); with 0.5.x it
+  was a fallback. Still a fallback: the depth-limited `dfs` (the native DFS has no depth limit) and `ldbc_lcc`
+  (Grafeo computes the undirected coefficient only, which `lcc_undirected` measures).
+- **Query semantics**: in GQL a number with a point (`1.5`) is an exact decimal, integer overflow and division
+  by zero fail the query instead of returning null, `ORDER BY` puts nulls last in both directions, and a
+  `WHERE` right after `INSERT`, `CREATE`, `MERGE` or `DELETE` is an error. The benchmark queries use none of
+  these forms, but a custom query passed to `execute_query` may.
+- **Algorithm results**: algorithm results come in node-id order, k-core returns core numbers, Louvain merges
+  communities level by level, and clustering coefficients and triangle counts ignore self-loops. The
+  correctness tests check the native results against NetworkX references on a small graph.
 
 ## CLI Usage
 

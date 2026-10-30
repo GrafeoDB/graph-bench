@@ -113,10 +113,12 @@ def test_template_shows_measured_support(collector: ResultCollector) -> None:
 
 
 def test_report_command_reads_labels_back(collector: ResultCollector, tmp_path: Path) -> None:
+    import typer
     from typer.testing import CliRunner
 
     from graph_bench.cli.main import app
 
+    assert isinstance(app, typer.Typer)
     results = tmp_path / "results.json"
     JsonExporter().export(collector, results)
     report = tmp_path / "report.md"

@@ -151,11 +151,10 @@ def exact_top_k(
     similarity = query @ data.T
     top = min(k, len(ids))
     best = np.argpartition(-similarity, top - 1, axis=1)[:, :top]
-    truth = []
-    for row, candidates in zip(similarity, best, strict=True):
-        ordered = candidates[np.argsort(-row[candidates])]
-        truth.append([ids[i] for i in ordered])
-    return truth
+    # Order each query's candidates by descending similarity.
+    order = np.argsort(-np.take_along_axis(similarity, best, axis=1), axis=1)
+    ranked = np.take_along_axis(best, order, axis=1)
+    return [[ids[i] for i in row] for row in ranked.tolist()]
 
 
 def recall_at_k(results: Sequence[Sequence[str]], truth: Sequence[Sequence[str]], k: int) -> float:
