@@ -7,9 +7,14 @@ Lines, appended to `--out` and flushed one by one:
 
 - `{"kind": "database", <DatabaseInfo fields>}`, always first;
 - `{"kind": "start", "id": ...}` before each case and each reported load, so a supervisor knows what hung or crashed;
-- `{"kind": "progress", "id": ...}` after a case's preflight, after each of its warm-up and timed runs, and after
-  each load iteration (`id` is null for an unreported load), so a supervisor can tell a long case from a hang;
-- `{"kind": "entry", "id": ..., "status": ..., ...}` with a load's `load_ns` or a case's result.
+- `{"kind": "run", "id": ...}` immediately before a case's preflight database call, and a `progress` line
+  immediately after it returns (or raises), before any harness work: the window between the two is the database
+  call alone, which is what a supervisor's in-run cutoff times;
+- `{"kind": "progress", "id": ...}` after a case's preflight call, after each of its warm-up and timed runs, and
+  after each load iteration (`id` is null for an unreported load), so a supervisor can tell a long case from a
+  hang;
+- `{"kind": "entry", "id": ..., "status": ..., ...}` with a case's result, or a load's `load_ns` and its count
+  check (`answer` and `detail`, see `load_entry`).
 
 The canonical answers of each case go to `<out dir>/<out stem>/answers/<sanitized id>.json`.
 """
@@ -94,14 +99,21 @@ class Preflight:
         return self.status == "ok" and self.answer == "agree"
 
 
-def preflight(case: Case, db: Database, reference_file: Path, *, budget_s: float) -> Preflight:
+def _no_emit(line: dict[str, Any]) -> None:
+    return None
+
+
+def preflight(case: Case, db: Database, reference_file: Path, *, budget_s: float, emit: Emit = _no_emit) -> Preflight:
     """Run a case once, wall-clocked, check its answers and apply the time budget.
 
     `NotSupported` gives `not_supported`, any other exception `failed`; a run slower than `budget_s` gives
     `timeout` (its answers are still checked); a wrong answer keeps status `ok` with answer `disagree`.
+    The database call alone is bracketed by a `run` line before it and a `progress` line after it (both outside
+    the clock), so the reference loading and the answer check never count towards a supervisor's cutoff.
     """
     bindings, _ = catalog.load_reference(reference_file)
     result = Preflight(make_run(db, case.item, bindings), bindings)
+    emit({"kind": "run", "id": case.bench_id})
     try:
         start = time.perf_counter_ns()
         raw = result.run()
@@ -112,6 +124,8 @@ def preflight(case: Case, db: Database, reference_file: Path, *, budget_s: float
     except Exception as exc:
         result.status, result.error = "failed", message(exc)
         return result
+    finally:
+        emit({"kind": "progress", "id": case.bench_id})
     try:
         result.answers = canonical_answers(case.item, raw)
         result.answer, result.detail = check_case(case, result.answers, reference_file)
@@ -161,13 +175,65 @@ def prepare_environment(db_cls: type[Database]) -> str | None:
     return None
 
 
+def count_check(db: Database, dataset: Dataset) -> tuple[AnswerVerdict, str | None]:
+    """Compare the loaded node and edge counts (`Database.counts`) with the dataset's; the verdict and a detail.
+
+    `NotSupported` leaves the load `unchecked`; another exception propagates.
+    """
+    try:
+        nodes, edges = db.counts()
+    except NotSupported:
+        return "unchecked", None
+    if (nodes, edges) == (dataset.node_count, dataset.edge_count):
+        return "agree", None
+    expected = f"expected {dataset.node_count} nodes, {dataset.edge_count} edges"
+    return "disagree", f"loaded {nodes} nodes, {edges} edges; {expected}"
+
+
+@dataclass
+class LoadCheck:
+    """The count check over a load's iterations: the first disagreement or counting error is kept."""
+
+    answer: AnswerVerdict = "unchecked"
+    detail: str | None = None
+    error: str | None = None
+
+    def add(self, db: Database, dataset: Dataset) -> None:
+        """Check one loaded instance (untimed), unless an earlier one already disagreed or failed to count."""
+        if self.error is not None or self.answer == "disagree":
+            return
+        try:
+            self.answer, self.detail = count_check(db, dataset)
+        except Exception as exc:
+            self.error = f"counting the loaded data: {message(exc)}"
+
+
+def load_entry(load_id: str, load_ns: int, check: LoadCheck) -> dict[str, Any]:
+    """A load's entry line: `ok` with the count verdict, or `failed` when counting raised.
+
+    A counting error fails only the load entry: the load itself worked, so the dataset's cases still run on it.
+    """
+    entry: dict[str, Any] = {
+        "kind": "entry",
+        "id": load_id,
+        "status": "ok",
+        "load_ns": load_ns,
+        "answer": check.answer,
+        "detail": check.detail,
+    }
+    if check.error is not None:
+        entry["status"], entry["error"] = "failed", check.error
+    return entry
+
+
 @dataclass
 class Loaded:
-    """A loaded instance, its directory and the median load time."""
+    """A loaded instance, its directory, the median load time and the count check of the loads (if run)."""
 
     db: Database
     workdir: Path
     load_ns: int
+    check: LoadCheck
 
 
 def load(
@@ -177,12 +243,16 @@ def load(
     threads: int | None,
     iterations: int,
     progress: Callable[[], None] = lambda: None,
+    *,
+    check: bool = False,
 ) -> Loaded:
     """Load `iterations` times, each into a fresh instance in a fresh directory; keep the last one.
 
-    `progress` is called after each load, outside its clock.
+    `progress` is called after each load, outside its clock. With `check`, each loaded instance's node and edge
+    counts are checked right after its load, outside the clock too (`LoadCheck`).
     """
     times: list[int] = []
+    counted = LoadCheck()
     previous: tuple[Database, Path] | None = None
     for i in range(iterations):
         if previous is not None:
@@ -198,9 +268,11 @@ def load(
             remove(db_dir)
             raise
         times.append(time.perf_counter_ns() - start)
+        if check:
+            counted.add(db, dataset)
         progress()
     assert previous is not None
-    return Loaded(previous[0], previous[1], int(statistics.median(times)))
+    return Loaded(previous[0], previous[1], int(statistics.median(times)), counted)
 
 
 def database_line(db_cls: type[Database], workdir: Path, threads: int | None) -> dict[str, Any]:
@@ -244,14 +316,14 @@ class _Settings:
 def start_case(
     case: Case, db: Database, base: Path, out: Path | None, budget_s: float, emit: Emit
 ) -> tuple[Preflight, dict[str, Any]]:
-    """Emit the case's `start` line, run its preflight, emit `progress` and build (not emit) its entry line.
+    """Emit the case's `start` line, run its preflight and build (not emit) its entry line.
 
-    The canonical answers go to `answers_path(out, ...)` when `out` is given. The entry has no timing yet.
+    The preflight emits the `run` and `progress` lines around its database call. The canonical answers go to
+    `answers_path(out, ...)` when `out` is given. The entry has no timing yet.
     """
     emit({"kind": "start", "id": case.bench_id})
     reference_file = catalog.reference_path(case.item, case.scale, base=base)
-    pf = preflight(case, db, reference_file, budget_s=budget_s)
-    emit({"kind": "progress", "id": case.bench_id})
+    pf = preflight(case, db, reference_file, budget_s=budget_s, emit=emit)
     entry = case_entry(
         case,
         status=pf.status,
@@ -360,7 +432,8 @@ def _run_dataset(
         try:
             progress = {"kind": "progress", "id": load_id}
             iterations = settings.selection.load_iterations
-            loaded = load(db_cls, dataset, workdir, threads, iterations, lambda: emit(progress))
+            check = load_id is not None
+            loaded = load(db_cls, dataset, workdir, threads, iterations, lambda: emit(progress), check=check)
         except Exception as exc:
             text = message(exc)
     if loaded is None:  # `text` holds the setup or load error
@@ -371,7 +444,7 @@ def _run_dataset(
             emit(case_entry(case, status="failed", error=f"load failed: {text}"))
         return
     if load_id is not None:
-        emit({"kind": "entry", "id": load_id, "status": "ok", "load_ns": loaded.load_ns})
+        emit(load_entry(load_id, loaded.load_ns, loaded.check))
     try:
         for case in cases:
             _run_case(case, loaded.db, base, settings, emit)

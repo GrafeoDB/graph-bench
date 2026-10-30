@@ -6,7 +6,7 @@ import networkx
 import pytest
 
 from graph_bench.datasets import cache, graphalytics, snb
-from graph_bench.datasets.schema import Dataset
+from graph_bench.datasets.schema import Dataset, EdgeTable, NodeTable
 
 
 @pytest.fixture(scope="module")
@@ -35,6 +35,18 @@ def test_schema_roundtrip(small: Dataset) -> None:
     assert isinstance(next(iter(small.rows(knows)))["creationDate"], int)
 
 
+def _rows(ds: Dataset, tables: tuple[NodeTable, ...] | tuple[EdgeTable, ...]) -> int:
+    return sum(1 for t in tables for _ in ds.rows(t))
+
+
+def test_expected_counts_match_the_csvs(small: Dataset, tmp_path: Path) -> None:
+    """The node and edge counts a load is checked against are recorded with the CSVs, in schema.json."""
+    assert (small.node_count, small.edge_count) == (_rows(small, small.nodes), _rows(small, small.edges))
+    ga = graphalytics.generate(small, tmp_path / "ga")
+    assert (ga.node_count, ga.edge_count) == (_rows(ga, ga.nodes), _rows(ga, ga.edges))
+    assert Dataset.load(ga.root) == ga
+
+
 def test_edge_tables_split_by_endpoint_labels(small: Dataset) -> None:
     reply = {(e.src, e.dst) for e in small.edges if e.type == "REPLY_OF"}
     assert reply == {("Comment", "Post"), ("Comment", "Comment")}
@@ -44,13 +56,26 @@ def test_edge_tables_split_by_endpoint_labels(small: Dataset) -> None:
 
 def test_snb_graph_view(small: Dataset) -> None:
     g = snb.SnbGraph.from_dataset(small)
-    assert len(g.nodes["Person"]) == 1_000
+    assert len(g.nodes["Person"]) == 1_001  # 1,000 plus the isolated person
     assert sum(len(v) for v in g.out["KNOWS"].values()) == 18_000
     assert sum(len(v) for v in g.incoming["KNOWS"].values()) == 18_000
     dst, props = (
         g.out["KNOWS"]["person_0"][0] if "person_0" in g.out["KNOWS"] else next(iter(g.out["KNOWS"].values()))[0]
     )
     assert dst.startswith("person_") and isinstance(props["creationDate"], int)
+
+
+def test_one_isolated_person(small: Dataset) -> None:
+    """The last person has no edges at all, so IC13 has an unreachable pair; the rest of the data is unchanged."""
+    g = snb.SnbGraph.from_dataset(small)
+    touched = {
+        node
+        for adjacency in (g.out, g.incoming)
+        for edges in adjacency.values()
+        for node in edges
+        if node in g.nodes["Person"]
+    }
+    assert set(g.nodes["Person"]) - touched == {"person_1000"}
 
 
 def test_graphalytics_is_symmetric(small: Dataset, tmp_path: Path) -> None:
@@ -62,7 +87,7 @@ def test_graphalytics_is_symmetric(small: Dataset, tmp_path: Path) -> None:
     assert len(as_set) == len(pairs)
     assert all((b, a) in as_set for a, b in as_set)
     assert all(a != b for a, b in as_set)
-    assert len(list(ga.rows(ga.nodes[0]))) == 1_000
+    assert len(list(ga.rows(ga.nodes[0]))) == 1_001
 
 
 def test_key_changes_with_generator_source(monkeypatch: pytest.MonkeyPatch) -> None:

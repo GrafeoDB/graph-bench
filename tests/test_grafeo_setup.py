@@ -13,13 +13,16 @@ SHA = "a" * 40
 
 
 class Recorder:
-    def __init__(self) -> None:
+    def __init__(self, status: str = "") -> None:
         self.commands: list[list[str]] = []
+        self.status = status  # `git status --porcelain` output: empty for a clean checkout
 
     def __call__(self, cmd: list[str]) -> str:
         self.commands.append(cmd)
         if grafeo_setup.VERSION_SCRIPT in cmd:
             return "0.6.0\n"
+        if cmd[:1] == ["git"] and "status" in cmd:
+            return self.status
         if cmd[:1] == ["git"]:
             return SHA + "\n"
         return ""
@@ -90,6 +93,17 @@ def test_install_checkout_builds_then_installs(tmp_path: Path) -> None:
     ]
     assert ["git", "-C", str(src), "rev-parse", "HEAD"] in run.commands
     assert info == {"version": "0.6.0", "source": str(src), "sha": SHA}
+
+
+def test_install_dirty_checkout_marks_the_sha(tmp_path: Path) -> None:
+    """Uncommitted changes to tracked files: the sha alone would not identify the build."""
+    state = tmp_path / "state"
+    (state / "wheels").mkdir(parents=True)
+    (state / "wheels" / "grafeo-1.whl").write_bytes(b"x")
+    run = Recorder(status=" M crates/grafeo-engine/src/lib.rs\n")
+    info = install_grafeo(tmp_path, run=run, state_dir=state)
+    assert info["sha"] == SHA + "-dirty"
+    assert ["git", "-C", str(tmp_path), "status", "--porcelain", "--untracked-files=no"] in run.commands
 
 
 def test_checkout_without_nested_bindings_uses_root(tmp_path: Path) -> None:

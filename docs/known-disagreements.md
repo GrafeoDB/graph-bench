@@ -17,7 +17,8 @@ entries may fail without failing the test.
 - Binding: `{"person1Id": "person_0", "person2Id": "person_549"}` (the first of 10; none of them finishes).
 - Grafeo 0.6.0 answer: none. The first binding runs for more than 60 s (more than 120 s in the `bench` run)
   and the worker is stopped, so the entry is `timeout` (⏱).
-- Reference answer: `[[1]]` (BFS over KNOWS in both directions); every binding's answer is 1 or 2.
+- Reference answer: `[[1]]` (BFS over KNOWS in both directions); the first 8 bindings' answers are 1 or 2,
+  binding 8 (`person_0` and the isolated `person_1000`) is -1 and binding 9 (`person_549` with itself) is 0.
 - Cause: Grafeo engine (query planner). `explain_cypher` shows the `OPTIONAL MATCH` becoming a `LeftJoin` whose
   right side is `ShortestPath (p1 -> p2)` over `NodeScan (p1:*)` and `NodeScan (p2:*)`, with the `id` filter on
   `p2` applied after it. `p1` and `p2` are not taken from the left side, so it computes shortest paths for all
@@ -116,6 +117,31 @@ queries agree afterwards), but slower than the batch API. A load entry has no an
   LadybugDB documents no such step. It loads the extension in the first algorithm call (untimed preflight), so the
   load and BFS are still measured; once the extension loads, these entries are measured and checked as usual.
 
+## LadybugDB: IC13 returns NULL for an unreachable pair (OPTIONAL MATCH path)
+
+- id: ladybug/snb_ic13
+- Query: `snb_ic13` (IC13 shortest path), LadybugDB override (`(p1)-[:KNOWS* SHORTEST]-(p2)` in place of
+  `shortestPath(...)`, the rest as in the shared text):
+
+  ```cypher
+  MATCH (p1:Person {id: $person1Id}), (p2:Person {id: $person2Id})
+  OPTIONAL MATCH path = (p1)-[:KNOWS* SHORTEST]-(p2)
+  RETURN CASE WHEN p1.id = p2.id THEN 0 WHEN path IS NULL THEN -1 ELSE length(path) END AS shortestPathLength
+  ```
+
+- Dataset: `snb-small`, which has one isolated person (`person_1000`, no edges at all) so that IC13 has a pair
+  without a path.
+- Binding: `{"person1Id": "person_0", "person2Id": "person_1000"}` (binding 8 of 10). The other 9 agree,
+  including the pair at distance 0 (`person_549` with itself).
+- LadybugDB 0.22.1 answer: `[[null]]`.
+- Reference answer: `[[-1]]`, the LDBC IC13 definition for "no path" (and openCypher: a variable of an
+  `OPTIONAL MATCH` without a match is null).
+- Cause: LadybugDB engine. When the optional pattern has no match, the named path is not null: `RETURN path`
+  gives a partial path holding only `p1` (`{'_NODES': [<person_0>], '_RELS': []}`), `path IS NULL` is false and
+  `length(path)` is null, so the `CASE` falls through to `length(path)`. The same happens with a bounded
+  `[:KNOWS*1..3]` pattern. A relationship variable is null as expected
+  (`OPTIONAL MATCH (p1)-[k:KNOWS]-(p2) RETURN k IS NULL` gives true). The query is left as it is.
+
 ## LadybugDB: slow point lookups under the 10x budget rule (not allowlisted)
 
 These cases agree with the reference in every run. In a `bench` run next to Grafeo they are marked `timeout`
@@ -145,8 +171,9 @@ would likely show them.
   in both directions, vertex 3 isolated), loaded and run through the adapter. LadybugDB 0.15.3 gives vertex 3
   (1-d)/N = 0.0375 and the ranks sum to 0.79: the rank of a vertex without out-edges is not redistributed. The
   reference (NetworkX, as LDBC Graphalytics specifies) gives 0.0476 and sums to 1; Grafeo agrees with it.
-  `graphalytics-small` has no vertex without out-edges (every `E` edge is stored in both directions), so
-  `graphalytics_pr` agrees there. Cause: LadybugDB engine (ALGO `page_rank`).
+  `graphalytics-small` now has one isolated vertex (1000, from the isolated SNB person that IC13 needs), so once
+  the ALGO extension loads, `graphalytics_pr` is expected to disagree there; it is allowlisted today for the
+  extension failure above. Cause: LadybugDB engine (ALGO `page_rank`).
 - WCC iteration bound (`graphalytics_wcc`). `weakly_connected_components` stops after `maxIterations`, default
   100 (https://docs.ladybugdb.com/extensions/algo/wcc), so a component whose diameter needs more rounds would be
   split. The adapter passes `maxIterations := 1000`, the bound it also gives PageRank; a component needing more

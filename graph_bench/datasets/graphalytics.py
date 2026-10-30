@@ -31,6 +31,6 @@ def generate(snb: Dataset, root: Path) -> Dataset:
         w = csv.writer(fh, lineterminator="\n")
         w.writerow(["src", "dst"])
         w.writerows(sorted(pairs))
-    ds = Dataset("graphalytics", snb.scale, root, (node,), (edge,))
+    ds = Dataset("graphalytics", snb.scale, root, (node,), (edge,), len(vertices), len(pairs))
     ds.save()
     return ds

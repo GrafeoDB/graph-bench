@@ -191,6 +191,30 @@ def test_summary_footer_lines_are_separate_paragraphs(results: Results) -> None:
     assert len(footer) == 8
 
 
+def test_summary_label_keeps_dirty_marker(results: Results) -> None:
+    results.grafeo["sha"] = "abcdef1234567890-dirty"
+    assert "Grafeo 0.6.1 (abcdef1-dirty)" in render_summary(results)
+
+
+def test_summary_n_skips_failed_entries_that_agreed(results: Results) -> None:
+    """An entry whose preflight agreed but whose timed runs then failed (✗) is not in n."""
+    results.entries += [
+        _entry("algorithms", "graphalytics_wcc", "grafeo", "failed", "agree", 3.0),
+        _entry("algorithms", "graphalytics_wcc", "ladybug", "ok", "agree", 3.0),
+    ]
+    assert _row(render_summary(results), "Algorithms") == ["2", "1 / 2", "1.5"]
+
+
+def test_summary_n_counts_loads_unless_their_counts_disagree(results: Results) -> None:
+    results.entries += [
+        _entry("load", "load_snb", "grafeo", "ok", "agree", load_s=0.131),
+        _entry("load", "load_snb", "ladybug", "ok", "unchecked", load_s=0.165),
+        _entry("load", "load_graphalytics", "grafeo", "ok", "disagree", load_s=0.01),
+        _entry("load", "load_graphalytics", "ladybug", "ok", "agree", load_s=0.165),
+    ]
+    assert _row(render_summary(results), "Load") == ["2", "1 / 1", "1"]
+
+
 def test_summary_load_ranks_by_load_time(results: Results) -> None:
     results.entries += [
         _entry("load", "load_snb", "grafeo", "ok", "unchecked", load_s=0.131),

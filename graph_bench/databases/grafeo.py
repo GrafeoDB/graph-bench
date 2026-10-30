@@ -12,6 +12,10 @@ from graph_bench.types import Model
 
 CHUNK = 10_000
 
+# The load check (`counts`): every node and every relationship, counted with Cypher.
+COUNT_NODES = "MATCH (n) RETURN count(n) AS c"
+COUNT_EDGES = "MATCH ()-[r]->() RETURN count(r) AS c"
+
 
 def _chunks[T](items: Iterator[T], size: int) -> Iterator[list[T]]:
     while chunk := list(islice(items, size)):
@@ -76,6 +80,12 @@ class GrafeoDatabase(Database):
         result = self.db.execute_cypher(text, dict(params))
         columns = result.columns
         return [tuple(row[c] for c in columns) for row in result]
+
+    def counts(self) -> tuple[int, int]:
+        """Nodes and edges loaded, counted with `COUNT_NODES` and `COUNT_EDGES` through `execute_cypher`."""
+        nodes = self.query(COUNT_NODES, {})[0][0]
+        edges = self.query(COUNT_EDGES, {})[0][0]
+        return int(nodes), int(edges)
 
     def algorithm(self, name: str, params: Mapping[str, Any]) -> dict[Any, Any]:
         algorithms = self.db.algorithms

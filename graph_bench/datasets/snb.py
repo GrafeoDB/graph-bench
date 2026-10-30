@@ -2,6 +2,8 @@
 
 Edges keep LDBC direction only; reverse helper edges (CREATED, IN_FORUM, HAS_REPLY) are dropped.
 Dates are INT64 epoch milliseconds (UTC). Output is deterministic for a given (scale, seed).
+One extra person, `person_<persons>`, has no edges at all, so IC13 has a pair without a path. It is generated
+after everything else, so the rest of the data is what it would be without it.
 """
 
 import csv
@@ -14,7 +16,7 @@ from typing import Any
 
 from graph_bench.datasets.schema import Column, Dataset, EdgeTable, NodeTable
 
-# (persons, knows edges), from legacy sf01 / sf1.
+# (persons, knows edges), from legacy sf01 / sf1; each scale also gets one isolated person on top.
 SCALES: dict[str, tuple[int, int]] = {"small": (1_000, 18_000), "medium": (10_000, 180_000)}
 
 EDGE_TYPES = (
@@ -173,28 +175,29 @@ class _Gen:
     def run(self) -> None:
         self._gen_nodes()
         self._gen_edges()
+        # Last, so no other row or edge changes: a person without any edge (IC13's unreachable pair).
+        self.nodes["Person"].append(self._person(self.persons))
+
+    def _person(self, i: int) -> dict[str, Any]:
+        r = self.rng
+        gender = "male" if r.random() < 0.5 else "female"
+        names = FIRST_NAMES_MALE if gender == "male" else FIRST_NAMES_FEMALE
+        birthday = _ms(datetime(1940, 1, 1) + timedelta(days=r.randint(0, 30000)))
+        return {
+            "id": f"person_{i}",
+            "firstName": r.choice(names),
+            "lastName": r.choice(LAST_NAMES),
+            "gender": gender,
+            "birthday": birthday,
+            "creationDate": self._date(datetime(2010, 1, 1)),
+            "locationIP": f"{r.randint(1, 255)}.{r.randint(0, 255)}.{r.randint(0, 255)}.{r.randint(0, 255)}",
+            "browserUsed": r.choice(BROWSERS),
+        }
 
     def _gen_nodes(self) -> None:
         r = self.rng
         start = datetime(2010, 1, 1)
-        persons = []
-        for i in range(self.persons):
-            gender = "male" if r.random() < 0.5 else "female"
-            names = FIRST_NAMES_MALE if gender == "male" else FIRST_NAMES_FEMALE
-            birthday = _ms(datetime(1940, 1, 1) + timedelta(days=r.randint(0, 30000)))
-            persons.append(
-                {
-                    "id": f"person_{i}",
-                    "firstName": r.choice(names),
-                    "lastName": r.choice(LAST_NAMES),
-                    "gender": gender,
-                    "birthday": birthday,
-                    "creationDate": self._date(start),
-                    "locationIP": f"{r.randint(1, 255)}.{r.randint(0, 255)}.{r.randint(0, 255)}.{r.randint(0, 255)}",
-                    "browserUsed": r.choice(BROWSERS),
-                }
-            )
-        self.nodes["Person"] = persons
+        self.nodes["Person"] = [self._person(i) for i in range(self.persons)]
         self.nodes["City"] = [{"id": f"city_{i}", "name": c, "country": k} for i, (c, k) in enumerate(CITIES)]
         self.nodes["Tag"] = [{"id": f"tag_{i}", "name": n} for i, n in enumerate(TAGS)]
         self.nodes["Country"] = [{"id": f"country_{i}", "name": n} for i, n in enumerate(self.countries)]
@@ -349,7 +352,8 @@ def generate(scale: str, root: Path, seed: int = 42) -> Dataset:
         )
         edge_tables.append(table)
 
-    ds = Dataset("snb", scale, root, tuple(node_tables), tuple(edge_tables))
+    node_count = sum(len(gen.nodes[label]) for label in _NODE_SCHEMAS)
+    ds = Dataset("snb", scale, root, tuple(node_tables), tuple(edge_tables), node_count, len(gen.edges))
     ds.save()
     return ds
 

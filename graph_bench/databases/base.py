@@ -68,6 +68,15 @@ class Database(ABC):
     @abstractmethod
     def query(self, text: str, params: Mapping[str, Any]) -> list[tuple[Any, ...]]: ...
 
+    def counts(self) -> tuple[int, int]:
+        """The number of nodes and edges loaded, counted through the database's own query interface; untimed.
+
+        The worker calls it right after each timed load, outside the clock, and compares it with the dataset's
+        `node_count` and `edge_count`: a mismatch makes the load ≠. The default raises `NotSupported`, which
+        leaves the load unchecked.
+        """
+        raise NotSupported("counts")
+
     def algorithm(self, name: str, params: Mapping[str, Any]) -> dict[Any, Any]:
         """Run a native graph algorithm ("bfs", "wcc" or "pr"); returns vertex id -> value."""
         raise NotSupported(name)

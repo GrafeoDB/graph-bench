@@ -1,9 +1,10 @@
 """LadybugDB adapter: the push selection agrees with the references, except the recorded known disagreements."""
 
 import contextlib
+import re
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 import pytest
 
@@ -12,6 +13,10 @@ pytest.importorskip("ladybug")
 from graph_bench.databases import get_database
 from graph_bench.datasets import cache
 from graph_bench.runner.supervisor import run_bench
+from graph_bench.types import Model
+
+# The worker's model gate error, exactly: f"model {case.item.model} not supported".
+MODEL_GATE = re.compile(f"model ({'|'.join(get_args(Model))}) not supported")
 
 pytestmark = pytest.mark.ladybug
 
@@ -32,10 +37,11 @@ def test_ladybug_push_agrees(
     for entry in entries:
         # ⊘ passes only for the worker's model gate ("model <model> not supported"): the database lacks the data
         # model. Any other ⊘ (a missing capability) must be allowlisted in docs/known-disagreements.md.
-        lacks_model = entry.status == "not_supported" and (entry.error or "").startswith("model ")
+        lacks_model = entry.status == "not_supported" and MODEL_GATE.fullmatch(entry.error or "") is not None
         if entry.benchmark in known or lacks_model:
             continue
-        good = entry.status == "ok" and (entry.category == "load" or entry.answer == "agree")
+        # A load must agree too: its node and edge counts (`counts()`) match the dataset's.
+        good = entry.status == "ok" and entry.answer == "agree"
         if not good:
             failing.append(f"{entry.id}: status={entry.status} answer={entry.answer} error={entry.error}")
             failing.append(f"    detail={entry.detail}")

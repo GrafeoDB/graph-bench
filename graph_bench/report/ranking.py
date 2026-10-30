@@ -1,8 +1,9 @@
 """Ranking of results: per benchmark, the databases with a correct, in-budget result, fastest first.
 
-A result is ranked when its status is `ok` and its answer `agree`. Loads have no answer check (their answer is
-`unchecked`), so a load is ranked when its status is `ok`, by `load_ns`. Other results rank by `timing.median_ns`
-in bench mode and by `preflight_ns` in codspeed mode, where timings are null.
+A result is ranked when its status is `ok` and its answer `agree`. A load's answer is its node and edge count
+check (`unchecked` when the database has no `counts()`), so a load is ranked when its status is `ok` and its
+answer is not `disagree`, by `load_ns`. Other results rank by `timing.median_ns` in bench mode and by
+`preflight_ns` in codspeed mode, where timings are null.
 """
 
 import math

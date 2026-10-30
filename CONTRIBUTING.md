@@ -83,6 +83,10 @@ class MyDatabase(Database):
         """Run one query and return its rows as tuples of scalars."""
         ...
 
+    def counts(self) -> tuple[int, int]:
+        """The number of nodes and edges loaded, counted through the database's own query interface; untimed."""
+        ...
+
     def algorithm(self, name: str, params: Mapping[str, Any]) -> dict[Any, Any]:
         """Native "bfs", "wcc" or "pr": vertex id -> value. Leave it out (NotSupported) without a native one."""
         raise NotSupported(name)
@@ -99,6 +103,10 @@ class MyDatabase(Database):
 - Queries use the shared openCypher text (`dialect = "cypher"`). Where the database needs another text, give it
   its own `dialect` and add that key to the query's `text` mapping in `graph_bench/suites/snb.py`, with the
   same meaning and the same answer.
+- `counts()` checks the load: the worker calls it right after each timed load, outside the clock, and a
+  mismatch with the dataset's node and edge counts makes the load ≠. Count with a documented query (e.g. Cypher
+  `MATCH (n) RETURN count(n)` and `MATCH ()-[r]->() RETURN count(r)`). Without it (the default raises
+  `NotSupported`) the load stays unchecked.
 - Raise `NotSupported` for a capability the database lacks; the case is reported as ⊘.
 - Add the package as an optional extra in `pyproject.toml` (and to `embedded` when it installs from PyPI on
   Linux, macOS and Windows), then run `uv lock`.
@@ -119,8 +127,8 @@ A database outside this repository can be tried without registering it:
 
 Add `tests/test_db_<name>.py` following `tests/test_db_ladybug.py`: `pytest.importorskip` the driver, run
 `run_bench("push", ["<name>"], ...)` on the `push_data_dir` fixture, and require every entry to be `ok` with an
-`agree` answer (loads have no answer), except `not_supported` entries and the ids recorded for the database in
-`docs/known-disagreements.md`. Add a test of the thread settings (`process_env`, `info().threads_note`).
+`agree` answer (for a load, its node and edge counts), except the worker's model gate (`not_supported` with
+exactly "model <model> not supported") and the ids recorded for the database in `docs/known-disagreements.md`. Add a test of the thread settings (`process_env`, `info().threads_note`).
 
 ### 4. Record disagreements
 

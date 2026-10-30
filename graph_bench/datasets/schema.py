@@ -48,16 +48,26 @@ def _cols_from_json(items: list[dict[str, str]]) -> tuple[Column, ...]:
 
 @dataclass(frozen=True)
 class Dataset:
+    """A directory of CSV files and its `schema.json`.
+
+    `node_count` and `edge_count` are the rows of all node and all edge CSVs, recorded when the CSVs are written;
+    a load is checked against them (`Database.counts`).
+    """
+
     name: str
     scale: str
     root: Path
     nodes: tuple[NodeTable, ...]
     edges: tuple[EdgeTable, ...]
+    node_count: int
+    edge_count: int
 
     def save(self) -> None:
         doc = {
             "name": self.name,
             "scale": self.scale,
+            "node_count": self.node_count,
+            "edge_count": self.edge_count,
             "nodes": [
                 {"label": n.label, "file": n.file, "columns": [_col_to_json(c) for c in n.columns]} for n in self.nodes
             ],
@@ -82,7 +92,7 @@ class Dataset:
         edges = tuple(
             EdgeTable(e["type"], e["src"], e["dst"], _cols_from_json(e["columns"]), e["file"]) for e in doc["edges"]
         )
-        return cls(doc["name"], doc["scale"], root, nodes, edges)
+        return cls(doc["name"], doc["scale"], root, nodes, edges, doc["node_count"], doc["edge_count"])
 
     def _id_cast(self, label: str) -> Any:
         for n in self.nodes:

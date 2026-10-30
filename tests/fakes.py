@@ -3,22 +3,34 @@
 Behaviour flags, a comma list in `GRAPH_BENCH_FAKE` (FakeDatabase), or `GRAPH_BENCH_FAKE2` to `GRAPH_BENCH_FAKE4`
 (FakeDatabase2 to FakeDatabase4):
 `crash:<item_id>` exits the process with code 3, `crash_soft:<item_id>` raises RuntimeError, `hang:<item_id>`
-sleeps an hour, `slow:<item_id>` sleeps 0.2 s per call, `wrong:<item_id>` returns a perturbed answer and
-`unsupported:<item_id>` raises NotSupported.
+sleeps an hour, `slow:<item_id>` sleeps 0.2 s per call, `slow_check:<item_id>` answers at once but returns rows
+that take 0.2 s to iterate (so the worker's answer check, not the database call, is slow), `wrong:<item_id>`
+returns a perturbed answer and `unsupported:<item_id>` raises NotSupported.
 `crash:load_<dataset>` and `hang:load_<dataset>` do the same while loading that dataset, and
 `crash_soft:environment` makes `prepare_environment` raise.
+`counts()` counts the rows of the dataset's CSVs; with `short:count_<dataset>` it reports one edge too few (a load
+that lost an edge), `unsupported:count_<dataset>` raises NotSupported and `crash_soft:count_<dataset>` raises
+RuntimeError.
 With `GRAPH_BENCH_FAKE_TRACE` set to a file, `prepare_environment` and `load` append "environment" and "load" to it.
 """
 
 import os
 import time
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from typing import Any, ClassVar
 
 from graph_bench.databases.base import Database, DatabaseInfo, NotSupported
 from graph_bench.datasets.schema import Dataset
 from graph_bench.suites import Algorithm, Query, catalog
 from graph_bench.types import Model
+
+
+class SlowRows(list[tuple[Any, ...]]):
+    """Rows that sleep 0.2 s each time they are iterated: harness work after the database call returns."""
+
+    def __iter__(self) -> Iterator[tuple[Any, ...]]:
+        time.sleep(0.2)
+        return super().__iter__()
 
 
 class FakeDatabase(Database):
@@ -41,6 +53,17 @@ class FakeDatabase(Database):
         self._trace("load")
         self._misbehave(self._flags(f"load_{dataset.name}"))
         self.dataset = dataset
+
+    def counts(self) -> tuple[int, int]:
+        assert self.dataset is not None, "counts before load"
+        ds = self.dataset
+        flags = self._flags(f"count_{ds.name}")
+        self._misbehave(flags)
+        if "unsupported" in flags:
+            raise NotSupported(f"{self.name} does not count")
+        nodes = sum(1 for table in ds.nodes for _ in ds.rows(table))
+        edges = sum(1 for table in ds.edges for _ in ds.rows(table))
+        return nodes, edges - ("short" in flags)
 
     @staticmethod
     def _trace(call: str) -> None:
@@ -91,7 +114,8 @@ class FakeDatabase(Database):
 
     def query(self, text: str, params: Mapping[str, Any]) -> list[tuple[Any, ...]]:
         item = self._item(lambda i: isinstance(i, Query) and i.text_for(self.dialect) == text)
-        return [tuple(row) for row in self._answer(item, params)]
+        rows = [tuple(row) for row in self._answer(item, params)]
+        return SlowRows(rows) if "slow_check" in self._flags(item.id) else rows
 
     def algorithm(self, name: str, params: Mapping[str, Any]) -> dict[Any, Any]:
         item = self._item(lambda i: isinstance(i, Algorithm) and i.name == name)

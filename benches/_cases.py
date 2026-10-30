@@ -26,6 +26,7 @@ from graph_bench.datasets import cache
 from graph_bench.datasets.schema import Dataset
 from graph_bench.runner.worker import (
     Emit,
+    LoadCheck,
     Loaded,
     Preflight,
     case_entry,
@@ -33,6 +34,7 @@ from graph_bench.runner.worker import (
     emitter,
     fresh_instance,
     load,
+    load_entry,
     message,
     prepare_environment,
     remove,
@@ -191,7 +193,7 @@ class Bench:
     def adopt(self, key: DataKey, db: Database, db_dir: Path) -> None:
         """Keep the instance the load test loaded last for the cases of its dataset."""
         self.release()
-        self._loaded = (key, Loaded(db, db_dir, 0))
+        self._loaded = (key, Loaded(db, db_dir, 0, LoadCheck()))
 
     def load_failed(self, key: DataKey, error: str) -> None:
         self._failed[key] = error
@@ -258,7 +260,9 @@ def run_case(benchmark: Any, bench: Bench, case: Case) -> None:
 def run_load(benchmark: Any, bench: Bench, lc: LoadCase) -> None:
     """Load the dataset `load_iterations` times, each into a fresh instance, and keep the last instance.
 
-    `load_ns` is the median of the loads this test ran, as the worker reports it; CodSpeed times them too.
+    `load_ns` is the median of the loads this test ran, as the worker reports it; CodSpeed times them too. Each
+    instance's node and edge counts are checked outside the timed target (in the next round's setup, and after the
+    last round), so a ≠ or a counting error is known only after CodSpeed measured the load.
     """
     key = (lc.dataset, lc.scale, lc.threads)
     bench.emit({"kind": "start", "id": lc.bench_id})
@@ -267,6 +271,7 @@ def run_load(benchmark: Any, bench: Bench, lc: LoadCase) -> None:
     instances: list[tuple[Database, Path]] = []
     times: list[int] = []
     datasets: list[Dataset] = []
+    check = LoadCheck()
 
     def drop() -> None:
         while instances:
@@ -276,6 +281,7 @@ def run_load(benchmark: Any, bench: Bench, lc: LoadCase) -> None:
 
     def setup() -> tuple[tuple[Database], dict[str, Any]]:
         if instances:
+            check.add(instances[-1][0], datasets[0])
             bench.emit(progress)
             drop()
         instances.append(fresh_instance(bench.db_cls, datasets[0], bench.workdir, lc.threads, len(times)))
@@ -296,10 +302,16 @@ def run_load(benchmark: Any, bench: Bench, lc: LoadCase) -> None:
         bench.load_failed(key, error)
         bench.emit({"kind": "entry", "id": lc.bench_id, "status": "failed", "error": error})
         _fail("error: ", error)
+    check.add(instances[-1][0], datasets[0])
     bench.emit(progress)
     db, db_dir = instances.pop()
     bench.adopt(key, db, db_dir)
-    bench.emit({"kind": "entry", "id": lc.bench_id, "status": "ok", "load_ns": int(statistics.median(times))})
+    entry = load_entry(lc.bench_id, int(statistics.median(times)), check)
+    bench.emit(entry)
+    if entry["status"] == "failed":
+        _fail("error: ", entry["error"])
+    if entry["answer"] == "disagree":
+        _fail("wrong answer: ", entry["detail"])
 
 
 def make_test(item: Query | Algorithm) -> Callable[..., None]:

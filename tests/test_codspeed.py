@@ -71,10 +71,16 @@ def _without_codspeed(launches: list[tuple[list[str], dict[str, str]]]) -> Any:
 def codspeed_run(
     push_data_dir: Path, tmp_path_factory: pytest.TempPathFactory
 ) -> tuple[Results, list[tuple[list[str], dict[str, str]]], Path]:
-    """`graph-bench codspeed --selection push --db fake,fake2`, with CODSPEED_PROFILE_FOLDER set."""
+    """`graph-bench codspeed --selection push --db fake,fake2`, with CODSPEED_PROFILE_FOLDER set.
+
+    The final 10x rule is switched off: here it would compare single cold preflights of two fakes, which can
+    differ by 10x at random. `test_budget_rule_is_order_independent` (test_supervisor.py) covers it in codspeed
+    mode.
+    """
     root = tmp_path_factory.mktemp("codspeed")
     launches: list[tuple[list[str], dict[str, str]]] = []
     with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(supervisor, "BUDGET_FACTOR", 1e9)
         mp.setenv("GRAPH_BENCH_DATA_DIR", str(push_data_dir))
         mp.setenv("GRAPH_BENCH_FAKE", "")
         mp.setenv("GRAPH_BENCH_FAKE2", "wrong:snb_is5")
@@ -198,6 +204,79 @@ def test_codspeed_environment_failure_fails_the_loads(push_data_dir: Path, tmp_p
     assert (entries[load_id]["status"], entries[load_id]["error"]) == ("failed", error)
     for item in ("snb_is1", "graphalytics_bfs"):
         assert (entries[_id(item)]["status"], entries[_id(item)]["error"]) == ("failed", f"load failed: {error}")
+
+
+def _junit_outcomes(junit: Path) -> dict[str, tuple[str, str]]:
+    outcomes: dict[str, tuple[str, str]] = {}
+    for case in ET.parse(junit).getroot().iter("testcase"):
+        name = case.get("name", "")
+        for kind in ("skipped", "failure", "error"):
+            node = case.find(kind)
+            if node is not None:
+                outcomes[name] = (kind, node.get("message", "").removeprefix("Failed: "))
+                break
+        else:
+            outcomes[name] = ("passed", "")
+    return outcomes
+
+
+def test_codspeed_load_count_mismatch_is_a_wrong_answer(push_data_dir: Path, tmp_path: Path) -> None:
+    junit = tmp_path / "junit.xml"
+    out = tmp_path / "gb.jsonl"
+    args = ["--db", "fake", "--selection", "push", "--gb-out", str(out), f"--junitxml={junit}"]
+    args += ["-k", "test_load_snb or test_snb_is4"]
+    proc = _pytest(args, _env(push_data_dir, "short:count_snb"))
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    outcomes = _junit_outcomes(junit)
+    kind, reason = outcomes["test_load_snb[fake-small]"]
+    assert kind == "failure"
+    assert reason.startswith("wrong answer: loaded "), reason
+    assert outcomes["test_snb_is4[fake-small]"] == ("passed", "")  # it runs on the instance the load test kept
+
+    lines = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
+    entries = {line["id"]: line for line in lines if line["kind"] == "entry"}
+    load = entries[catalog.load_id("snb", "fake", "small", 1)]
+    assert (load["status"], load["answer"]) == ("ok", "disagree")
+    assert load["detail"].startswith("loaded ") and load["load_ns"] > 0
+
+
+def _codspeed_run(tmp_path: Path) -> tuple[supervisor._Run, dict[str, supervisor._Meta]]:
+    sel = catalog.selection("push")
+    results = Results(
+        graph_bench_commit="x",
+        grafeo={"version": None, "source": "pypi", "sha": None},
+        machine={"cpu": "c", "cores": 1, "os": "o"},
+        selection="push",
+        mode="codspeed",
+        started_at="t",
+        databases={},
+    )
+    return supervisor._Run(sel, tmp_path, tmp_path, 5.0, results, supervisor.PYTEST), supervisor._expected(
+        sel, "fake", 1
+    )
+
+
+def test_codspeed_rerun_skips_a_load_with_wrong_counts(tmp_path: Path) -> None:
+    run, meta = _codspeed_run(tmp_path)
+    good, bad = catalog.load_id("graphalytics", "fake", "small", 1), catalog.load_id("snb", "fake", "small", 1)
+    run.record(meta[good].entry(good, status="ok", answer="agree", load_ns=1))
+    run.record(meta[bad].entry(bad, status="ok", answer="disagree", load_ns=1))
+    assert run._skip(meta) == [bad]
+
+
+@pytest.mark.parametrize(("code", "relaunch"), [(1, False), (3, True)])
+def test_codspeed_rerun_only_after_a_lost_session(tmp_path: Path, code: int, relaunch: bool) -> None:
+    """Exit code 1 with an open id is a harness bug in a session that ended normally: CodSpeed kept its
+    measurements, so nothing is relaunched. Another code (a crash) lost them: the passed ids run again."""
+    run, meta = _codspeed_run(tmp_path)
+    pending = _id("snb_is4")
+    for bench_id, m in meta.items():
+        if bench_id != pending:
+            run.record(m.entry(bench_id, status="ok", answer="agree"))
+    attempt = supervisor._Attempt(code=code, pending=pending)
+    assert run._settle(attempt, meta)
+    assert (run.recorded[pending].status, run.recorded[pending].error) == ("failed", f"pytest exited with code {code}")
+    assert run._again(attempt, meta) is relaunch
 
 
 def test_codspeed_rerun_remeasures_passed_cases(

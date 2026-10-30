@@ -36,13 +36,14 @@ def _tiny(root: Path, vertices: list[int], edges: list[tuple[int, int]]) -> Data
         w = csv.writer(fh, lineterminator="\n")
         w.writerow(["id"])
         w.writerows([v] for v in vertices)
+    pairs = sorted({(a, b) for a, b in edges} | {(b, a) for a, b in edges})
     with (root / "E.csv").open("w", encoding="utf-8", newline="") as fh:
         w = csv.writer(fh, lineterminator="\n")
         w.writerow(["src", "dst"])
-        w.writerows(sorted({(a, b) for a, b in edges} | {(b, a) for a, b in edges}))
+        w.writerows(pairs)
     node = NodeTable("V", (Column("id", "INT64"),), "V.csv")
     edge = EdgeTable("E", "V", "V", (), "E.csv")
-    return Dataset("graphalytics", "tiny", root, (node,), (edge,))
+    return Dataset("graphalytics", "tiny", root, (node,), (edge,), len(vertices), len(pairs))
 
 
 def test_reference_is1_matches_props(graph: SnbGraph) -> None:
@@ -77,6 +78,20 @@ def test_reference_ic13_self_and_unreachable(graph: SnbGraph) -> None:
     assert snb.reference("snb_ic13", graph, {"person1Id": a, "person2Id": friend}) == [[1]]
 
 
+def test_ic13_bindings_cover_unreachable_and_self(graph: SnbGraph) -> None:
+    """LDBC IC13 returns -1 when no path exists and 0 when person1 = person2: the bindings hit both."""
+    bindings = snb.bindings("snb_ic13", graph, 10)
+    assert len(bindings) == 10
+    answers = [snb.reference("snb_ic13", graph, b)[0][0] for b in bindings]
+    assert -1 in answers
+    assert 0 in answers
+    assert any(a > 0 for a in answers)
+    unreachable = bindings[answers.index(-1)]
+    assert "person_1000" in (unreachable["person1Id"], unreachable["person2Id"])
+    same = bindings[answers.index(0)]
+    assert same["person1Id"] == same["person2Id"]
+
+
 def test_bfs_reference_depths(tmp_path: Path) -> None:
     ds = _tiny(tmp_path, [1, 2, 3, 4], [(1, 2), (2, 3)])
     assert graphalytics.bindings("graphalytics_bfs", ds) == [{"source": 2}]
@@ -93,7 +108,7 @@ def test_wcc_reference_min_member(tmp_path: Path) -> None:
 
 def test_pr_reference_sums_to_one(prepared: dict[tuple[str, str], Dataset]) -> None:
     ranks = graphalytics.reference("graphalytics_pr", prepared[("graphalytics", "small")], {})
-    assert len(ranks) == 1_000
+    assert len(ranks) == 1_001
     assert sum(ranks.values()) == pytest.approx(1.0, abs=1e-9)
 
 

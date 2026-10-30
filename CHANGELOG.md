@@ -18,10 +18,14 @@ benchmark moves to `legacy/` untouched and is deleted once the new comparison re
   generated data (NetworkX for algorithms, the LDBC epsilon for PageRank). Each benchmark first runs once,
   untimed, where the answer check and the time budget apply; only a benchmark that passes is timed.
 - **Time budget**: 10x the average median of the 3 fastest other databases with correct answers, applied over
-  all results at the end, so the run order never decides the marker. During the run a runaway guard cuts a
-  preflight (cold first run) off at 30x the average of the 3 fastest earlier preflights, once 3 earlier results
-  exist; before that a hard cap applies (`--case-timeout`, default 600 s of worker silence). Loads are timed but
-  not answer-checked and are exempt from the budget.
+  all results at the end, so the run order never decides a marker from this final rule. During the run a
+  runaway guard cuts a preflight's database call (cold first run, harness work excluded) off at 30x the average
+  of the 3 fastest earlier preflights, once 3 earlier results exist; this guard depends on which databases ran
+  earlier. Before that a hard cap applies (`--case-timeout`, default 600 s of worker silence). Loads are exempt
+  from the budget.
+- **Load count check**: right after each timed load, outside the clock, the adapter's optional `counts()` counts
+  the nodes and edges loaded through the database's own query interface; a mismatch with the dataset's counts
+  (recorded in schema.json when the CSVs are written) makes the load ≠. Grafeo and LadybugDB count with Cypher.
 - **Markers**: ⊘ not available, ✗ failing, ≠ wrong answer, ⏱ beyond the budget, each mapped to a fixed pytest
   outcome and reason prefix for CodSpeed.
 - **Datasets**: an SNB-schema generator and the Graphalytics graph (the SNB `KNOWS` graph in both directions),

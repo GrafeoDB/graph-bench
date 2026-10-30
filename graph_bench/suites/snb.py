@@ -344,10 +344,19 @@ def _ic6_bindings(g: SnbGraph, n: int) -> list[dict[str, Any]]:
 
 
 def _ic13_bindings(g: SnbGraph, n: int) -> list[dict[str, Any]]:
-    persons = sorted(g.nodes["Person"])
+    """Pairs of persons with friends half the id-sorted list apart, plus LDBC IC13's two edge cases.
+
+    The LDBC definition returns -1 when no path exists and 0 when person1 = person2, so the last bindings are a
+    person and a person without friends (when the data has one) and a person with itself.
+    """
+    persons = _with_friends(g)
+    lonely = sorted(p for p in g.nodes["Person"] if not _friends(g, p))
+    extra = [{"person1Id": persons[0], "person2Id": lonely[0]}] if lonely else []
+    extra.append({"person1Id": persons[len(persons) // 2], "person2Id": persons[len(persons) // 2]})
     half = len(persons) // 2
-    starts = _spread(range(len(persons)), n)
-    return [{"person1Id": persons[i], "person2Id": persons[(i + half) % len(persons)]} for i in starts]
+    starts = _spread(range(len(persons)), max(n - len(extra), 0))
+    pairs = [{"person1Id": persons[i], "person2Id": persons[(i + half) % len(persons)]} for i in starts]
+    return pairs + extra
 
 
 def bindings(query_id: str, graph: SnbGraph, n: int) -> list[dict[str, Any]]:

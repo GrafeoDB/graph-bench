@@ -43,7 +43,9 @@ def install_grafeo(
 ) -> dict[str, str]:
     """Install Grafeo from a `.whl` file or a checkout; write and return `state_dir/grafeo.json`.
 
-    A checkout is built with maturin; the build inherits the environment, so `CARGO_TARGET_DIR` is honoured.
+    A checkout is built with maturin; the build inherits the environment, so `CARGO_TARGET_DIR` is honoured. Its
+    sha is the checked-out commit, with `-dirty` appended when tracked files have uncommitted changes. A wheel's
+    sha is the SHA-256 of the file.
     """
     if source.is_file() and source.suffix == ".whl":
         _install_wheel(source, run)
@@ -59,6 +61,9 @@ def install_grafeo(
             raise RuntimeError(f"maturin produced no wheel in {wheels}")
         _install_wheel(built[-1], run)
         sha = run(["git", "-C", str(source), "rev-parse", "HEAD"]).strip()
+        # Uncommitted changes to tracked files (as `git describe --dirty` counts them): the build is not that commit.
+        if run(["git", "-C", str(source), "status", "--porcelain", "--untracked-files=no"]).strip():
+            sha += "-dirty"
     else:
         raise ValueError(f"expected a .whl file or a grafeo checkout: {source}")
     # The distribution version, as `supervisor.grafeo_source` compares it (grafeo.__version__ is the Cargo

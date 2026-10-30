@@ -40,13 +40,16 @@ benchmark, servers included, is kept in [legacy/](legacy/README.md).
    result). This final rule, on medians, decides the ⏱ marker.
    - **During a run, a runaway guard:** databases run one after another. Once at least 3 earlier databases have
      correct times, a later database's preflight, its first (cold) run, is cut off at 30x the average of their
-     3 fastest preflights: the supervisor stops the worker as soon as the preflight runs past that budget, and
-     the case becomes ⏱ ("too slow: cut off at ..."). The cutoff only stops runaway cases early; because it
-     measures cold first runs, it is set well above the final rule. Before 3 earlier results exist, only a hard
+     3 fastest preflights: the supervisor stops the worker as soon as the preflight's database call runs past
+     that budget, and the case becomes ⏱ ("too slow: cut off at ..."). Only the database call is timed against
+     the cutoff; graph-bench's own work around it (loading the reference, checking the answer) is not. The
+     cutoff only stops runaway cases early; because it measures cold first runs, it is set well above the final
+     rule. It depends on which databases ran earlier, so a ⏱ from the cutoff can depend on the run order. Before 3 earlier results exist, only a hard
      cap applies (`--case-timeout`, default 600 s, measured as silence: the worker reports progress after every
      run).
    - **After the run:** the 10x rule is applied over all results, each entry against the other databases. Any
-     benchmark beyond its budget becomes ⏱, so the run order never decides the marker.
+     benchmark beyond its budget becomes ⏱. The run order never decides a ⏱ from this final rule (unlike the
+     in-run cutoff above).
 
 ## The preflight
 
@@ -63,8 +66,13 @@ measured, while results.json and the matrix show ⏱. A ⏱ from the in-run cuto
 - **Queries:** the database call plus materializing its result into Python rows. This is identical for every
   database. graph-bench's canonicalization of the rows and the answer check run outside the clock.
 - **Loads:** timed separately, each into a fresh in-memory instance, so no load benefits from an earlier one.
-  Loads are timed but not answer-checked, and the budget rule (rule 8) does not apply to them; a node and edge
-  count check is planned with the next adapters.
+  Loads are count-checked: right after each timed load, outside the clock, the adapter counts the nodes and
+  edges loaded through the database's own query interface (`counts()`, e.g. a Cypher count over all nodes and
+  over all relationships), and graph-bench compares them with the dataset's counts. A mismatch makes the load ≠
+  (wrong answer), e.g. "loaded 4177 nodes, 37000 edges; expected 4177 nodes, 37860 edges"; a database without
+  `counts()` leaves its load unchecked. The budget rule (rule 8) does not apply to loads. In
+  `graph-bench codspeed`, the count check runs after CodSpeed has timed the load, so CodSpeed shows a ≠ load as
+  measured, while results.json and the matrix show ≠.
 
 ## Loading
 

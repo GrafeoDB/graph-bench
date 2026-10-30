@@ -73,7 +73,9 @@ CodSpeed records a benchmark as measured or skipped, so each marker maps to a fi
 Every benchmark first runs once, untimed: the preflight. The answer check and the time budget apply there, so a
 wrong or too slow result never reaches CodSpeed as a speed. One exception: a ⏱ assigned only by the final budget
 rule, applied after every database has run, comes after CodSpeed has measured the case. CodSpeed then shows that
-case as measured, while results.json and the matrix show ⏱. A ⏱ from the in-run cutoff is never measured.
+case as measured, while results.json and the matrix show ⏱. A ⏱ from the in-run cutoff is never measured. The
+same holds for a load: its node and edge count check runs after CodSpeed timed it, so a load with ≠ shows as
+measured in CodSpeed.
 
 ## Running it
 

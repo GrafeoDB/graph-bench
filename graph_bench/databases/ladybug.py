@@ -20,6 +20,9 @@ PAGE_RANK = "CALL page_rank('g', dampingFactor := 0.85, maxIterations := 1000, t
 # with a long diameter could need more of; raised to PageRank's bound so that the result is the converged one.
 WCC = "CALL weakly_connected_components('g', maxIterations := 1000) RETURN node.id, group_id"
 BFS = f"MATCH p = (a:V {{id: $s}})-[:E* SHORTEST 1..{MAX_DEPTH}]->(b:V) RETURN b.id, length(p)"
+# The load check (`counts`): every node and every relationship, over all tables, counted with Cypher.
+COUNT_NODES = "MATCH (n) RETURN count(n)"
+COUNT_EDGES = "MATCH ()-[r]->() RETURN count(r)"
 
 
 def _path(dataset: Dataset, file: str) -> str:
@@ -125,6 +128,12 @@ class LadybugDatabase(Database):
             return [tuple(row) for row in result.get_all()]
         finally:
             result.close()
+
+    def counts(self) -> tuple[int, int]:
+        """Nodes and edges loaded, counted with `COUNT_NODES` and `COUNT_EDGES` through `execute()`."""
+        nodes = self.query(COUNT_NODES, {})[0][0]
+        edges = self.query(COUNT_EDGES, {})[0][0]
+        return int(nodes), int(edges)
 
     def algorithm(self, name: str, params: Mapping[str, Any]) -> dict[Any, Any]:
         if name not in ("bfs", "wcc", "pr"):

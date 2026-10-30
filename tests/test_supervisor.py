@@ -1,5 +1,7 @@
 import json
+import os
 import re
+import sys
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -62,7 +64,11 @@ def bench_env(push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
 @pytest.fixture(scope="module")
 def two_dbs(push_data_dir: Path, tmp_path_factory: pytest.TempPathFactory) -> tuple[Results, list[list[str]], Path]:
-    """fake then fake2 (which answers snb_is5 wrongly), recording every worker argv."""
+    """fake then fake2 (which answers snb_is5 wrongly), recording every worker argv.
+
+    The final 10x rule is switched off, so a scheduling hiccup in one fake cannot mark it; the rule has its own
+    deterministic tests below.
+    """
     root = tmp_path_factory.mktemp("two-dbs")
     argvs: list[list[str]] = []
     launch = supervisor._launch
@@ -72,6 +78,7 @@ def two_dbs(push_data_dir: Path, tmp_path_factory: pytest.TempPathFactory) -> tu
         return launch(argv, *args)
 
     with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(supervisor, "BUDGET_FACTOR", 1e9)
         _set_env(mp, push_data_dir, fake2="wrong:snb_is5")
         mp.chdir(root)  # run_bench reads .graph-bench/grafeo.json from the cwd; keep the real one out of it
         mp.setattr(supervisor, "_launch", recording)
@@ -193,9 +200,21 @@ def test_in_run_cutoff_kills_a_slow_preflight(bench_env: pytest.MonkeyPatch, tmp
 
     `slow:snb_is2` sleeps 0.2 s per binding (2 s in all), far beyond 30x the fakes' few-ms preflights, so only
     the supervisor's cutoff can produce this error; `case_timeout_s` (60 s) never comes into play.
+    `slow_check:snb_is3` answers at once but makes the worker's answer check take 2 s: with a 0.5 s budget it
+    is not cut off, because the cutoff times only the database call. Every other case gets a generous budget
+    and the final 10x rule is switched off, so a scheduling hiccup in a fast fake cannot mark it.
     """
     bench_env.setenv("GRAPH_BENCH_FAKE3", "")
-    bench_env.setenv("GRAPH_BENCH_FAKE4", "slow:snb_is2")
+    bench_env.setenv("GRAPH_BENCH_FAKE4", "slow:snb_is2,slow_check:snb_is3")
+    bench_env.setattr(supervisor, "BUDGET_FACTOR", 1e9)
+    tight, harness = _id("snb_is2", "fake4"), _id("snb_is3", "fake4")
+    computed = supervisor._budgets
+
+    def budgets(entries: Any, db: str, meta: Any) -> dict[str, float]:
+        found = computed(entries, db, meta)
+        return {i: s if i == tight else 0.5 if i == harness else 60.0 for i, s in found.items()}
+
+    bench_env.setattr(supervisor, "_budgets", budgets)
     launches: list[list[str]] = []
     launch = supervisor._launch
 
@@ -209,19 +228,66 @@ def test_in_run_cutoff_kills_a_slow_preflight(bench_env: pytest.MonkeyPatch, tmp
     results = run_bench("push", dbs, tmp_path / "out", workdir=tmp_path / "work", case_timeout_s=60)
     assert time.monotonic() - started < 60
 
-    entry = _by_id(results)[_id("snb_is2", "fake4")]
+    entry = _by_id(results)[tight]
     assert entry.status == "timeout", entry
     pattern = r"too slow: cut off at (\S+) s \(30x the top-3 average of earlier databases\)"
     match = re.fullmatch(pattern, entry.error or "")
     assert match, entry.error
     assert float(match.group(1)) < 2.0
     assert entry.timing is None
+    slow_check = _by_id(results)[harness]
+    assert (slow_check.status, slow_check.answer) == ("ok", "agree"), slow_check
     fake4 = [argv for argv in launches if argv[argv.index("--db") + 1] == "fake4"]
     assert len(fake4) == 2  # killed during the preflight, then relaunched for the rest
-    assert any(arg.startswith(_id("snb_is2", "fake4") + "=") for arg in fake4[0])  # its in-run budget
-    assert _id("snb_is2", "fake4") in fake4[1][fake4[1].index("--skip") + 1 :]
+    assert any(arg.startswith(tight + "=") for arg in fake4[0])  # its in-run budget
+    assert harness + "=0.5" in fake4[0]
+    assert tight in fake4[1][fake4[1].index("--skip") + 1 :]
     rest = [e for e in results.entries if e.database == "fake4" and e.id != entry.id]
     assert all(e.status == "ok" for e in rest), [e for e in rest if e.status != "ok"]
+
+
+# A stand-in worker: argv is out file, scenario, bench id. "slow_harness" spends 1 s before and after a fast
+# database call; "slow_run" stays silent for 5 s after its `run` line.
+_SCRIPTED_WORKER = """\
+import json, sys, time
+out, scenario, bench_id = sys.argv[1:4]
+def emit(**line):
+    with open(out, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(line) + "\\n")
+emit(kind="database", name="fake", version="1", process="in-process", threads_configurable=False,
+     threads_note="", storage="in-memory")
+emit(kind="start", id=bench_id)
+if scenario == "slow_harness":
+    time.sleep(1.0)
+    emit(kind="run", id=bench_id)
+    emit(kind="progress", id=bench_id)
+    time.sleep(1.0)
+else:
+    emit(kind="run", id=bench_id)
+    time.sleep(5.0)
+emit(kind="entry", id=bench_id, status="ok", answer="agree", preflight_ns=1000)
+"""
+
+
+@pytest.mark.parametrize("scenario", ["slow_harness", "slow_run"])
+def test_in_run_cutoff_times_only_the_database_call(scenario: str, tmp_path: Path) -> None:
+    """The cutoff is armed by the `run` line and disarmed by the next line, so harness work never counts."""
+    sel = catalog.selection("push")
+    results = _results([])
+    run = supervisor._Run(sel, tmp_path, tmp_path, 30.0, results)
+    meta = supervisor._expected(sel, "fake", 1)
+    bench_id = _id("snb_is2")
+    out = tmp_path / "worker.jsonl"
+    argv = [sys.executable, "-c", _SCRIPTED_WORKER, str(out), scenario, bench_id]
+    attempt = run._attempt(argv, dict(os.environ), out, tmp_path / "worker.log", "fake", meta, {bench_id: 0.3})
+    if scenario == "slow_harness":
+        assert (attempt.hung, attempt.cutoff_s, attempt.code) == (False, None, 0)
+        assert (run.recorded[bench_id].status, run.recorded[bench_id].answer) == ("ok", "agree")
+    else:
+        assert (attempt.hung, attempt.cutoff_s) == (True, 0.3)
+        run._settle(attempt, meta)
+        expected = "too slow: cut off at 0.3 s (30x the top-3 average of earlier databases)"
+        assert (run.recorded[bench_id].status, run.recorded[bench_id].error) == ("timeout", expected)
 
 
 def test_supervisor_resumes_after_crash(bench_env: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -256,7 +322,7 @@ def test_supervisor_kills_worker_on_harness_error(bench_env: pytest.MonkeyPatch,
         procs.append(launch(*args))
         return procs[-1]
 
-    def broken(*args: Any) -> bool:
+    def broken(*args: Any) -> str | None:
         raise RuntimeError("harness bug")
 
     bench_env.setattr(supervisor, "_launch", recording)

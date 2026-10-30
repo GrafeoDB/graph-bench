@@ -2,12 +2,15 @@ import json
 import os
 import subprocess
 import sys
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from graph_bench.databases.base import Database, DatabaseInfo, NotSupported
+from graph_bench.datasets import cache
+from graph_bench.datasets.schema import Dataset
 from graph_bench.suites import catalog
 from graph_bench.suites.catalog import Case
 
@@ -103,6 +106,7 @@ def test_worker_times_agreeing_cases(standard: tuple[Lines, Path]) -> None:
     for load_id in catalog.load_ids("push", ["fake"]):
         assert entries[load_id]["status"] == "ok"
         assert entries[load_id]["load_ns"] > 0
+        assert entries[load_id]["answer"] == "agree"  # the node and edge counts match the dataset's
 
 
 def test_worker_marks_not_supported(standard: tuple[Lines, Path]) -> None:
@@ -162,11 +166,68 @@ def test_worker_emits_progress(standard: tuple[Lines, Path]) -> None:
     end = next(i for i, line in enumerate(lines) if line["kind"] == "entry" and line["id"] == target)
     between = lines[start + 1 : end]
     sel = catalog.selection("push")
-    assert [line["kind"] for line in between] == ["progress"] * (1 + sel.warmup - 1 + sel.iterations)
+    # `run` right before the preflight's database call, `progress` right after it, then one per further run.
+    assert [line["kind"] for line in between] == ["run"] + ["progress"] * (1 + sel.warmup - 1 + sel.iterations)
     assert all(line["id"] == target for line in between)
     load_id = catalog.load_id("snb", "fake", "small", 1)
     load_progress = [line for line in lines if line["kind"] == "progress" and line["id"] == load_id]
     assert len(load_progress) == sel.load_iterations
+
+
+def test_worker_brackets_every_preflight_call(standard: tuple[Lines, Path]) -> None:
+    """Every case that reaches its preflight gets `run` then `progress`, also when the call raises."""
+    lines = standard[0]
+    for target in (_id("snb_is4"), _id("snb_is2"), _id("graphalytics_pr")):  # agree, too slow, not supported
+        start = next(i for i, line in enumerate(lines) if line["kind"] == "start" and line["id"] == target)
+        assert [line["kind"] for line in lines[start + 1 : start + 3]] == ["run", "progress"], target
+
+
+def _expected_counts(data_dir: Path, dataset: str) -> tuple[int, int]:
+    ds = Dataset.load(data_dir / cache.dataset_key("push") / f"{dataset}-small")
+    return ds.node_count, ds.edge_count
+
+
+def test_worker_checks_load_counts(push_data_dir: Path, tmp_path: Path) -> None:
+    """A load that lost an edge is ≠ with both counts; a database that cannot count leaves the load unchecked."""
+    fake = "short:count_snb,unsupported:count_graphalytics"
+    lines, proc = run_worker(tmp_path / "fake.jsonl", push_data_dir, fake=fake)
+    assert proc.returncode == 0, proc.stderr
+    entries = _entries(lines)
+    snb = entries[catalog.load_id("snb", "fake", "small", 1)]
+    nodes, edges = _expected_counts(push_data_dir, "snb")
+    assert (snb["status"], snb["answer"]) == ("ok", "disagree")
+    assert snb["detail"] == f"loaded {nodes} nodes, {edges - 1} edges; expected {nodes} nodes, {edges} edges"
+    assert snb["load_ns"] > 0
+    graphalytics = entries[catalog.load_id("graphalytics", "fake", "small", 1)]
+    assert (graphalytics["status"], graphalytics["answer"], graphalytics["detail"]) == ("ok", "unchecked", None)
+    assert entries[_id("snb_is4")]["answer"] == "agree"  # the cases still run on the loaded instance
+
+
+def test_worker_count_error_fails_only_the_load(push_data_dir: Path, tmp_path: Path) -> None:
+    lines, proc = run_worker(tmp_path / "fake.jsonl", push_data_dir, fake="crash_soft:count_snb")
+    assert proc.returncode == 0, proc.stderr
+    entries = _entries(lines)
+    snb = entries[catalog.load_id("snb", "fake", "small", 1)]
+    assert (snb["status"], snb["error"]) == ("failed", "counting the loaded data: RuntimeError: soft crash")
+    assert (entries[_id("snb_is4")]["status"], entries[_id("snb_is4")]["answer"]) == ("ok", "agree")
+
+
+def test_counts_default_is_not_supported(tmp_path: Path) -> None:
+    class Plain(Database):
+        name = display_name = "plain"
+        models = frozenset()
+
+        def info(self) -> DatabaseInfo:
+            raise AssertionError
+
+        def load(self, dataset: Dataset) -> None:
+            raise AssertionError
+
+        def query(self, text: str, params: Mapping[str, Any]) -> list[tuple[Any, ...]]:
+            raise AssertionError
+
+    with pytest.raises(NotSupported):
+        Plain(tmp_path, 1).counts()
 
 
 def test_worker_prepares_environment_once_before_loads(
