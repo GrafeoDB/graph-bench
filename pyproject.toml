@@ -58,7 +58,7 @@ packages = ["graph_bench"]
 [tool.ruff]
 line-length = 120
 target-version = "py312"
-extend-exclude = ["legacy"]
+extend-exclude = ["legacy", "docs/superpowers"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
