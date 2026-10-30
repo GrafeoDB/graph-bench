@@ -323,3 +323,25 @@ def test_bench_rejects_unknown_db(tmp_path: Path) -> None:
     result = CliRunner().invoke(app, ["bench", "--selection", "push", "--db", "nope", "--out", str(tmp_path)])
     assert result.exit_code == 2
     assert "nope" in result.output
+
+
+def test_cpu_name_falls_back_to_platform(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(supervisor, "_native_cpu_name", lambda: None)
+    monkeypatch.setattr(supervisor.platform, "processor", lambda: " Generic CPU ")
+    assert supervisor.cpu_name() == "Generic CPU"
+    monkeypatch.setattr(supervisor.platform, "processor", lambda: "")
+    monkeypatch.setattr(supervisor.platform, "machine", lambda: "x86_64")
+    assert supervisor.cpu_name() == "x86_64"
+
+
+def test_cpu_name_strips_native_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(supervisor, "_native_cpu_name", lambda: "  Test CPU 9000 \n")
+    assert supervisor.cpu_name() == "Test CPU 9000"
+    monkeypatch.setattr(supervisor, "_native_cpu_name", lambda: "   ")
+    monkeypatch.setattr(supervisor.platform, "processor", lambda: "Generic CPU")
+    assert supervisor.cpu_name() == "Generic CPU"
+
+
+def test_native_cpu_name_unknown_platform(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(supervisor.sys, "platform", "plan9")
+    assert supervisor._native_cpu_name() is None

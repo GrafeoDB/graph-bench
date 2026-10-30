@@ -216,9 +216,40 @@ def grafeo_source() -> GrafeoSource:
     return {"version": version, "source": "pypi", "sha": None}
 
 
+def _native_cpu_name() -> str | None:
+    """The marketing CPU name from the OS (Windows registry, /proc/cpuinfo, sysctl), or None."""
+    try:
+        if sys.platform == "win32":
+            import winreg
+
+            key = r"HARDWARE\DESCRIPTION\System\CentralProcessor\0"
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key) as handle:
+                return str(winreg.QueryValueEx(handle, "ProcessorNameString")[0])
+        if sys.platform.startswith("linux"):
+            for line in Path("/proc/cpuinfo").read_text(encoding="utf-8", errors="replace").splitlines():
+                name, sep, value = line.partition(":")
+                if sep and name.strip() == "model name":
+                    return value
+            return None
+        if sys.platform == "darwin":
+            proc = subprocess.run(
+                ["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True, text=True, timeout=10, check=True
+            )
+            return proc.stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return None
+
+
+def cpu_name() -> str:
+    """The CPU name shown in reports, e.g. "AMD Ryzen 9 7940HS"; falls back to `platform.processor()`."""
+    name = (_native_cpu_name() or "").strip()
+    return name or (platform.processor() or platform.machine()).strip()
+
+
 def machine() -> Machine:
     return {
-        "cpu": platform.processor() or platform.machine(),
+        "cpu": cpu_name(),
         "cores": psutil.cpu_count(logical=True) or 0,
         "os": platform.platform(),
     }

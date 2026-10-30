@@ -3,6 +3,7 @@
 import json
 import os
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 
@@ -12,6 +13,9 @@ from graph_bench import __version__
 from graph_bench.databases import KNOWN
 from graph_bench.datasets import cache
 from graph_bench.grafeo_setup import install_grafeo
+from graph_bench.report.readme import render_readme, update_readme
+from graph_bench.report.summary import render_summary
+from graph_bench.results import Results
 from graph_bench.runner import supervisor
 from graph_bench.runner.worker import DEFAULT_CASE_TIMEOUT_S
 from graph_bench.suites import catalog
@@ -24,6 +28,10 @@ _SELECTION = typer.Option(..., "--selection", help="Selection name: push or full
 _WORKDIR = typer.Option(None, "--workdir", help="Directory for database files; default: a temporary one.")
 _GRAFEO_SOURCE = typer.Option(..., "--grafeo", help="A grafeo .whl file or a grafeo checkout (built with maturin).")
 _OUT = typer.Option(..., "--out", help="Output directory for results.json and the raw worker output.")
+_REPORT_IN = typer.Option(..., "--in", help="The results.json to report on.")
+_REPORT_WRITE = typer.Option(
+    None, "--write", help="README to update between its results markers (readme only); default: print."
+)
 
 
 @app.callback()
@@ -128,6 +136,42 @@ def bench(
         if own_workdir:
             shutil.rmtree(work, ignore_errors=True)
     typer.echo(out / supervisor.RESULTS_FILE)
+
+
+def _echo_utf8(text: str) -> None:
+    """Write `text` to stdout as UTF-8, whatever the console code page (the report uses symbols such as ⊘)."""
+    buffer = getattr(sys.stdout, "buffer", None)
+    if buffer is None:
+        sys.stdout.write(text)
+        return
+    sys.stdout.flush()
+    buffer.write(text.encode("utf-8"))
+    buffer.flush()
+
+
+@app.command()
+def report(
+    fmt: str = typer.Option(..., "--format", help="summary (grafeo's README block) or readme (graph-bench's matrix)."),
+    in_path: Path = _REPORT_IN,
+    write: Path | None = _REPORT_WRITE,
+) -> None:
+    """Print the summary block or the README matrix of a results.json, or write the matrix into a README."""
+    if fmt not in ("summary", "readme"):
+        raise typer.BadParameter(f"{fmt!r} is not one of: summary, readme", param_hint="--format")
+    if write is not None and fmt != "readme":
+        raise typer.BadParameter("--write is only valid with --format readme", param_hint="--write")
+    try:
+        results = Results.read(in_path)
+        text = render_summary(results) if fmt == "summary" else render_readme(results)
+        if write is not None:
+            update_readme(write, text)
+    except (OSError, ValueError, KeyError) as exc:
+        typer.echo(f"report: {exc}", err=True)
+        raise typer.Exit(2) from None
+    if write is None:
+        _echo_utf8(text)
+    else:
+        typer.echo(write)
 
 
 @data_app.command("prepare")
