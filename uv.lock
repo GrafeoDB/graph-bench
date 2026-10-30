@@ -166,6 +166,7 @@ bench = [
 dev = [
     { name = "prek" },
     { name = "pytest" },
+    { name = "pytest-codspeed" },
     { name = "pytest-cov" },
     { name = "pyyaml" },
     { name = "ruff" },
@@ -192,7 +193,8 @@ requires-dist = [
     { name = "psutil", specifier = ">=5.9" },
     { name = "pytest", marker = "extra == 'bench'", specifier = ">=9.0.2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.2" },
-    { name = "pytest-codspeed", marker = "extra == 'bench'", specifier = ">=4.0" },
+    { name = "pytest-codspeed", marker = "extra == 'bench'", specifier = ">=5.0.3" },
+    { name = "pytest-codspeed", marker = "extra == 'dev'", specifier = ">=5.0.3" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=7.0.0" },
     { name = "pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
     { name = "real-ladybug", marker = "extra == 'ladybug'", specifier = ">=0.15" },

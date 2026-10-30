@@ -1,5 +1,7 @@
 # graph-bench
 
+[![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://app.codspeed.io/GrafeoDB/graph-bench?utm_source=badge)
+
 A head-to-head comparison of embedded graph databases. Every database runs in its own process, on the same
 generated data, single-threaded, and every answer is checked against a reference before any time counts. A
 wrong answer is shown as wrong and never ranked.
