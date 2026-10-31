@@ -506,6 +506,148 @@ at depth 0, the reference's definition. No `- id:` line.
   native (GraalVM) `arcadedb` package (https://docs.arcadedb.com/arcadedb-python/which-package.html); both exist on
   PyPI only as 26.11.1 pre-releases today.
 
+## Neo4j: IC13 with the same person twice (a documented setting, answer agrees)
+
+- Query: `snb_ic13`, the shared openCypher text, no Neo4j override. One binding pairs a person with itself, where
+  the reference is 0 (LDBC IC13).
+- With Neo4j's defaults that binding fails: `The shortest path algorithm does not work when the start and end
+  nodes are the same.` (research-c, Neo4j 2026.10.1).
+- Neo4j documents the setting for it, `dbms.cypher.forbid_shortestpath_common_nodes`
+  (https://neo4j.com/docs/operations-manual/current/configuration/configuration-settings/): "The shortest path
+  algorithm does not work when the start and end nodes are the same. With this setting set to false no path will
+  be returned when that happens. The default value of true will instead throw an exception." The adapter sets it
+  to false, so `path` is null for that binding and the shared text's `CASE WHEN p1.id = p2.id THEN 0` returns 0.
+  Distinct persons are unaffected. All IC13 bindings agree. No `WHERE p1 <> p2` override is used.
+
+## Neo4j: unlabeled id lookups start from a label scan (IS5, IS6; not allowlisted)
+
+The answers agree with the references. IS5 and IS6 start from `(m {id: $messageId})` with no label (the shared
+text). The unique `id` constraints are per label, so the planner has no index for `m`. `PROFILE` on `snb-small`
+(comment_5) shows the planner picks another start:
+- IS5: `NodeByLabelScan p:Person`, `Expand (p)<-[:HAS_CREATOR]-(m)`, `Filter m.id = $messageId`, 42,259 db hits,
+  about 7.4 ms per call warm.
+- IS6: `NodeByLabelScan f:Forum`, then the moderator, container and `REPLY_OF*0..` expansions and a filter on
+  `m.id`, 14,685 db hits, about 4.0 ms per call.
+- IS4 is not affected. Its `WHERE m:Post OR m:Comment` is planned as a `Union` of two `NodeUniqueIndexSeek`s
+  (6 db hits, 0.4 ms).
+In `bench --selection push --db grafeo,neo4j` (Windows) IS5 and IS6 are marked `timeout` (⏱) by the budget rule
+against Grafeo alone (10 bindings: IS5 41.0 ms, IS6 44.4 ms; Grafeo 0.31 and 0.66 ms). The query text is not
+rewritten. Cause: Neo4j (the query planner has no index for an unlabeled node). No `- id:` line: the adapter test
+runs Neo4j alone, where no budget applies.
+
+## Neo4j: slow cases under the 10x budget rule (not allowlisted)
+
+The answers agree with the references (PageRank within `LDBC_EPS`, see below). Against Grafeo alone, in
+`bench --selection push --db grafeo,neo4j` (Windows), these are also ⏱ by the budget rule, not by a hang:
+- `snb_is3`: 36.5 ms against 1.9 ms.
+- `snb_is4`: 5.6 ms against 0.33 ms.
+- `graphalytics_bfs`: 86.9 ms against 0.93 ms.
+- `graphalytics_wcc`: 35.7 ms against 1.6 ms.
+- `graphalytics_pr`: 155.7 ms against 1.7 ms.
+A Cypher call through the embedded API costs about 0.1 ms even for `RETURN 1` (a transaction, the parameter map
+and the JPype crossing). The algorithms map each GDS node id back to the app `id` with `gds.util.asNode`, as the
+GDS docs do. No `- id:` line.
+
+## Neo4j: GDS algorithms (notes)
+
+- GDS Community ships in the Community tarball (`products/neo4j-graph-data-science-2026.10.1.jar`). The jar goes
+  on the JVM classpath and in the plugins directory, with `gds.*` allowed (`dbms.security.procedures.unrestricted`
+  and `.allowlist`). Without a licence file GDS runs as its Community Edition: concurrency at most 4,
+  https://neo4j.com/docs/graph-data-science/current/introduction/. `gds.license.state()` reports "No valid GDS
+  license specified."
+- Licence: the jar's `LICENSE.txt` is GPLv3. Its `NOTICE.txt` says the Neo4j-owned software is GPLv3 "However, if
+  you have executed ... a commercial license agreement with Neo4j ... the terms of the license in such Commercial
+  Agreement will supersede the GPL". Research-c had reported a pre-release agreement text in this jar. The
+  2026.10.1 jar's `LICENSE.txt` entries are GPLv3, and no pre-release text was found in its licence files.
+  Using GDS is provisional user decision 8.
+- Projection: `gds.graph.project('g', 'V', 'E', {readConcurrency: 1})` on the graphalytics dataset, inside the
+  load clock, as LadybugDB and NeuG project theirs. It is dropped when the instance closes, because the GDS graph
+  catalog outlives a DBMS in the JVM.
+- WCC: `gds.wcc.stream` with `concurrency: 1`.
+- PageRank: `gds.pageRank.stream` with `dampingFactor: 0.85, maxIterations: 1000, tolerance: 1e-10`, the values
+  of the other adapters, and `concurrency: 1`.
+  - The defaults are 20 iterations and tolerance 1e-7.
+  - Unscaled, GDS scores do not sum to 1, so the documented scaler `L1NORM` ("creates a probability distribution
+    where the sum of scores equals 1") is passed, the reference's definition.
+  - On `graphalytics-small` (one isolated vertex) the largest relative difference to NetworkX is 5.0e-8, inside
+    `LDBC_EPS` (1e-4).
+- BFS: GDS has no BFS that yields depths (`gds.bfs.stream` gives the visit order).
+  - The hop distances come from `gds.allShortestPaths.dijkstra.stream` without `relationshipWeightProperty`, the
+    single-source shortest path procedure. The docs say "If unspecified, the algorithm runs unweighted", so each
+    relationship costs 1, the source is included at cost 0, and unreachable vertices have no row.
+  - The adapter checks every cost is a whole number and returns it as an int. The answer agrees.
+  - This is unweighted Dijkstra, not a BFS implementation. The result definition is the reference's.
+
+## Neo4j: load through neo4j-admin import has a large fixed cost (provisional decision 7; not allowlisted)
+
+The load is `neo4j-admin database import full`, Neo4j's offline bulk importer for an empty database
+(https://neo4j.com/docs/operations-manual/current/import/). It runs as a subprocess with the fetched JRE, then
+the store is opened embedded. The load clock covers:
+1. The header-adapted CSV copies. The importer reads a data source's header from the first line of its first
+   file, so each CSV is copied with its header line replaced by a typed one (`id:ID(<label>)`, `name:string`,
+   `:START_ID(<label>)`, ...). `--auto-skip-subsequent-headers` cannot use a separate header file here: it skips
+   only a line equal to the header, and the CSVs' untyped header lines differ from the typed ones (tested: the
+   relationship import then fails on `src`).
+2. The importer, two JVM starts included (the `neo4j-admin` launcher and its import process).
+3. Opening the store with `DatabaseManagementServiceBuilder`.
+4. A unique constraint on `id` per node label, then `db.awaitIndexes`.
+5. The GDS projection (graphalytics only).
+
+The importer runs with `--id-type` integer or string (from the schema, one per dataset), `--threads=1` in
+single-threaded runs, `--max-off-heap-memory` equal to the embedded page cache (1 GiB) and the JVM heap
+`HEAP_SIZE=4g`. The importer's configuration is the tarball's default `conf/neo4j.conf` (for its `--add-opens`
+JVM options) plus the instance's data and log directories and, in single-threaded runs, the shared JVM thread caps
+as `server.jvm.additional` lines.
+
+Measured on Windows (one thread, push data, three loads per dataset in one process):
+
+| Path | graphalytics-small | snb-small |
+| --- | --- | --- |
+| neo4j-admin import (adapter): total | 7.4 to 9.1 s | 7.9 to 8.9 s |
+| of which the importer subprocess | 4.6 to 4.8 s | 5.0 to 5.4 s |
+| of which open, constraints, projection | 2.6 to 4.4 s | 2.9 to 3.4 s |
+| `LOAD CSV ... CALL { } IN TRANSACTIONS OF 10000 ROWS` (scratch, not used) | 2.6 to 5.1 s | 3.7 to 4.7 s |
+
+- The importer's own report says `IMPORT DONE in 2s` to `3s` on this data. Most of that is fixed cost, since the
+  data is 1,001 nodes and 36,000 relationships. Research-c measured 1.9 s for 100,000 nodes and 500,000
+  relationships on Linux, where `LOAD CSV` took 17 s. So the importer is the faster path at scale and the slower one
+  on the push data.
+- Opening a DBMS costs about 2.1 s even for an empty store.
+- In the push bench the loads took 12.2 s (Graphalytics) and 9.5 s (SNB), against Grafeo's 0.12 s and 0.16 s.
+  Loads are exempt from the budget rule.
+- This choice is provisional user decision 7.
+
+## Neo4j: threads, memory, storage and the JVM start (notes)
+
+- Threads (results: `threads_configurable=True` with a note):
+  - Community's Cypher runtime runs each query on the calling thread. The parallel runtime and
+    `server.cypher.parallel.worker_limit` are Enterprise.
+  - GDS gets `concurrency: 1`, and the projection gets `readConcurrency: 1`.
+  - The importer gets `--threads=1`. Its help says "(advanced) Max number of worker threads used by the importer";
+    its report shows `Max worker threads: 1`.
+  - Both JVMs (embedded and importer) get the shared caps `-XX:ParallelGCThreads=1 -XX:ConcGCThreads=1
+    -XX:CICompilerCount=2`.
+  - Not capped: Neo4j's background threads (page cache flushing, checkpointing, index population) and the JVM's
+    other service threads. No documented setting exists for them.
+- Memory:
+  - The shared heap cap `-Xmx4g`, checked after the start. The importer gets the same through `HEAP_SIZE`.
+  - The page cache is set to 1 GiB, ArcadeDB's page cache under the same heap (a quarter of it). Neo4j's own
+    default is sized from the machine's RAM.
+- Storage: Community has no in-memory mode, so each load writes an on-disk store in its fresh workdir
+  (`storage="on-disk"`). The impermanent test builders are internal test utilities that the distribution does not
+  ship.
+- JVM start: once per process in `prepare_environment`, outside every clock. It then opens and shuts down one
+  empty DBMS (class loading and GDS registration, about 10 s cold), so the first load does not carry them. It holds
+  no data and runs no query. Fetching (SHA-256 checked) and extracting the tarball and the JRE also happen there.
+- Versions: Neo4j Community 2026.10.1 (the latest stable release, `<release>` in Maven Central's
+  `org.neo4j:neo4j` metadata) on Temurin 21.0.13+9. Neo4j 2026.10 supports Java 21 and 25, and its class files are
+  Java 21.
+- Downloads (for the CI cache), in `<data cache>/downloads`:
+  - The tarball is 235 MB and the JRE is 50 MB (Linux) or 47 MB (Windows).
+  - Both are extracted into `downloads/unpacked`: 259 MB for Neo4j, 146 MB for the JRE (Windows), plus a 67 MB
+    copy of the GDS jar as the plugins directory.
+  - About 690 MB in all.
+
 ## DuckDB + DuckPGQ: the label disjunction `Post|Comment` does not parse (IS4, IS6; not available as an error)
 
 - id: duckdb/snb_sql_is4

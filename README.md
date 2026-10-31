@@ -20,16 +20,17 @@ README at each Grafeo release. The rules every database is measured under are in
 | FalkorDB | `falkordblite` (Linux only) | local process (a Redis server subprocess) | implemented |
 | NeuG | `neug` | in-process | implemented |
 | ArcadeDB | `arcadedb-embedded` (bundles its JRE) | in-process (JVM), on disk | implemented |
-| Neo4j Community | Maven jars through JPype | in-process (JVM) | planned |
+| Neo4j Community | `JPype1` (the Community tarball and a Temurin 21 JRE are downloaded) | in-process (JVM), on disk | implemented |
 | DuckDB + DuckPGQ | `duckdb` (+ the `duckpgq` community extension) | in-process | implemented |
 | Oxigraph | `pyoxigraph` | in-process | implemented |
 | HelixDB | `helix-db` + `helix-db-embedded` | in-process (embedded mode) | implemented |
 
-Neo4j is measured as Community only: the Enterprise terms restrict publishing benchmarks. Neo4j fetches its jars
-and a Temurin 21 JRE into the data cache; nothing is committed. ArcadeDB's wheel bundles its own JRE. Both JVM
-databases get the same heap cap (see FAIRNESS.md). HelixDB has no query text in its Python SDK, so its queries
-are builders written with its Python DSL; the ones the DSL cannot express are marked not available (see
-`docs/known-disagreements.md`).
+Neo4j is measured as Community only: the Enterprise terms restrict publishing benchmarks. Neo4j fetches its
+Community tarball and a Temurin 21 JRE into the data cache (SHA-256 checked, about 690 MB with the extracted
+copies); nothing is committed. Its algorithms use GDS Community from the same tarball. ArcadeDB's wheel bundles
+its own JRE. Both JVM databases get the same heap cap (see FAIRNESS.md). HelixDB has no query text in its Python
+SDK, so its queries are builders written with its Python DSL; the ones the DSL cannot express are marked not
+available (see `docs/known-disagreements.md`).
 
 ## The matrix
 

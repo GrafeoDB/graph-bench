@@ -547,6 +547,7 @@ embedded = [
     { name = "grafeo" },
     { name = "helix-db" },
     { name = "helix-db-embedded" },
+    { name = "jpype1", marker = "python_full_version < '3.15'" },
     { name = "ladybug" },
     { name = "neug" },
     { name = "pyarrow", marker = "sys_platform == 'linux'" },
@@ -566,6 +567,9 @@ helixdb = [
 ladybug = [
     { name = "ladybug" },
 ]
+neo4j-embedded = [
+    { name = "jpype1", marker = "python_full_version < '3.15'" },
+]
 neug = [
     { name = "neug" },
 ]
@@ -583,9 +587,10 @@ requires-dist = [
     { name = "duckdb", marker = "extra == 'duckdb'", specifier = ">=2.0.0" },
     { name = "falkordblite", marker = "sys_platform == 'linux' and extra == 'falkordb'", specifier = ">=0.11.0" },
     { name = "grafeo", marker = "extra == 'grafeo'", specifier = ">=0.6.0,<0.7" },
-    { name = "graph-bench", extras = ["grafeo", "ladybug", "neug", "falkordb", "turingdb", "helixdb", "arcadedb", "oxigraph", "duckdb"], marker = "extra == 'embedded'" },
+    { name = "graph-bench", extras = ["grafeo", "ladybug", "neug", "falkordb", "turingdb", "helixdb", "arcadedb", "neo4j-embedded", "oxigraph", "duckdb"], marker = "extra == 'embedded'" },
     { name = "helix-db", marker = "extra == 'helixdb'", specifier = ">=0.3.4" },
     { name = "helix-db-embedded", marker = "extra == 'helixdb'", specifier = ">=0.3.3" },
+    { name = "jpype1", marker = "python_full_version < '3.15' and extra == 'neo4j-embedded'", specifier = ">=1.7.1" },
     { name = "ladybug", marker = "extra == 'ladybug'", specifier = ">=0.22.1" },
     { name = "networkx", specifier = ">=3.0" },
     { name = "neug", marker = "extra == 'neug'", specifier = ">=0.3.0" },
@@ -606,7 +611,7 @@ requires-dist = [
     { name = "ty", marker = "extra == 'dev'", specifier = ">=0.0.15" },
     { name = "typer", specifier = ">=0.15.0" },
 ]
-provides-extras = ["grafeo", "ladybug", "neug", "falkordb", "turingdb", "helixdb", "arcadedb", "oxigraph", "duckdb", "embedded", "bench", "dev"]
+provides-extras = ["grafeo", "ladybug", "neug", "falkordb", "turingdb", "helixdb", "arcadedb", "neo4j-embedded", "oxigraph", "duckdb", "embedded", "bench", "dev"]
 
 [[package]]
 name = "h11"

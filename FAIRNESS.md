@@ -30,6 +30,10 @@ benchmark, servers included, is kept in [legacy/](legacy/README.md).
      are not capped.
    - ArcadeDB: also its query, scan and async thread pools and the JVM's common fork-join pool set to 1 (the note
      lists them); its housekeeping threads are not capped.
+   - Neo4j Community: Cypher runs each query on the calling thread (the parallel runtime is Enterprise only); GDS
+     gets `concurrency: 1` and `readConcurrency: 1`, `neo4j-admin database import` gets `--threads=1` and the
+     JVM caps above. Its background threads (page cache flushing, checkpointing, index population) have no
+     documented setting and are not capped.
 
    **Planned with grafeo 0.6.4:** the all-cores runs come back to the `full` selection, reported as a separate
    set of tables, and Grafeo's adapter switches from `RAYON_NUM_THREADS` to the real thread setting 0.6.4
@@ -95,6 +99,9 @@ Load uses each database's **fastest documented bulk path, CSV parsing included**
 - ArcadeDB: GraphBatch (`create_vertices`, then `new_edges` from an id to RID map), with the CSVs parsed in
   Python. Its faster Graph Importer does not honour CSV quotes, which the SNB text columns need (see
   [docs/known-disagreements.md](docs/known-disagreements.md)).
+- Neo4j Community: `neo4j-admin database import full` (the offline bulk importer) on CSV copies with typed header
+  lines, then the store opened embedded, a unique `id` constraint per label awaited online and, for
+  Graphalytics, the GDS projection; all in the load clock, including the importer's JVM starts.
 
 ## Adapter rules
 
@@ -129,7 +136,10 @@ How each marker shows in CodSpeed is in the [README](README.md#markers).
 
 ## Licensing and process kinds
 
-- **Neo4j** is measured as Neo4j Community only: the Enterprise terms restrict publishing benchmarks.
+- **Neo4j** is measured as Neo4j Community only: the Enterprise terms restrict publishing benchmarks. Neo4j
+  Community is GPLv3; its algorithms use GDS from the Community tarball, whose jar carries GPLv3 (`LICENSE.txt`)
+  and runs as the GDS Community Edition without a licence file. The tarball and the JRE are downloaded into the
+  data cache, never redistributed.
 - **FalkorDB** runs through `falkordblite`, which starts a Redis server subprocess; it is reported as a
   "local process", not in-process.
 

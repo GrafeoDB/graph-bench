@@ -43,6 +43,9 @@ SINGLE_THREAD_ARGS = ("-XX:ParallelGCThreads=1", "-XX:ConcGCThreads=1", "-XX:CIC
 THREADS_ENV = "GRAPH_BENCH_JVM_THREADS"
 # Downloaded files (JREs, jar archives) go into this directory of the data cache, under their own file name.
 DOWNLOADS = "downloads"
+# Or into this directory instead, when set: downloads are tools, not datasets, so a temporary data cache (the adapter
+# tests' `push_data_dir`) can keep using the shared downloads instead of fetching them again.
+DOWNLOADS_ENV = "GRAPH_BENCH_DOWNLOADS_DIR"
 _CHUNK = 1 << 20
 _OWNER: dict[str, str] = {}
 
@@ -174,8 +177,9 @@ def java_version(java_home: Path) -> str:
 
 
 def downloads_dir() -> Path:
-    """Where `fetch` keeps its files: `<data cache>/downloads`."""
-    return cache.data_dir() / DOWNLOADS
+    """Where `fetch` keeps its files: `DOWNLOADS_ENV` when set, else `<data cache>/downloads`."""
+    override = os.environ.get(DOWNLOADS_ENV)
+    return Path(override) if override else cache.data_dir() / DOWNLOADS
 
 
 def sha256_of(path: Path) -> str:

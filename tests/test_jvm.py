@@ -113,6 +113,7 @@ def source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[str, str, P
     payload.write_bytes(b"not really a JRE" * 1000)
     cache_dir = tmp_path / "cache"
     monkeypatch.setenv("GRAPH_BENCH_DATA_DIR", str(cache_dir))
+    monkeypatch.delenv(jvm.DOWNLOADS_ENV, raising=False)
     return payload.as_uri(), hashlib.sha256(payload.read_bytes()).hexdigest(), cache_dir
 
 
@@ -123,6 +124,18 @@ def test_fetch_downloads_and_verifies(source: tuple[str, str, Path]) -> None:
     assert jvm.sha256_of(path) == digest
     assert [p.name for p in path.parent.iterdir()] == ["jre-21.tar.gz"]
     assert jvm.fetch(url, digest, "renamed.tgz").name == "renamed.tgz"
+
+
+def test_fetch_into_the_downloads_override(
+    source: tuple[str, str, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GRAPH_BENCH_DOWNLOADS_DIR moves the downloads out of the data cache."""
+    url, digest, cache_dir = source
+    shared = tmp_path / "shared-downloads"
+    monkeypatch.setenv(jvm.DOWNLOADS_ENV, str(shared))
+    assert jvm.downloads_dir() == shared
+    assert jvm.fetch(url, digest) == shared / "jre-21.tar.gz"
+    assert not (cache_dir / "downloads").exists()
 
 
 def test_fetch_reuses_a_verified_file(source: tuple[str, str, Path], monkeypatch: pytest.MonkeyPatch) -> None:

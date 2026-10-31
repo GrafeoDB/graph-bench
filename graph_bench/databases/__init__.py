@@ -24,6 +24,7 @@ KNOWN: tuple[str, ...] = (
     "turingdb",
     "helixdb",
     "arcadedb",
+    "neo4j",
     "oxigraph",
     "duckdb",
 )
@@ -36,6 +37,7 @@ MODELS: dict[str, frozenset[Model]] = {
     "turingdb": frozenset({"property_graph"}),
     "helixdb": frozenset({"property_graph"}),
     "arcadedb": frozenset({"property_graph"}),
+    "neo4j": frozenset({"property_graph"}),
     "oxigraph": frozenset({"rdf"}),
     "duckdb": frozenset({"sql_pgq"}),
 }
@@ -48,6 +50,7 @@ DISPLAY: dict[str, str] = {
     "turingdb": "TuringDB",
     "helixdb": "HelixDB",
     "arcadedb": "ArcadeDB",
+    "neo4j": "Neo4j",
     "oxigraph": "Oxigraph",
     "duckdb": "DuckDB + DuckPGQ",
 }
@@ -62,6 +65,7 @@ REGISTRY: dict[str, str] = {
     "turingdb": "graph_bench.databases.turingdb:TuringDatabase",
     "helixdb": "graph_bench.databases.helixdb:HelixDatabase",
     "arcadedb": "graph_bench.databases.arcadedb:ArcadeDatabase",
+    "neo4j": "graph_bench.databases.neo4j:Neo4jDatabase",
     "oxigraph": "graph_bench.databases.oxigraph:OxigraphDatabase",
     "duckdb": "graph_bench.databases.duckdb:DuckDatabase",
 }
