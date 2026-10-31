@@ -2,9 +2,9 @@
 # Needs the CodSpeed app on graph-bench and codspeed-macro runners enabled for the org; authentication uses
 # GitHub OIDC (no token secret).
 #
-# Both jobs measure the newest stable release of every database from PyPI, grafeo included: after `uv sync --frozen`
-# they install the database packages (graph-bench packages) one at a time, leaving uv.lock alone. Grafeo's own
-# CodSpeed suite covers grafeo main. `graph-bench setup --grafeo <path>` stays a local option.
+# Both jobs measure the newest stable release of every database from PyPI, grafeo included: the shared composite
+# action .github/actions/prepare runs `uv sync --frozen`, then installs the database packages (graph-bench
+# packages) one at a time, leaving uv.lock alone. Grafeo's own CodSpeed suite covers grafeo main. `graph-bench setup --grafeo <path>` stays a local option.
 #   codspeed: the push selection under CodSpeed in wall-time mode, on every push to main, daily and on demand.
 #   readme:   the full selection with `graph-bench bench`, daily and on demand; it regenerates the README's
 #             results section and opens a pull request on the branch bot/results.
@@ -32,26 +32,9 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.3.3
+      - uses: ./.github/actions/prepare
         with:
-          python-version: "3.13"
-      - run: uv sync --frozen --extra bench
-      - name: Install the databases at their newest stable releases
-        # The lockfile keeps the repo reproducible; a benchmark run measures the databases as released today
-        # (grafeo from PyPI too). One package at a time, so a package with no build for this runner (falkordblite
-        # needs glibc 2.38, Ubuntu 22.04 has 2.35) does not stop the job: it is logged and its database shows as
-        # failed. uv never picks a pre-release here, and uv.lock is not touched.
-        run: bash .github/scripts/install-databases.sh
-      - name: Dataset cache key
-        id: data-key
-        run: echo "key=$(uv run --no-sync graph-bench data key --selection push)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v6
-        with:
-          path: ~/.cache/graph-bench
-          key: graph-bench-data-${{ runner.arch }}-${{ steps.data-key.outputs.key }}
-      - run: uv run --no-sync graph-bench data prepare --selection push
-      - name: Benchmark plan
-        run: uv run --no-sync graph-bench list --selection push
+          selection: push
       - name: Run the benchmarks
         uses: CodSpeedHQ/action@v5
         with:
@@ -74,26 +57,9 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.3.3
+      - uses: ./.github/actions/prepare
         with:
-          python-version: "3.13"
-      - run: uv sync --frozen --extra bench
-      - name: Install the databases at their newest stable releases
-        # The lockfile keeps the repo reproducible; a benchmark run measures the databases as released today
-        # (grafeo from PyPI too). One package at a time, so a package with no build for this runner (falkordblite
-        # needs glibc 2.38, Ubuntu 22.04 has 2.35) does not stop the job: it is logged and its database shows as
-        # failed. uv never picks a pre-release here, and uv.lock is not touched.
-        run: bash .github/scripts/install-databases.sh
-      - name: Dataset cache key
-        id: data-key
-        run: echo "key=$(uv run --no-sync graph-bench data key --selection full)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v6
-        with:
-          path: ~/.cache/graph-bench
-          key: graph-bench-data-${{ runner.arch }}-${{ steps.data-key.outputs.key }}
-      - run: uv run --no-sync graph-bench data prepare --selection full
-      - name: Benchmark plan
-        run: uv run --no-sync graph-bench list --selection full
+          selection: full
       - name: Run the benchmarks
         run: uv run --no-sync graph-bench bench --selection full --out out
       - name: Write the results section

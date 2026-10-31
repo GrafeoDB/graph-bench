@@ -5,6 +5,7 @@ score. It covers the single-threaded results at the largest scale present.
 """
 
 import statistics
+from dataclasses import dataclass
 
 from graph_bench.report.ranking import Ranked, is_load, rank, scale_key
 from graph_bench.results import Entry, Results
@@ -51,8 +52,28 @@ def _median_rank(positions: list[int]) -> str:
     return str(int(value)) if float(value).is_integer() else f"{value:.1f}"
 
 
-def render_summary(results: Results, *, results_url: str = RESULTS_URL) -> str:
-    """The summary block, between `<!-- graph-bench:start -->` and `<!-- graph-bench:end -->`."""
+@dataclass(frozen=True)
+class SummaryRow:
+    """One category of the summary: its name, the databases that ran it, and Grafeo's counts."""
+
+    category: str
+    databases: int
+    fastest: int
+    agreed: int
+    median_rank: str
+
+
+@dataclass(frozen=True)
+class SummaryData:
+    """What the summary block holds, before it is laid out: rows, the scale, and Grafeo's markers."""
+
+    rows: list[SummaryRow]
+    scale: str
+    marked: list[tuple[str, str]]
+
+
+def summary_data(results: Results) -> SummaryData:
+    """Grafeo's per-category counts at the largest scale it ran at, single-threaded."""
     single = [e for e in results.entries if e.threads == 1]
     grafeo_entries = [e for e in single if e.database == GRAFEO]
     if not grafeo_entries:
@@ -71,8 +92,14 @@ def render_summary(results: Results, *, results_url: str = RESULTS_URL) -> str:
         positions = [p for r in in_row if (p := r.position(GRAFEO)) is not None]
         fastest = sum(1 for p in positions if p == 1)
         agreed = sum(1 for e in grafeo_entries if e.category == category and _agreed(e))
-        rows.append(f"| {CATEGORY_NAMES[category]} | {len(dbs)} | {fastest} / {agreed} | {_median_rank(positions)} |")
+        rows.append(SummaryRow(CATEGORY_NAMES[category], len(dbs), fastest, agreed, _median_rank(positions)))
+    return SummaryData(rows, scale, _marked(grafeo_entries, ranked))
 
+
+def render_summary(results: Results, *, results_url: str = RESULTS_URL) -> str:
+    """The summary block, between `<!-- graph-bench:start -->` and `<!-- graph-bench:end -->`."""
+    data = summary_data(results)
+    rows = [f"| {r.category} | {r.databases} | {r.fastest} / {r.agreed} | {r.median_rank} |" for r in data.rows]
     lines = [
         "<!-- graph-bench:start -->",
         f"**graph-bench** · {grafeo_label(results)} · {machine_label(results)} · {results.started_at[:10]}"
@@ -83,10 +110,9 @@ def render_summary(results: Results, *, results_url: str = RESULTS_URL) -> str:
         *rows,
     ]
     # Each footer line is its own paragraph, so GitHub shows them on separate lines.
-    footer = [f"Single-threaded, {scale} scale; answers checked; wrong answers not ranked."]
-    marked = _marked(grafeo_entries, ranked)
-    footer += [f"Grafeo: {m} on {benchmark}" for benchmark, m in marked]
-    if marked:
+    footer = [f"Single-threaded, {data.scale} scale; answers checked; wrong answers not ranked."]
+    footer += [f"Grafeo: {m} on {benchmark}" for benchmark, m in data.marked]
+    if data.marked:
         footer.append(LEGEND)
     footer.append(f"Full results, with every database named: {results_url}")
     for line in footer:

@@ -74,6 +74,33 @@ def _section_label(section: Section, *, with_scale: bool) -> str:
     return label
 
 
+def _overview_rows(
+    sections: dict[Section, list[Ranked]],
+    by_key: dict[tuple[str, str, int | None, str], Entry],
+    dbs: list[str],
+    *,
+    with_scale: bool,
+) -> list[tuple[str, list[str]]]:
+    """One (label, cell per database) pair per section; the cells are `✓ k/n` and the marker counts."""
+    rows = []
+    for section, members in sections.items():
+        cells = []
+        for db in dbs:
+            entries = [e for r in members if (e := by_key.get((r.benchmark, r.scale, r.threads, db))) is not None]
+            cells.append(_overview_cell(entries, len(members)))
+        rows.append((_section_label(section, with_scale=with_scale), cells))
+    return rows
+
+
+def overview(results: Results) -> tuple[list[str], list[tuple[str, list[str]]]]:
+    """The README overview as data: the databases (Grafeo first) and, per section, its label and one cell each."""
+    dbs = all_databases(results)
+    sections = _sections(rank(results))
+    by_key = {(e.benchmark, e.scale, e.threads, e.database): e for e in results.entries}
+    scales = {scale for category, scale, _ in sections if category != "startup"}
+    return dbs, _overview_rows(sections, by_key, dbs, with_scale=len(scales) > 1)
+
+
 def render_readme(results: Results) -> str:
     """The text that goes between the README's results markers."""
     dbs = all_databases(results)
@@ -97,13 +124,7 @@ def render_readme(results: Results) -> str:
         " each marker.",
         "",
     ]
-    overview_rows = []
-    for section, members in sections.items():
-        row = [_section_label(section, with_scale=with_scale)]
-        for db in dbs:
-            entries = [e for r in members if (e := by_key.get((r.benchmark, r.scale, r.threads, db))) is not None]
-            row.append(_overview_cell(entries, len(members)))
-        overview_rows.append(row)
+    overview_rows = [[label, *cells] for label, cells in _overview_rows(sections, by_key, dbs, with_scale=with_scale)]
     lines += _table(["Category", *names], overview_rows)
 
     for section, members in sections.items():
