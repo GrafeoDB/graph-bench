@@ -163,6 +163,15 @@ one version string.
 - `.github/workflows/pins.yml`: weekly (and on demand), checks for a newer stable Neo4j Community release and a
   newer Temurin JRE of the Java major Neo4j requires, and opens a pull request on `bot/pins` that updates
   `graph_bench/databases/pins.py` (URLs and SHA-256 from the vendors' published checksums).
+- `.github/workflows/release.yml`: the release post. Daily (and on demand) it reads the newest stable `grafeo`
+  version on PyPI and compares it with the last one posted. When it is new, the job runs the `full` selection on the
+  same Graviton runner as above (through the shared `.github/actions/prepare` action) and posts the trigger line,
+  the overview per category, Grafeo's fastest counts and links to the run and to the results section on Discord
+  (`graph-bench report --format discord`, `graph-bench notify`). The last posted version lives in the file
+  `grafeo-version.txt` on the branch `bot/state`, written with the job's `GITHUB_TOKEN` only after a successful
+  post. The webhook is the repository secret `DISCORD_BENCH_WEBHOOK`; without it the run skips the post, says so in
+  the log and records nothing. A manual run has a `force` input that runs for the current version even if it was
+  already posted.
 
 ## Results
 

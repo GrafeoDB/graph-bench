@@ -1,0 +1,190 @@
+# Posts the benchmark results of each new Grafeo release to a Discord channel.
+#
+# Daily (and on demand) the `detect` job reads the newest stable grafeo version on PyPI and compares it with the
+# last one posted, kept in the file grafeo-version.txt on the branch bot/state (committed with the job's
+# GITHUB_TOKEN; not actions/cache, which evicts, and not repository variables, which GITHUB_TOKEN cannot write).
+# When it is new, the `post` job runs the full selection on the Graviton runner, exactly like bench.yml's README job
+# (the shared composite action .github/actions/prepare), posts the result through the webhook in the secret
+# DISCORD_BENCH_WEBHOOK, and only then records the version. It is its own workflow, not a job of bench.yml, because
+# its trigger (a new release) and its permissions (writing bot/state) differ from the push and README jobs, and a
+# release run must not wait on bench.yml's queue.
+#
+# Without the secret the run goes on to the results artifact but skips the post and the state update (the log
+# says so), so the version is posted once the secret exists. The webhook URL is never written anywhere.
+name: Release post
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Run for the current grafeo version even if it was already posted (for testing).
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-post
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    name: Is there a new Grafeo release?
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      run: ${{ steps.check.outputs.run }}
+      webhook: ${{ steps.webhook.outputs.present }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          python-version: "3.13"
+      - name: Is the webhook secret set?
+        id: webhook
+        env:
+          DISCORD_BENCH_WEBHOOK: ${{ secrets.DISCORD_BENCH_WEBHOOK }}
+        run: |
+          if [ -n "$DISCORD_BENCH_WEBHOOK" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=No Discord post::The secret DISCORD_BENCH_WEBHOOK is not set; results are not posted."
+          fi
+      - name: Newest stable grafeo versus the last posted
+        id: check
+        env:
+          FORCE: ${{ inputs.force }}
+          PYTHONPATH: .
+          WEBHOOK: ${{ steps.webhook.outputs.present }}
+        shell: bash
+        run: |
+          latest=$(uv run --no-project python -m graph_bench.release latest)
+          # Three outcomes of the lookup: the branch exists (0), it does not (2: never posted), or the lookup
+          # failed (anything else: stop, an unknown state must never lead to a post).
+          rc=0
+          git ls-remote --exit-code --heads origin bot/state > /dev/null || rc=$?
+          posted=""
+          if [ "$rc" -eq 0 ]; then
+            git fetch --depth=1 origin bot/state
+            posted=$(git show FETCH_HEAD:grafeo-version.txt | tr -d '[:space:]')
+            if [ -z "$posted" ]; then
+              echo "::error title=State unreadable::bot/state holds no version in grafeo-version.txt"
+              exit 1
+            fi
+          elif [ "$rc" -ne 2 ]; then
+            echo "::error title=State lookup failed::git ls-remote exited $rc; not posting on an unknown state"
+            exit 1
+          fi
+          echo "newest stable grafeo: $latest; last posted: ${posted:-none}"
+          # Numeric version order: only a version strictly newer than the posted one runs (an older newest, for
+          # example after a yank, does not).
+          newer=0
+          uv run --no-project python -m graph_bench.release newer "$latest" "$posted" || newer=$?
+          if [ "$newer" -gt 1 ]; then
+            echo "::error title=Version comparison failed::cannot compare $latest with ${posted:-none}"
+            exit 1
+          fi
+          run=false
+          if [ "$FORCE" = "true" ]; then
+            run=true
+            echo "forced: running for $latest"
+          elif [ "$newer" -eq 1 ]; then
+            echo "grafeo $latest is not newer than the posted ${posted:-none}; nothing to do"
+          elif [ "$WEBHOOK" != "true" ]; then
+            echo "grafeo $latest is new, but there is no webhook secret; skipping the run"
+          else
+            run=true
+          fi
+          echo "version=$latest" >> "$GITHUB_OUTPUT"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
+  post:
+    name: Benchmark and post (full selection)
+    needs: detect
+    if: needs.detect.outputs.run == 'true'
+    # Same runner as bench.yml's README job.
+    runs-on: codspeed-macro-arm64-graviton-ubuntu-22-04
+    # One macro-runner job at a time across workflows: two at once lost their runners (2026-10-31).
+    concurrency:
+      group: macro-runner
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      # The state branch gets its own checkout (path state, with the job token configured for that clone), so the
+      # push at the end does not depend on credentials of another work tree. Checked out before the benchmark so a
+      # problem shows before anything is posted. On the very first run the branch does not exist yet.
+      - name: Does bot/state exist?
+        id: state
+        if: needs.detect.outputs.webhook == 'true'
+        run: |
+          rc=0
+          git ls-remote --exit-code --heads origin bot/state > /dev/null || rc=$?
+          case "$rc" in
+            0) echo "exists=true" >> "$GITHUB_OUTPUT" ;;
+            2) echo "exists=false" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error title=State lookup failed::git ls-remote exited $rc"; exit 1 ;;
+          esac
+      - uses: actions/checkout@v7
+        if: steps.state.outputs.exists == 'true'
+        with:
+          ref: bot/state
+          path: state
+      - uses: actions/checkout@v7
+        if: steps.state.outputs.exists == 'false'
+        with:
+          path: state
+      - name: Start the state branch
+        if: steps.state.outputs.exists == 'false'
+        working-directory: state
+        run: |
+          git checkout --orphan bot/state
+          git rm -rf --quiet .
+      - uses: ./.github/actions/prepare
+        with:
+          selection: full
+      - name: Run the benchmarks
+        run: uv run --no-sync graph-bench bench --selection full --out out
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: results-release
+          path: out/results.json
+          if-no-files-found: warn
+      - name: Post to Discord
+        if: needs.detect.outputs.webhook == 'true'
+        env:
+          DISCORD_BENCH_WEBHOOK: ${{ secrets.DISCORD_BENCH_WEBHOOK }}
+        run: |
+          # notify records how many messages went out in notify-progress.txt, so a retry resumes after them
+          # instead of repeating them. After the last attempt the job fails and nothing is recorded; the next
+          # run benchmarks again and posts a complete new set.
+          attempt=1
+          until uv run --no-sync graph-bench notify --in out/results.json --webhook-env DISCORD_BENCH_WEBHOOK             --progress notify-progress.txt             --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"; do
+            if [ "$attempt" -ge 3 ]; then
+              echo "::error title=Discord post failed::gave up after $attempt attempts; $(cat notify-progress.txt 2>/dev/null || echo 0) messages went out"
+              exit 1
+            fi
+            attempt=$((attempt + 1))
+            sleep 30
+          done
+      - name: Record the posted version on bot/state
+        if: needs.detect.outputs.webhook == 'true'
+        working-directory: state
+        run: |
+          # The version that was benchmarked (results.json), which can be newer than the detected one.
+          version=$(python3 -c "import json; print(json.load(open('../out/results.json'))['grafeo']['version'])")
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          echo "$version" > grafeo-version.txt
+          git add grafeo-version.txt
+          git commit --quiet -m "Record grafeo $version as posted"
+          if ! git push origin HEAD:refs/heads/bot/state; then
+            echo "::error title=bot/state push failed::grafeo $version was posted but not recorded, so the next run posts it again. Check that the workflow token may write and that bot/state is not protected."
+            exit 1
+          fi
