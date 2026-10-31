@@ -368,3 +368,74 @@ def test_summary_label_prefers_the_git_sha(results: Results) -> None:
     results.grafeo["sha"] = "da7ada7929a5e7978cd444dcb34ee206f2af33b82627549eb44cac7bb22a1288"
     results.grafeo["git_sha"] = "9164e307"
     assert "Grafeo 0.6.1 (9164e30)" in render_summary(results)
+
+
+def _new_rows(results: Results) -> None:
+    """Startup (empty scale, timed in ms) and Load (query language) (in s) for the three databases."""
+    startup: Category = "startup"
+    load_ql: Category = "load_ql"
+    results.entries += [
+        _entry(startup, "startup", "grafeo", "ok", "agree", 120.0, scale="empty"),
+        _entry(startup, "startup", "ladybug", "ok", "agree", 80.0, scale="empty"),
+        _entry(startup, "startup", "fake", "not_supported", "unchecked", scale="empty"),
+        _entry(load_ql, "load_ql_snb", "grafeo", "ok", "agree", load_s=0.5),
+        _entry(load_ql, "load_ql_snb", "ladybug", "ok", "unchecked", load_s=0.25),
+        _entry(load_ql, "load_ql_snb", "fake", "failed", "unchecked"),
+    ]
+
+
+def test_report_startup_in_ms_and_load_ql_in_s(results: Results) -> None:
+    _new_rows(results)
+    text = render_readme(results)
+    assert "### Startup (empty database, ms)" in text
+    assert _row(text, "Empty database") == ["120", "⊘", "**80.0**"]
+    assert "### Load (query language) (small scale, s)" in text
+    assert _row(text, "LDBC SNB") == ["0.500", "✗", "**0.250**"]
+    # The empty scale is not a scale of the run: labels stay unscaled, and Startup comes first.
+    assert "Single-threaded, small scale." in text
+    assert _row(text, "Startup") == ["✓ 1/1", "⊘", "✓ 1/1"]
+    assert _row(text, "Load (query language)") == ["✓ 1/1", "✓ 0/1 ✗1", "✓ 1/1"]
+    block = text.split("### Overview")[1].split("###")[0].splitlines()
+    overview = [line.split("|")[1].strip() for line in block if line.startswith("| ")]
+    labels = [label for label in overview if label in ("Startup", "Load (query language)", "Complex queries")]
+    assert labels == ["Startup", "Load (query language)", "Complex queries"]
+    headings = [line for line in text.splitlines() if line.startswith("### ")]
+    assert headings[1:3] == ["### Startup (empty database, ms)", "### Load (query language) (small scale, s)"]
+
+
+def test_report_startup_ranks_by_median_in_codspeed_mode(results: Results) -> None:
+    """CodSpeed runs keep the startup timing (the children's in-process times), and rank it by the median."""
+    _new_rows(results)
+    results.mode = "codspeed"
+    for e in results.entries:
+        if e.category != "startup":
+            e.timing = None
+        else:
+            e.preflight_ns = 1  # the first child; not what Startup ranks by
+    startup = next(r for r in rank(results) if r.benchmark == "startup")
+    assert [db for db, _ in startup.order] == ["ladybug", "grafeo"]
+    assert startup.title == "Empty database"
+    ql = next(r for r in rank(results) if r.benchmark == "load_ql_snb")
+    assert (ql.title, [db for db, _ in ql.order]) == ("LDBC SNB", ["ladybug", "grafeo"])
+
+
+def test_summary_counts_startup_and_load_ql(results: Results) -> None:
+    _new_rows(results)
+    text = render_summary(results)
+    assert "Single-threaded, small scale;" in text
+    assert _row(text, "Startup") == ["2", "0 / 1", "2"]
+    assert _row(text, "Load (query language)") == ["2", "0 / 1", "2"]
+    rows = [line.split("|")[1].strip() for line in text.splitlines() if line.startswith("| ")][1:]
+    assert rows == ["Startup", "Load (query language)", "Complex queries", "Algorithms"]
+
+
+def test_load_ql_titles_and_order() -> None:
+    from graph_bench.report import ranking
+
+    assert ranking.title("load_ql_snb") == "LDBC SNB"
+    assert ranking.title("load_ql_graphalytics") == "Graphalytics"
+    assert ranking.title("startup") == "Empty database"
+    assert sorted(["load_ql_graphalytics", "load_ql_snb"], key=ranking._benchmark_key) == [
+        "load_ql_snb",
+        "load_ql_graphalytics",
+    ]

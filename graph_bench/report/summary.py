@@ -1,13 +1,15 @@
 """The summary block for grafeo's README.
 
 It names no database other than Grafeo (user decision, 2026-10-30): it holds counts only, and never a combined
-score. It covers the single-threaded results at the largest scale present.
+score. It covers the single-threaded results at the largest scale present, plus the Startup row (whose scale is
+the empty database).
 """
 
 import statistics
 
 from graph_bench.report.ranking import Ranked, is_load, rank, scale_key
 from graph_bench.results import Entry, Results
+from graph_bench.suites.catalog import STARTUP_SCALE
 from graph_bench.types import CATEGORY_NAMES, CATEGORY_ORDER, marker
 
 RESULTS_URL = "https://github.com/GrafeoDB/graph-bench#results"
@@ -36,8 +38,9 @@ def machine_label(results: Results) -> str:
 def _agreed(entry: Entry) -> bool:
     """Whether an entry counts towards n in "Grafeo fastest k / n": its answer agreed and it is ok or ⏱.
 
-    An entry that failed (✗) after its answer agreed does not count. A load counts when it completed and its node
-    and edge count check did not disagree (`unchecked` when the database has no `counts()`).
+    An entry that failed (✗) after its answer agreed does not count. A load (Load or Load (query language)) counts
+    when it completed and its node and edge count check did not disagree (`unchecked` when the database has no
+    `counts()`).
     """
     if is_load(entry):
         return entry.status == "ok" and entry.answer != "disagree"
@@ -57,10 +60,12 @@ def render_summary(results: Results, *, results_url: str = RESULTS_URL) -> str:
     grafeo_entries = [e for e in single if e.database == GRAFEO]
     if not grafeo_entries:
         raise ValueError("the results hold no single-threaded Grafeo entries to summarise")
-    # The largest scale Grafeo ran at, so a larger-scale run of another database cannot empty the table.
-    scale = max((e.scale for e in grafeo_entries), key=scale_key)
-    grafeo_entries = [e for e in grafeo_entries if e.scale == scale]
-    ranked = [r for r in rank(results) if r.scale == scale and r.threads == 1]
+    # The largest scale Grafeo ran at, so a larger-scale run of another database cannot empty the table. The
+    # Startup row has a scale of its own (the empty database) and is always in.
+    scaled = [e.scale for e in grafeo_entries if e.category != "startup"]
+    scale = max(scaled, key=scale_key) if scaled else STARTUP_SCALE
+    grafeo_entries = [e for e in grafeo_entries if e.scale == scale or e.category == "startup"]
+    ranked = [r for r in rank(results) if (r.scale == scale or r.category == "startup") and r.threads == 1]
 
     rows = []
     for category in CATEGORY_ORDER:

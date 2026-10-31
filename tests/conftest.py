@@ -35,6 +35,17 @@ def known_disagreements() -> Callable[[str], set[str]]:
     return _known
 
 
+# The base class's errors for the rows later plan tasks implement per adapter: until an adapter has `open_empty`
+# (Startup, Task 3) and `load_ql` (Load (query language), Task 8), those entries are ⊘ with exactly these errors.
+# Those tasks remove this allowance (and `not_yet_implemented`) from the adapter tests.
+NOT_YET_IMPLEMENTED: dict[str, str] = {"startup": "startup", "load_ql": "no query-language bulk loader"}
+
+
+def not_yet_implemented(entry: Entry) -> bool:
+    """Whether an adapter test's entry is a Startup or Load (query language) ⊘ from the base class default."""
+    return entry.status == "not_supported" and NOT_YET_IMPLEMENTED.get(entry.category) == entry.error
+
+
 def warn_if_fixed(entry: Entry, known: set[str]) -> None:
     """Warn when an allowlisted benchmark's entry now agrees, so a fixed upstream bug is noticed.
 

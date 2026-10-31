@@ -17,7 +17,9 @@ MODEL_STORE: dict[Model, Store] = {"property_graph": "graph", "sql_pgq": "graph"
 STANDARD_DIALECT: dict[Model, str] = {"property_graph": "cypher", "sql_pgq": "sql_pgq", "rdf": "sparql"}
 
 Category = Literal[
+    "startup",
     "load",
+    "load_ql",
     "batch_writes",
     "scans",
     "hops",
@@ -34,7 +36,9 @@ Category = Literal[
 ]
 
 CATEGORY_ORDER: tuple[Category, ...] = (
+    "startup",
     "load",
+    "load_ql",
     "batch_writes",
     "scans",
     "hops",
@@ -51,7 +55,9 @@ CATEGORY_ORDER: tuple[Category, ...] = (
 )
 
 CATEGORY_NAMES: dict[Category, str] = {
+    "startup": "Startup",
     "load": "Load",
+    "load_ql": "Load (query language)",
     "batch_writes": "Batch writes",
     "scans": "Scans",
     "hops": "Hops",
@@ -66,6 +72,13 @@ CATEGORY_NAMES: dict[Category, str] = {
     "deriva": "Deriva workload",
     "project_suites": "Project suites",
 }
+
+# The load rows: Load (each database's fastest documented bulk path) and Load (query language). Their entries carry
+# `load_ns`, rank by it, and count as passed when their node and edge count check did not disagree.
+LOAD_CATEGORIES: frozenset[Category] = frozenset({"load", "load_ql"})
+
+# The categories the 10x budget rule (and the in-run runaway guard) skips, as entries and as yardsticks.
+BUDGET_EXEMPT: frozenset[Category] = frozenset({"startup", "load", "load_ql"})
 
 Status = Literal["ok", "failed", "timeout", "not_supported"]
 AnswerVerdict = Literal["agree", "disagree", "unchecked"]

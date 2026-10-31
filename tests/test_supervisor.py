@@ -38,7 +38,7 @@ def _by_id(results: Results) -> dict[str, Entry]:
 
 
 def _expected_ids(db: str) -> set[str]:
-    return {c.bench_id for c in catalog.cases("push", [db])} | set(catalog.load_ids("push", [db]))
+    return set(catalog.all_ids("push", [db]))
 
 
 def _set_env(mp: pytest.MonkeyPatch, data_dir: Path, fake: str = "", fake2: str = "") -> None:
@@ -93,7 +93,7 @@ def test_supervisor_all_agree(two_dbs: tuple[Results, list[list[str]], Path]) ->
     assert {e.id for e in entries} == _expected_ids("fake")
     for entry in entries:
         assert entry.status == "ok", entry
-        if entry.category == "load":
+        if entry.category in ("load", "load_ql"):
             assert entry.load_ns is not None and entry.load_ns > 0
         else:
             assert entry.answer == "agree", entry
@@ -314,7 +314,7 @@ def test_supervisor_resumes_after_crash(bench_env: pytest.MonkeyPatch, tmp_path:
 
 def test_supervisor_marks_hang_as_timeout(bench_env: pytest.MonkeyPatch, tmp_path: Path) -> None:
     bench_env.setenv("GRAPH_BENCH_FAKE", "hang:snb_is4")
-    results = run_bench("push", ["fake"], tmp_path / "out", workdir=tmp_path / "work", case_timeout_s=2)
+    results = run_bench("push", ["fake"], tmp_path / "out", workdir=tmp_path / "work", case_timeout_s=6)
     entries = _by_id(results)
     assert set(entries) == _expected_ids("fake")
     hung = entries.pop(_id("snb_is4"))
@@ -406,6 +406,51 @@ def test_budget_rule_is_order_independent() -> None:
 def test_budget_rule_compares_with_the_others() -> None:
     markers = _markers([("a", 1), ("b", 15), ("c", 2), ("d", 3)])
     assert all(marker == ("ok", None) for marker in markers.values()), markers  # 15 vs others' mean 2: budget 20
+
+
+def test_budget_rule_exempts_startup_and_load_ql() -> None:
+    """Startup and Load (query language) entries are never marked by the final rule, nor get an in-run budget."""
+    for category, benchmark in (("startup", "startup"), ("load_ql", "load_ql_snb")):
+        entries = [
+            dataclasses.replace(_entry(db, ms), category=category, benchmark=benchmark)
+            for db, ms in (("a", 1), ("b", 1), ("c", 500))
+        ]
+        assert [(e.status, e.error) for e in _apply(entries)] == [("ok", None)] * 3, category
+    meta = supervisor._expected(catalog.selection("push"), "fake", 1)
+    startup, load_ql = catalog.startup_id("fake", 1), catalog.load_ql_id("snb", "fake", "small", 1)
+    assert (meta[startup].kind, meta[startup].scale, meta[startup].reference) == ("startup", "empty", "python")
+    assert (meta[load_ql].kind, meta[load_ql].benchmark, meta[load_ql].supported) == ("load_ql", "load_ql_snb", True)
+    earlier = [
+        dataclasses.replace(_entry(db, 1), id=i, category=m.category, benchmark=m.benchmark, scale=m.scale)
+        for db in ("a", "b", "c")
+        for i, m in ((startup, meta[startup]), (load_ql, meta[load_ql]))
+    ]
+    assert supervisor._budgets(earlier, "fake", meta) == {}
+
+
+def test_load_ql_crash_does_not_fail_the_cases(bench_env: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A query-language load that crashes the worker fails only its own entry: no "load failed" cascade."""
+    bench_env.setenv("GRAPH_BENCH_FAKE", "crash:load_ql_snb")
+    results = run_bench("push", ["fake"], tmp_path / "out", workdir=tmp_path / "work", case_timeout_s=60)
+    entries = _by_id(results)
+    assert set(entries) == _expected_ids("fake")
+    crashed = entries.pop(catalog.load_ql_id("snb", "fake", "small", 1))
+    assert crashed.status == "failed"
+    assert "exited with code 3" in (crashed.error or "")
+    assert all(e.status == "ok" for e in entries.values()), [e for e in entries.values() if e.status != "ok"]
+
+
+def test_startup_hang_is_a_timeout_without_cascade(bench_env: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The worker kills a silent startup child at half the case timeout (at most `STARTUP_TIMEOUT_S`), before
+    the supervisor's silence limit, so no child outlives its worker; the entry is ⏱ and nothing else is touched."""
+    bench_env.setenv("GRAPH_BENCH_FAKE", "hang:startup")
+    results = run_bench("push", ["fake"], tmp_path / "out", workdir=tmp_path / "work", case_timeout_s=6)
+    entries = _by_id(results)
+    assert set(entries) == _expected_ids("fake")
+    hung = entries.pop(catalog.startup_id("fake", 1))
+    assert (hung.status, hung.category, hung.scale) == ("timeout", "startup", "empty")
+    assert hung.error == "startup child 1 gave no answer within 3 s"
+    assert all(e.status == "ok" for e in entries.values()), [e for e in entries.values() if e.status != "ok"]
 
 
 def test_budget_rule_exempts_loads() -> None:

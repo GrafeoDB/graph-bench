@@ -62,14 +62,25 @@ class Database(ABC):
         return {}
 
     @classmethod
+    def provision(cls) -> None:
+        """What a database needs on disk before any start: downloads, extraction, sha256 checks, extension installs.
+
+        It never starts an engine (no JVM, no server process, no database opened). The worker (and the CodSpeed
+        session) calls it untimed before the Startup row's child processes, which never call it, so no download or
+        install lands in a startup time; `prepare_environment` calls it too. It must be idempotent. The default
+        does nothing.
+        """
+        return None
+
+    @classmethod
     def prepare_environment(cls) -> None:
-        """One-time environment setup such as extension downloads; never loads or opens data.
+        """One-time environment setup: `provision()`, then any untimed warm start; never loads or opens data.
 
         The worker (and the CodSpeed session) calls it once per process, before any timed load, so its cost never
         lands in a load time. An exception fails every load of the process, and so their cases, with its error.
-        The default does nothing.
+        The default calls `provision()`; an adapter that overrides it calls `provision()` first.
         """
-        return None
+        cls.provision()
 
     def __init__(self, workdir: Path, threads: int | None) -> None:
         """Only store the settings: adapters create their database instance in `load()`, inside the load clock."""
@@ -84,6 +95,35 @@ class Database(ABC):
 
     @abstractmethod
     def query(self, text: str, params: Mapping[str, Any]) -> list[tuple[Any, ...]]: ...
+
+    def open_empty(self) -> None:
+        """Start what this process lacks (a JVM, an engine, a server process) and open an empty, usable database in
+        `self.workdir`: the Startup row's work, timed with the probe query that follows it.
+
+        Run in a fresh process (`graph_bench.runner.startup`) that never called `provision` or
+        `prepare_environment`; it never fetches, hashes or installs anything. The default raises `NotSupported`.
+        """
+        raise NotSupported("startup")
+
+    def load_ql(self, dataset: Dataset) -> None:
+        """Load `dataset` into this fresh instance's graph store through the database's query language (Load
+        (query language)); timed by the caller, which then counts the result and runs its content probe.
+
+        The instance is closed afterwards and never queried by cases. The default raises `NotSupported`.
+        """
+        raise NotSupported("no query-language bulk loader")
+
+    def write(self, model: Model, text: str, params: Mapping[str, Any]) -> list[tuple[Any, ...]]:
+        """Run the write statement `text` (in `dialect_for(model)`) and commit it; rows of scalars, if any.
+
+        A write case calls it once per binding inside the clock, and for its untimed setup and teardown. The
+        default calls `query_model`; a database whose `query_model` does not commit overrides it.
+        """
+        return self.query_model(model, text, params)
+
+    def store_paths(self) -> list[Path]:
+        """The files or directories holding this instance's stored data, for the Disk record; `[]` when in memory."""
+        return []
 
     def load_store(self, store: Store, dataset: Dataset) -> None:
         """Load `dataset` into this (fresh) instance as `store`; timed by the caller. The default calls `load`."""

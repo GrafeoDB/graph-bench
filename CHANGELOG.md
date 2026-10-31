@@ -31,8 +31,8 @@ benchmark moves to `legacy/` untouched and is deleted once the new comparison re
   all results at the end, so the run order never decides a marker from this final rule. During the run a
   runaway guard cuts a preflight's database call (cold first run, harness work excluded) off at 30x the average
   of the 3 fastest earlier preflights and never below 10 s, once 3 earlier results exist; this guard depends on which databases ran
-  earlier. Before that a hard cap applies (`--case-timeout`, default 600 s of worker silence). Loads are exempt
-  from the budget.
+  earlier. Before that a hard cap applies (`--case-timeout`, default 600 s of worker silence). Startup and both
+  load rows are exempt from the budget.
 - **Load count check**: right after each timed load, outside the clock, the adapter's optional `counts()` counts
   the nodes and edges loaded through the database's own query interface; a mismatch with the dataset's counts
   (recorded in schema.json when the CSVs are written) makes the load ≠. Grafeo and LadybugDB count with Cypher.
@@ -52,6 +52,19 @@ benchmark moves to `legacy/` untouched and is deleted once the new comparison re
   selection in wall-time mode on CodSpeed's macro runners against the newest stable release of every database (grafeo from PyPI too), and a daily
   `full` run that opens a pull request updating the README results. `pins.yml` checks weekly for a newer Neo4j
   Community and Temurin JRE and opens a pull request on `bot/pins`.
+- **Startup row**: every database's cold start, timed in fresh child processes (`graph_bench/runner/startup.py`):
+  the driver's import, an empty database opened (`Database.open_empty`, starting whatever the process lacks) and
+  one probe query checked against the empty-database answer; downloads and installs run before, untimed
+  (`Database.provision`). The median over 3 processes in `push`, 5 in `full`; in CodSpeed, the whole child
+  processes are timed. Adapters implement `open_empty` in a later step; until then their Startup entry is ⊘.
+- **Load (query language) row**: each graph-store dataset loaded through the database's query language
+  (`Database.load_ql`) into fresh instances that no query uses, count-checked like Load plus a content probe,
+  run after the dataset's queries; a failure fails only that entry. Adapters implement `load_ql` in a later step.
+- **Write cases**: the harness for Batch writes (`suites.Write`): untimed setup, a timed committed write per batch,
+  untimed read-back and teardown after every run, a check of the loaded state before the first run and a node
+  and edge count guard after the case; write cases run after every read query of their dataset.
+- **Selections**: `push` now plans Startup, Load (query language), Batch writes, Scans and Pattern matching too
+  (their queries arrive with the next steps), and both selections turn the Memory and Disk records on.
 - **Known disagreements**: `docs/known-disagreements.md` records wrong answers, slow cases and engine findings as
   they are, instead of working around them in the adapters.
 

@@ -13,7 +13,7 @@ from graph_bench.databases import get_database
 from graph_bench.datasets import cache, rdf
 from graph_bench.runner.supervisor import run_bench
 from graph_bench.types import Model
-from tests.conftest import warn_if_fixed
+from tests.conftest import not_yet_implemented, warn_if_fixed
 
 # The worker's model gate error, exactly: f"model {case.item.model} not supported".
 MODEL_GATE = re.compile(f"model ({'|'.join(get_args(Model))}) not supported")
@@ -38,7 +38,7 @@ def test_oxigraph_push_agrees(
     for entry in entries:
         lacks_model = entry.status == "not_supported" and MODEL_GATE.fullmatch(entry.error or "") is not None
         warn_if_fixed(entry, known)
-        if entry.benchmark in known or lacks_model:
+        if entry.benchmark in known or lacks_model or not_yet_implemented(entry):
             continue
         good = entry.status == "ok" and entry.answer == "agree"
         if not good:

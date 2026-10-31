@@ -11,14 +11,16 @@ import pytest
 from graph_bench.databases.base import Database, DatabaseInfo, NotSupported
 from graph_bench.datasets import cache
 from graph_bench.datasets.schema import Dataset
+from graph_bench.runner import worker
 from graph_bench.suites import catalog
 from graph_bench.suites.catalog import Case
 
 ROOT = Path(__file__).resolve().parent.parent
 EXTRA = (
     "fake=tests.fakes:FakeDatabase,fake2=tests.fakes:FakeDatabase2,fake_rdf=tests.fakes:FakeRdfDatabase,"
-    "fake_sql=tests.fakes:FakeSqlDatabase"
+    "fake_sql=tests.fakes:FakeSqlDatabase,fake_nostart=tests.fakes:FakeNoStartup"
 )
+WRITES = {"GRAPH_BENCH_EXTRA_SUITES": "tests.fake_writes"}
 
 Lines = list[dict[str, Any]]
 
@@ -95,8 +97,7 @@ def test_worker_emits_start_before_entry(standard: tuple[Lines, Path]) -> None:
         else:
             assert line["id"] in started, line
     entries = _entries(lines)
-    expected = {c.bench_id for c in catalog.cases("push", ["fake"])} - {_id("snb_is1"), _id("snb_is3")}
-    assert set(entries) == expected | set(catalog.load_ids("push", ["fake"]))
+    assert set(entries) == set(catalog.all_ids("push", ["fake"])) - {_id("snb_is1"), _id("snb_is3")}
 
 
 def test_worker_times_agreeing_cases(standard: tuple[Lines, Path]) -> None:
@@ -133,15 +134,16 @@ def test_worker_marks_unsupported_model(push_data_dir: Path, tmp_path: Path) -> 
     assert lines[0]["kind"] == "database"
     entries = _entries(lines)
     rdf_load = catalog.load_id("snb", "fake_rdf", "small", 1, "rdf")
-    assert set(entries) == {c.bench_id for c in catalog.cases("push", ["fake_rdf"])} | set(
-        catalog.load_ids("push", ["fake_rdf"])
-    )
+    startup = catalog.startup_id("fake_rdf", 1)
+    assert set(entries) == set(catalog.all_ids("push", ["fake_rdf"]))
     models = {c.bench_id: c.item.model for c in catalog.cases("push", ["fake_rdf"])}
-    # The graph loads its models do not reach are ⊘ like the cases, with the model gate's error.
+    # The graph loads its models do not reach are ⊘ like the cases, with the model gate's error; so are both
+    # query-language loads (graph store only).
     for dataset in ("snb", "graphalytics"):
         models[catalog.load_id(dataset, "fake_rdf", "small", 1)] = "property_graph"
+        models[catalog.load_ql_id(dataset, "fake_rdf", "small", 1)] = "property_graph"
     started = {line["id"] for line in lines if line["kind"] == "start"}
-    assert started == {i for i, model in models.items() if model == "rdf"} | {rdf_load}
+    assert started == {i for i, model in models.items() if model == "rdf"} | {rdf_load, startup}
     for bench_id, entry in entries.items():
         if bench_id in started:
             assert (entry["status"], entry["answer"]) == ("ok", "agree"), entry
@@ -163,7 +165,7 @@ def test_worker_routes_each_model_to_its_store(push_data_dir: Path, tmp_path: Pa
         assert (entries[case.bench_id]["status"], entries[case.bench_id]["answer"]) == ("ok", "agree"), case.bench_id
     rdf_load = entries[catalog.load_id("snb", "fake", "small", 1, "rdf")]
     assert (rdf_load["status"], rdf_load["answer"]) == ("ok", "agree")
-    loads = trace.read_text(encoding="utf-8").splitlines().count("load")
+    loads = _calls(trace).count("load")
     assert loads == catalog.selection("push").load_iterations * 3  # snb graph, snb RDF, graphalytics graph
 
 
@@ -222,6 +224,11 @@ def test_worker_brackets_every_preflight_call(standard: tuple[Lines, Path]) -> N
         assert [line["kind"] for line in lines[start + 1 : start + 3]] == ["run", "progress"], target
 
 
+def _calls(trace: Path) -> list[str]:
+    """The calls of a fake trace file, without their process ids."""
+    return [line.split()[0] for line in trace.read_text(encoding="utf-8").splitlines()]
+
+
 def _expected_counts(data_dir: Path, dataset: str) -> tuple[int, int]:
     ds = Dataset.load(data_dir / cache.dataset_key("push") / f"{dataset}-small")
     return ds.node_count, ds.edge_count
@@ -277,9 +284,14 @@ def test_worker_prepares_environment_once_before_loads(
     monkeypatch.setenv("GRAPH_BENCH_FAKE_TRACE", str(trace))
     _, proc = run_worker(tmp_path / "fake.jsonl", push_data_dir)
     assert proc.returncode == 0, proc.stderr
-    calls = trace.read_text(encoding="utf-8").split()
-    loads = catalog.selection("push").load_iterations * len(catalog.load_ids("push", ["fake"]))
-    assert calls == ["environment"] + ["load"] * loads
+    sel = catalog.selection("push")
+    loads = sel.load_iterations * len(catalog.load_ids("push", ["fake"]))
+    loads_ql = sel.load_iterations * len(catalog.load_ql_ids("push", ["fake"]))
+    calls = [call for call in _calls(trace) if call != "open_empty"]
+    # The startup's provision, then the environment (which provisions first), then the loads; the query-language
+    # loads follow their dataset's cases (graphalytics, then snb, before the snb RDF store).
+    assert calls[:3] == ["provision", "provision", "environment"]
+    assert sorted(calls[3:]) == sorted(["load"] * loads + ["load_ql"] * loads_ql)
 
 
 def test_worker_environment_failure_fails_the_loads(push_data_dir: Path, tmp_path: Path) -> None:
@@ -299,9 +311,7 @@ def test_worker_runs_algorithms_on_an_sql_pgq_database(push_data_dir: Path, tmp_
     lines, proc = run_worker(tmp_path / "sql.jsonl", push_data_dir, db="fake_sql")
     assert proc.returncode == 0, proc.stderr
     entries = _entries(lines)
-    assert set(entries) == {c.bench_id for c in catalog.cases("push", ["fake_sql"])} | set(
-        catalog.load_ids("push", ["fake_sql"])
-    )
+    assert set(entries) == set(catalog.all_ids("push", ["fake_sql"]))
     for case in catalog.cases("push", ["fake_sql"]):
         entry = entries[case.bench_id]
         if case.item.category in ("sql_pgq", "algorithms"):
@@ -313,3 +323,265 @@ def test_worker_runs_algorithms_on_an_sql_pgq_database(push_data_dir: Path, tmp_
         assert (load["status"], load["answer"]) == ("ok", "agree")
     rdf_load = entries[catalog.load_id("snb", "fake_sql", "small", 1, "rdf")]
     assert (rdf_load["status"], rdf_load["error"]) == ("not_supported", "model rdf not supported")
+
+
+def test_database_defaults_for_the_new_rows(tmp_path: Path) -> None:
+    """provision is a no-op the default prepare_environment calls; open_empty and load_ql are ⊘ by default;
+    write runs through query_model; an in-memory database has no store paths."""
+    calls: list[str] = []
+
+    class Plain(Database):
+        name = display_name = "plain"
+        models = frozenset({"property_graph"})
+
+        @classmethod
+        def provision(cls) -> None:
+            calls.append("provision")
+
+        def info(self) -> DatabaseInfo:
+            raise AssertionError
+
+        def load(self, dataset: Dataset) -> None:
+            raise AssertionError
+
+        def query(self, text: str, params: Mapping[str, Any]) -> list[tuple[Any, ...]]:
+            calls.append(f"query {text} {dict(params)}")
+            return [(1,)]
+
+    Plain.prepare_environment()
+    assert calls == ["provision"]
+    assert Database.provision() is None
+    db = Plain(tmp_path, 1)
+    with pytest.raises(NotSupported, match=r"^startup$"):
+        db.open_empty()
+    with pytest.raises(NotSupported, match=r"^no query-language bulk loader$"):
+        db.load_ql(None)  # type: ignore[arg-type]
+    assert db.write("property_graph", "W", {"a": 1}) == [(1,)]
+    assert calls[-1] == "query W {'a': 1}"
+    assert db.store_paths() == []
+
+
+# Startup ------------------------------------------------------------------------------------------------------
+
+
+def test_startup_never_provisions_in_the_clock(push_data_dir: Path, tmp_path: Path) -> None:
+    """The worker provisions, untimed, before the startup children; no child provisions, and every child has
+    ended before the first load."""
+    trace = tmp_path / "trace.txt"
+    lines, proc = run_worker(tmp_path / "fake.jsonl", push_data_dir, env={"GRAPH_BENCH_FAKE_TRACE": str(trace)})
+    assert proc.returncode == 0, proc.stderr
+    calls = [line.split() for line in trace.read_text(encoding="utf-8").splitlines()]
+    worker = {pid for call, pid, *_ in calls if call in ("provision", "environment", "load")}
+    children = {pid for call, pid, *_ in calls if call == "open_empty"}
+    assert len(worker) == 1
+    assert len(children) == catalog.selection("push").startup_iterations
+    assert worker.isdisjoint(children)
+    names = [call for call, *_ in calls]
+    assert names[0] == "provision"
+    assert max(i for i, name in enumerate(names) if name == "open_empty") < names.index("load")
+    startup = catalog.startup_id("fake", 1)
+    entry = _entries(lines)[startup]
+    assert (entry["status"], entry["answer"], entry["reference"]) == ("ok", "agree", "python")
+    assert entry["timing"]["iterations"] == catalog.selection("push").startup_iterations
+    assert entry["preflight_ns"] > 0
+    first_start = next(line["id"] for line in lines if line["kind"] == "start")
+    assert first_start == startup
+    progress = [line for line in lines if line["kind"] == "progress" and line["id"] == startup]
+    assert len(progress) == catalog.selection("push").startup_iterations
+
+
+def test_startup_provisioning_error_fails_the_entry(push_data_dir: Path, tmp_path: Path) -> None:
+    lines, proc = run_worker(tmp_path / "fake.jsonl", push_data_dir, fake="crash_soft:provision")
+    assert proc.returncode == 0, proc.stderr
+    entry = _entries(lines)[catalog.startup_id("fake", 1)]
+    assert (entry["status"], entry["error"]) == ("failed", "provisioning: RuntimeError: soft crash")
+
+
+def test_worker_startup_without_open_empty_is_not_available(push_data_dir: Path, tmp_path: Path) -> None:
+    skip = [i for i in catalog.all_ids("push", ["fake_nostart"]) if "test_startup" not in i]
+    lines, proc = run_worker(tmp_path / "fake.jsonl", push_data_dir, "--skip", *skip, db="fake_nostart")
+    assert proc.returncode == 0, proc.stderr
+    entry = _entries(lines)[catalog.startup_id("fake_nostart", 1)]
+    assert (entry["status"], entry["error"], entry["timing"]) == ("not_supported", "startup", None)
+
+
+# Write cases ---------------------------------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def writes_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A data directory for the push selection with the fake write suite (its own cache key)."""
+    return tmp_path_factory.mktemp("writes-data")
+
+
+def _write_id(db: str = "fake") -> str:
+    return f"benches/test_batch_writes.py::test_fake_write[{db}-small]"
+
+
+def _run_writes(writes_dir: Path, tmp_path: Path, fake: str = "", trace: Path | None = None) -> Lines:
+    """The worker on the snb graph store only, with the fake write suite; the other loads and cases skipped."""
+    env = {**WRITES, **({"GRAPH_BENCH_FAKE_TRACE": str(trace)} if trace else {})}
+    ids = _ids_with_writes()
+    keep = {i for i in ids if i.endswith("[fake-small]") and ("snb_is" in i or "test_load_snb[" in i)}
+    keep.add(_write_id())
+    skip = sorted(set(ids) - keep)
+    lines, proc = run_worker(tmp_path / "w.jsonl", writes_dir, "--skip", *skip, fake=fake, env=env)
+    assert proc.returncode == 0, proc.stderr
+    return lines
+
+
+def _ids_with_writes() -> list[str]:
+    """`graph-bench list` for fake with the fake write suite, from a process that has it."""
+    code = "from graph_bench.suites import catalog; print('\\n'.join(catalog.all_ids('push', ['fake'])))"
+    env = {**os.environ, "GRAPH_BENCH_EXTRA_DATABASES": EXTRA, **WRITES}
+    proc = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env, capture_output=True, text=True, check=True)
+    return proc.stdout.split()
+
+
+def test_write_case_phase_order(writes_dir: Path, tmp_path: Path) -> None:
+    """Before the preflight the check reads the loaded state; then every run is setup, run, check, teardown,
+    check (the trace's consecutive repeats are the per-binding calls)."""
+    trace = tmp_path / "trace.txt"
+    lines = _run_writes(writes_dir, tmp_path, trace=trace)
+    entry = _entries(lines)[_write_id()]
+    assert (entry["status"], entry["answer"], entry["error"]) == ("ok", "agree", None), entry
+    sel = catalog.selection("push")
+    runs = 1 + (sel.warmup - 1) + sel.iterations
+    assert entry["timing"]["iterations"] == sel.iterations
+    phases = [c for c in _calls(trace) if c in ("setup", "run", "check", "teardown")]
+    collapsed = [p for i, p in enumerate(phases) if i == 0 or phases[i - 1] != p]
+    assert collapsed == ["check"] + ["setup", "run", "check", "teardown", "check"] * runs
+    assert phases.count("run") == 3 * runs  # three bindings
+    assert phases.count("teardown") == 2 * 3 * runs  # two statements per binding
+
+
+def test_write_cases_run_after_reads(writes_dir: Path, tmp_path: Path) -> None:
+    lines = _run_writes(writes_dir, tmp_path)
+    starts = [line["id"] for line in lines if line["kind"] == "start"]
+    reads = [i for i, bench_id in enumerate(starts) if "snb_is" in bench_id]
+    assert reads
+    assert starts.index(_write_id()) > max(reads)  # catalog order puts it first in bench_id order (batch_writes)
+
+
+@pytest.mark.parametrize(
+    ("fake", "detail"),
+    [
+        ("wrong:fake_write", "binding 0: 2 rows != 1 rows"),
+        ("sticky:fake_write", "read-back after the teardown differs: binding 0, row 0, col 1: "),
+        ("wrong_later:fake_write", "read-back after timed run 1 differs: after the run: binding 0: 2 rows"),
+    ],
+)
+def test_write_wrong_readback_is_disagree(writes_dir: Path, tmp_path: Path, fake: str, detail: str) -> None:
+    """A read-back that misses the write, or a teardown that leaves it, is ≠ at the preflight; a later run's
+    read-back that differs makes the entry ≠ with the run's number."""
+    entry = _entries(_run_writes(writes_dir, tmp_path, fake=fake))[_write_id()]
+    assert (entry["status"], entry["answer"], entry["timing"]) == ("ok", "disagree", None), entry
+    assert entry["detail"].startswith(detail), entry["detail"]
+
+
+def test_write_case_must_start_from_the_loaded_state(writes_dir: Path, tmp_path: Path) -> None:
+    entry = _entries(_run_writes(writes_dir, tmp_path, fake="dirty:fake_write"))[_write_id()]
+    assert entry["status"] == "failed"
+    assert entry["error"].startswith("the graph is not in its loaded state before the case: binding 0: ")
+
+
+def test_write_case_leaving_state_fails_the_guard(writes_dir: Path, tmp_path: Path) -> None:
+    """A write that changes what no read-back sees is caught by the counts guard after the case."""
+    lines = _run_writes(writes_dir, tmp_path, fake="leak:fake_write")
+    entries = _entries(lines)
+    entry = entries[_write_id()]
+    assert (entry["status"], entry["answer"]) == ("failed", "agree"), entry
+    snb = Dataset.load(next(writes_dir.glob("*/snb-small")))  # the write suite's own cache key
+    nodes, edges = snb.node_count, snb.edge_count
+    runs = 1 + (catalog.selection("push").warmup - 1) + catalog.selection("push").iterations
+    leaked = f"{nodes + 3 * runs} nodes, {edges} edges; expected {nodes} nodes, {edges} edges"
+    assert entry["error"] == f"the case left the graph changed: {leaked}"
+    assert entries[_id("snb_is4")]["answer"] == "agree"
+
+
+def test_write_case_run_error_fails(writes_dir: Path, tmp_path: Path) -> None:
+    entry = _entries(_run_writes(writes_dir, tmp_path, fake="crash_soft:fake_write"))[_write_id()]
+    assert (entry["status"], entry["error"]) == ("failed", "RuntimeError: soft crash")
+
+
+# Load (query language) ------------------------------------------------------------------------------------------
+
+
+def test_load_ql_failure_does_not_fail_cases(push_data_dir: Path, tmp_path: Path) -> None:
+    lines, proc = run_worker(tmp_path / "fake.jsonl", push_data_dir, fake="crash_soft:load_ql_snb")
+    assert proc.returncode == 0, proc.stderr
+    entries = _entries(lines)
+    snb = entries[catalog.load_ql_id("snb", "fake", "small", 1)]
+    assert (snb["status"], snb["error"]) == ("failed", "RuntimeError: soft crash")
+    ga = entries[catalog.load_ql_id("graphalytics", "fake", "small", 1)]
+    assert (ga["status"], ga["answer"]) == ("ok", "agree") and ga["load_ns"] > 0
+    for case in catalog.cases("push", ["fake"]):
+        assert (entries[case.bench_id]["status"], entries[case.bench_id]["answer"]) == ("ok", "agree")
+    assert entries[catalog.load_id("snb", "fake", "small", 1)]["answer"] == "agree"
+    # It runs after the dataset's cases, on instances of its own.
+    starts = [line["id"] for line in lines if line["kind"] == "start"]
+    snb_cases = [starts.index(_id(q)) for q in ("snb_is1", "snb_ic13", "snb_sql_is1")]
+    assert starts.index(catalog.load_ql_id("snb", "fake", "small", 1)) > max(snb_cases)
+
+
+def test_load_ql_counts_and_not_supported(push_data_dir: Path, tmp_path: Path) -> None:
+    fake = "short:count_ql_snb,unsupported:load_ql_graphalytics"
+    lines, proc = run_worker(tmp_path / "fake.jsonl", push_data_dir, fake=fake)
+    assert proc.returncode == 0, proc.stderr
+    entries = _entries(lines)
+    snb = entries[catalog.load_ql_id("snb", "fake", "small", 1)]
+    nodes, edges = _expected_counts(push_data_dir, "snb")
+    assert (snb["status"], snb["answer"]) == ("ok", "disagree")
+    assert snb["detail"] == f"loaded {nodes} nodes, {edges - 1} edges; expected {nodes} nodes, {edges} edges"
+    ga = entries[catalog.load_ql_id("graphalytics", "fake", "small", 1)]
+    assert (ga["status"], ga["error"]) == ("not_supported", "fake has no LOAD CSV")
+    assert entries[catalog.load_id("snb", "fake", "small", 1)]["answer"] == "agree"
+
+
+def test_load_ql_probe_mismatch_is_disagree(
+    push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With a content probe for (snb, property graph), a query-language load whose content answers it wrongly is
+    ≠ with the probe's name; the right content agrees."""
+    from tests.fakes import FakeDatabase
+
+    monkeypatch.setenv("GRAPH_BENCH_DATA_DIR", str(push_data_dir))
+    monkeypatch.setitem(catalog.LOAD_QL_PROBES, ("snb", "property_graph"), "snb_is4")
+    data = cache.prepare("push")[("snb", "small")]
+    base = cache.data_dir() / cache.dataset_key("push")
+    for fake, answer in (("", "agree"), ("wrong:snb_is4", "disagree")):
+        monkeypatch.setenv("GRAPH_BENCH_FAKE", fake)
+        lines: Lines = []
+        load_id = catalog.load_ql_id("snb", "fake", "small", 1)
+        worker.run_load_ql(FakeDatabase, data, tmp_path / "work", 1, 2, base, load_id, lines.append)
+        entry = _entries(lines)[load_id]
+        assert (entry["status"], entry["answer"]) == ("ok", answer), entry
+        if answer == "disagree":
+            assert entry["detail"].startswith("content probe snb_is4: binding 0: ")
+        assert [line["kind"] for line in lines] == ["start", "progress", "progress", "entry"]
+    assert not any((tmp_path / "work").iterdir())  # every instance closed and removed
+
+
+def test_load_ql_probe_error_fails_the_entry(
+    push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.fakes import FakeDatabase
+
+    monkeypatch.setenv("GRAPH_BENCH_DATA_DIR", str(push_data_dir))
+    monkeypatch.setitem(catalog.LOAD_QL_PROBES, ("snb", "property_graph"), "snb_is4")
+    data = cache.prepare("push")[("snb", "small")]
+    base = cache.data_dir() / cache.dataset_key("push")
+    lines: Lines = []
+    load_id = catalog.load_ql_id("snb", "fake", "small", 1)
+    monkeypatch.setenv("GRAPH_BENCH_FAKE", "crash_soft:snb_is4")
+    worker.run_load_ql(FakeDatabase, data, tmp_path / "work", 1, 1, base, load_id, lines.append)
+    entry = _entries(lines)[load_id]
+    assert (entry["status"], entry["error"]) == ("failed", "content probe snb_is4: RuntimeError: soft crash")
+    monkeypatch.setenv("GRAPH_BENCH_FAKE", "unsupported:snb_is4")
+    lines.clear()
+    worker.run_load_ql(FakeDatabase, data, tmp_path / "work", 1, 1, base, load_id, lines.append)
+    entry = _entries(lines)[load_id]
+    assert (entry["status"], entry["answer"]) == ("ok", "agree")  # a probe the database cannot run: counts only
+    lines.clear()
+    worker.run_load_ql(FakeDatabase, data, tmp_path / "work", 1, 1, base, load_id, lines.append, "setup broke")
+    assert _entries(lines)[load_id] == {"kind": "entry", "id": load_id, "status": "failed", "error": "setup broke"}

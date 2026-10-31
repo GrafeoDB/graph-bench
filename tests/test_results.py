@@ -76,3 +76,49 @@ def test_warn_if_fixed_flags_an_allowlisted_entry_that_agrees() -> None:
         warnings.simplefilter("error")
         warn_if_fixed(entry, set())
         warn_if_fixed(dataclasses.replace(entry, answer="disagree"), {"snb_is1"})
+
+
+def test_results_round_trip_the_new_rows(tmp_path: Path) -> None:
+    """A Startup entry keeps its timing in codspeed mode; a Load (query language) entry carries `load_ns`."""
+    entries = [
+        Entry(
+            id="benches/test_startup.py::test_startup[fake-empty]",
+            category="startup",
+            model="property_graph",
+            benchmark="startup",
+            database="fake",
+            scale="empty",
+            threads=1,
+            status="ok",
+            timing=Timing(10.0, 12.0, 9, 3),
+            preflight_ns=12,
+            answer="agree",
+            reference="python",
+        ),
+        Entry(
+            id="benches/test_load_ql.py::test_load_ql_snb[fake-small]",
+            category="load_ql",
+            model="property_graph",
+            benchmark="load_ql_snb",
+            database="fake",
+            scale="small",
+            threads=1,
+            status="ok",
+            load_ns=100,
+            answer="disagree",
+            detail="content probe scan_order_limit: binding 0: 1 rows != 2 rows",
+        ),
+    ]
+    results = Results(
+        graph_bench_commit="abc",
+        grafeo={"version": "0.6.0", "source": "pypi", "sha": None},
+        machine={"cpu": "x", "cores": 4, "os": "y"},
+        selection="push",
+        mode="codspeed",
+        started_at="2026-10-31T00:00:00Z",
+        databases={},
+        entries=entries,
+    )
+    path = tmp_path / "results.json"
+    results.write(path)
+    assert Results.read(path) == results

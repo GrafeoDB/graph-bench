@@ -12,8 +12,9 @@ benchmark, servers included, is kept in [legacy/](legacy/README.md).
 1. **Each database runs in its own process.** A Python process can host only one JVM, and separate processes
    keep allocators and caches from interfering. `graph-bench bench` starts one worker per database;
    `graph-bench codspeed` starts one `pytest benches --codspeed` process per database.
-2. **JVM databases get the same warm-up as the others**, and JVM startup is not timed: each JVM database starts
-   its process's JVM once, before any timed load (`prepare_environment`), and one JVM database runs per process.
+2. **JVM databases get the same warm-up as the others**, and JVM startup is not timed in Load or queries; the
+   Startup row times every database's cold start on purpose. Each JVM database starts its process's JVM once,
+   before any timed load (`prepare_environment`), and one JVM database runs per process.
    Every JVM database gets the same maximum heap, `-Xmx4g` (`MAX_HEAP` in `graph_bench/databases/jvm.py`),
    checked after the JVM starts. Without a cap the JVM would take a quarter of the machine's RAM; 4 GiB is
    ArcadeDB's own default and leaves room on a 16 GB CI runner for off-heap memory and the harness. The native
@@ -87,6 +88,29 @@ measured, while results.json and the matrix show ⏱. A ⏱ from the in-run cuto
   `counts()` leaves its load unchecked. The budget rule (rule 8) does not apply to loads. In
   `graph-bench codspeed`, the count check runs after CodSpeed has timed the load, so CodSpeed shows a ≠ load as
   measured, while results.json and the matrix show ≠.
+- **Load (query language):** the same datasets loaded through each database's query language (for example
+  `LOAD CSV` or `COPY ... FROM`), each into a fresh instance, timed around that load alone. Each instance is
+  count-checked like Load and then answers one content probe, outside the clock: a catalog query whose answer
+  depends on the loaded text values (a mismatch is ≠, "content probe <query>: ..."). These instances are closed
+  afterwards and never used by the queries. The row runs after its dataset's queries, and a failure in it fails
+  only its own entry. The budget rule does not apply.
+- **Startup:** a cold start, in a fresh process per run (`graph_bench/runner/startup.py`). The clock starts after
+  graph-bench's own modules are imported and covers the driver's import, opening an empty database in a fresh
+  directory (starting whatever the process lacks: a JVM, an engine, a server process) and one probe query on it,
+  whose answer is checked (no nodes, `SELECT 1`, or no triples); closing is not timed, nor is the interpreter's own
+  start, the same for every database. Downloads, archive extraction, checksum checks and extension installs run
+  before, untimed (`provision()`), and never in the child. The entry is the median over `startup_iterations`
+  processes (3 in `push`, 5 in `full`); the first is the preflight. It measures a process-cold start, not an
+  OS-cache-cold one: the database's files are in the OS cache after the first run. In `graph-bench codspeed`,
+  CodSpeed times the whole child processes, interpreter start included, while results.json records the
+  in-process times. The budget rule does not apply.
+- **Write cases** (Batch writes): each run is untimed setup, the timed write (one committed statement per batch),
+  an untimed read-back compared with the reference rows after the write, an untimed teardown that undoes the
+  write, and a read-back compared with the loaded state. Before the first run the read-back must show the loaded
+  state, every run (preflight, warm-up and timed) is read back, and after the case the node and edge counts must
+  equal those before it (else ✗, "the case left the graph changed: ..."). Write cases run after every read query
+  of their dataset's instance. In `graph-bench codspeed` a run's read-back and teardown happen in the next round's
+  setup, so CodSpeed times the writes alone.
 
 ## Loading
 

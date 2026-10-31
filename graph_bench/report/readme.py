@@ -11,6 +11,7 @@ from graph_bench.report.ranking import (
     Ranked,
     all_databases,
     format_sig3,
+    is_load,
     is_ranked,
     rank,
     safe_display_name,
@@ -18,7 +19,7 @@ from graph_bench.report.ranking import (
 )
 from graph_bench.report.summary import LEGEND, grafeo_label, machine_label
 from graph_bench.results import Entry, Results
-from graph_bench.types import CATEGORY_NAMES, Category, marker
+from graph_bench.types import CATEGORY_NAMES, LOAD_CATEGORIES, Category, marker
 
 START = "<!-- results:start -->"
 END = "<!-- results:end -->"
@@ -60,14 +61,14 @@ def _detail_cell(entry: Entry | None, r: Ranked, mode: str) -> str:
     value = speed(entry, mode)
     if value is None:
         return ""
-    text = format_sig3(value / (1e9 if entry.category == "load" else 1e6))
+    text = format_sig3(value / (1e9 if is_load(entry) else 1e6))
     return f"**{text}**" if entry.database in r.fastest() else text
 
 
 def _section_label(section: Section, *, with_scale: bool) -> str:
     category, scale, threads = section
     label = CATEGORY_NAMES[category]
-    if with_scale:
+    if with_scale and category != "startup":  # Startup has one scale of its own, the empty database
         label += f", {scale}"
     if threads is None:
         label += ", all cores"
@@ -83,7 +84,7 @@ def render_readme(results: Results) -> str:
     by_key: dict[tuple[str, str, int | None, str], Entry] = {
         (e.benchmark, e.scale, e.threads, e.database): e for e in results.entries
     }
-    scales = list(dict.fromkeys(scale for _, scale, _ in sections))
+    scales = list(dict.fromkeys(scale for category, scale, _ in sections if category != "startup"))
     with_scale = len(scales) > 1
 
     lines = ["### Overview", ""]
@@ -108,9 +109,10 @@ def render_readme(results: Results) -> str:
 
     for section, members in sections.items():
         category, scale, threads = section
-        unit = "s" if category == "load" else "ms"
+        unit = "s" if category in LOAD_CATEGORIES else "ms"
         cores = ", all cores" if threads is None else ""
-        heading = f"### {CATEGORY_NAMES[category]} ({scale} scale{cores}, {unit})"
+        where = "empty database" if category == "startup" else f"{scale} scale"
+        heading = f"### {CATEGORY_NAMES[category]} ({where}{cores}, {unit})"
         rows = [
             [r.title, *(_detail_cell(by_key.get((r.benchmark, r.scale, r.threads, db)), r, results.mode) for db in dbs)]
             for r in members
