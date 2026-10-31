@@ -107,6 +107,7 @@ def test_turingdb_load_unchanged(push: Results) -> None:
     assert_loads_agree(push, "turingdb")
 
 
+@pytest.mark.turingdb
 def test_turingdb_resources_ok(push: Results) -> None:
     """Memory and Disk: one ok, agreeing record per load with ordered readings; on disk."""
     assert_resources_ok(push, "turingdb", on_disk=True)
