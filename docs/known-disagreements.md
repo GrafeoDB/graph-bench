@@ -46,7 +46,7 @@ entries may fail without failing the test.
 ## Grafeo: slow but correct (not allowlisted)
 
 These cases agree with the reference and are timed as they are; they are listed for the Grafeo team because
-the plans show avoidable work. They carry no `- id:` line, so the adapter test still requires them to agree.
+the plans or the per-row costs leave room to improve. They carry no `- id:` line, so the adapter test still requires them to agree.
 
 - `snb_is7` on `snb-small` (median 497 ms for 10 bindings, about 50 ms each): the same uncorrelated `LeftJoin` as
   IC13. The `OPTIONAL MATCH (author)-[k:KNOWS]-(p)` side is planned as `Expand (author)--[:KNOWS]--(p)` over

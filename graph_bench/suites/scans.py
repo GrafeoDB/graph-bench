@@ -11,7 +11,7 @@ The twins are rows of this category, so DuckDB + DuckPGQ and Oxigraph appear in 
 - `scan_aggregate`: Persons grouped by browser and gender, with their count, earliest birthday and latest
   creationDate; ordered by the two keys (every group is one row, so the order is total).
 - `scan_order_limit`: the 20 newest Comments of at least a length, with their content (strings with commas and
-  quotes, which makes it the Load (query language) content probe, `catalog.LOAD_QL_PROBES`); ordered by
+  apostrophes, which makes it the Load (query language) content probe, `catalog.LOAD_QL_PROBES`); ordered by
   creationDate descending, then id, so the order is total. The bindings are the distinct comment lengths.
 - `scan_filter_avg`: the number and the average length of the Comments longer than a threshold; one row. The
   thresholds are spread over the integers from one below the shortest comment to one below the longest, so every

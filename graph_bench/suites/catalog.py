@@ -89,7 +89,7 @@ _SOURCE = {item.id: module for module in SUITES for item in _module_items(module
 
 # The Load (query language) content probe per (dataset, primary model): the item whose preflight call runs,
 # untimed, on each instance a query-language load filled, against that item's references. The order plus limit scan
-# returns comment contents, strings with commas and quotes, so a loader that mangles quoting disagrees.
+# returns comment contents, strings with commas and apostrophes, so a loader that mangles quoting disagrees.
 LOAD_QL_PROBES: dict[tuple[str, Model], str] = {
     ("snb", "property_graph"): "scan_order_limit",
     ("snb", "sql_pgq"): "scan_order_limit_sql",
