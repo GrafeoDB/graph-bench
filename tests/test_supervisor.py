@@ -496,3 +496,21 @@ def test_cpu_name_strips_native_name(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_native_cpu_name_unknown_platform(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(supervisor.sys, "platform", "plan9")
     assert supervisor._native_cpu_name() is None
+
+
+def test_drop_empty_codspeed_result_removes_only_an_empty_file(tmp_path: Path) -> None:
+    """A pytest process that measured nothing leaves a results file without benchmarks; only that file goes."""
+    results_dir = tmp_path / "results"
+    results_dir.mkdir()
+    env = {"CODSPEED_PROFILE_FOLDER": str(tmp_path)}
+    (results_dir / "11.json").write_text(json.dumps({"instrument": {}, "benchmarks": []}), encoding="utf-8")
+    (results_dir / "12.json").write_text(json.dumps({"benchmarks": [{"name": "x"}]}), encoding="utf-8")
+    (results_dir / "13.json").write_text("not json", encoding="utf-8")
+    assert supervisor.drop_empty_codspeed_result(env, 11)
+    assert not (results_dir / "11.json").exists()
+    assert not supervisor.drop_empty_codspeed_result(env, 12)
+    assert (results_dir / "12.json").exists()
+    assert not supervisor.drop_empty_codspeed_result(env, 13)
+    assert (results_dir / "13.json").exists()
+    assert not supervisor.drop_empty_codspeed_result(env, 14)
+    assert not supervisor.drop_empty_codspeed_result({}, 11)
