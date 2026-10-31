@@ -1,0 +1,38 @@
+# The steps every benchmark job shares, after `actions/checkout`: uv and Python, the locked sync, the databases at
+# their newest stable releases (grafeo from PyPI included), the dataset cache and the benchmark plan.
+# Used by bench.yml (both jobs) and release.yml, so the install steps live in one place.
+name: Prepare the benchmark run
+description: Install graph-bench and the databases, and prepare the datasets of a selection.
+inputs:
+  selection:
+    description: "The selection to prepare: push or full."
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: astral-sh/setup-uv@v10.3.3
+      with:
+        python-version: "3.13"
+    - run: uv sync --frozen --extra bench
+      shell: bash
+    - name: Install the databases at their newest stable releases
+      # The lockfile keeps the repo reproducible; a benchmark run measures the databases as released today
+      # (grafeo from PyPI too). One package at a time, so a package with no build for this runner (falkordblite
+      # needs glibc 2.38, Ubuntu 22.04 has 2.35) does not stop the job: it is logged and its database shows as
+      # failed. uv never picks a pre-release here, and uv.lock is not touched.
+      run: bash .github/scripts/install-databases.sh
+      shell: bash
+    - name: Dataset cache key
+      id: data-key
+      run: echo "key=$(uv run --no-sync graph-bench data key --selection ${{ inputs.selection }})" >> "$GITHUB_OUTPUT"
+      shell: bash
+    - uses: actions/cache@v6
+      with:
+        path: ~/.cache/graph-bench
+        key: graph-bench-data-${{ runner.arch }}-${{ steps.data-key.outputs.key }}
+    - run: uv run --no-sync graph-bench data prepare --selection ${{ inputs.selection }}
+      shell: bash
+    - name: Benchmark plan
+      run: uv run --no-sync graph-bench list --selection ${{ inputs.selection }}
+      shell: bash
