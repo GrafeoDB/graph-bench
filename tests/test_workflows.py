@@ -1,10 +1,15 @@
 """The GitHub workflows: their triggers, jobs and the commands they run."""
 
 import json
+import os
 import re
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 
 # CodSpeed's Graviton (arm64) macro runner, the label the plain `codspeed-macro` used to alias.
@@ -256,3 +261,62 @@ def test_macro_runner_jobs_never_run_at_once() -> None:
                 )
                 found.append((name, job_name))
     assert len(found) == 3
+
+
+def test_full_runs_start_the_heartbeat() -> None:
+    """Both full-selection jobs run the bench next to heartbeat.sh, keep the bench's exit status through `tee`
+    and can push (the heartbeat writes bot/heartbeat with the job token)."""
+    jobs = [_load("bench.yml")["jobs"]["readme"], _load("release.yml")["jobs"]["post"]]
+    for job in jobs:
+        bench = next(run for run in _runs(job) if "graph-bench bench --selection full" in run)
+        assert "bash .github/scripts/heartbeat.sh out" in bench
+        assert "set -o pipefail" in bench
+        assert 'kill "$heartbeat"' in bench
+        assert job["permissions"]["contents"] == "write"
+    script = (SCRIPTS / "heartbeat.sh").read_text(encoding="utf-8")
+    # It must never fail the job: no `set -e`, and push errors are reported, not raised.
+    assert "set -e" not in script
+    assert "bot/heartbeat" in script
+
+
+@pytest.mark.skipif(sys.platform != "linux" or shutil.which("git") is None, reason="heartbeat.sh reads Linux /proc")
+def test_heartbeat_pushes_one_beat(tmp_path: Path) -> None:
+    """One beat lands on bot/heartbeat of the remote: the time line, memory, each worker's last line and the bench
+    output's tail."""
+    remote = tmp_path / "remote.git"
+    work = tmp_path / "work"
+    subprocess.run(["git", "init", "--quiet", "--bare", str(remote)], check=True)
+    subprocess.run(["git", "init", "--quiet", str(work)], check=True)
+    subprocess.run(["git", "-C", str(work), "remote", "add", "origin", str(remote)], check=True)
+    worker = work / "out" / "raw" / "grafeo-1" / "worker.jsonl"
+    worker.parent.mkdir(parents=True)
+    worker.write_text('{"event": "start"}\n{"event": "case", "id": "hops/hop_2"}\n', encoding="utf-8")
+    log = tmp_path / "bench.log"
+    log.write_text("line 1\nloading snb-medium\n", encoding="utf-8")
+    env = {**os.environ, "HEARTBEAT_ONCE": "1", "GITHUB_RUN_ID": "42"}
+    done = subprocess.run(
+        ["bash", str(SCRIPTS / "heartbeat.sh"), "out", str(log)], cwd=work, env=env, capture_output=True, text=True
+    )
+    assert done.returncode == 0, done.stderr
+    assert done.stderr == ""
+    shown = subprocess.run(
+        ["git", "--git-dir", str(remote), "show", "bot/heartbeat:heartbeat.txt"], capture_output=True, text=True
+    )
+    assert shown.returncode == 0, shown.stderr
+    text = shown.stdout
+    assert re.search(r"^=== \d{4}-\d\d-\d\dT\S+Z run 42 ", text, re.M), text
+    assert "Mem:" in text
+    assert 'grafeo-1: {"event": "case", "id": "hops/hop_2"}' in text
+    assert "  loading snb-medium" in text
+
+
+@pytest.mark.skipif(sys.platform != "linux" or shutil.which("git") is None, reason="heartbeat.sh reads Linux /proc")
+def test_heartbeat_survives_a_failing_push(tmp_path: Path) -> None:
+    """With no remote to push to, the beat is reported once on stderr and the script still exits 0."""
+    work = tmp_path / "work"
+    subprocess.run(["git", "init", "--quiet", str(work)], check=True)
+    env = {**os.environ, "HEARTBEAT_ONCE": "1"}
+    script = str(SCRIPTS / "heartbeat.sh")
+    done = subprocess.run(["bash", script, "out"], cwd=work, env=env, capture_output=True, text=True)
+    assert done.returncode == 0
+    assert "heartbeat: push to bot/heartbeat failed" in done.stderr

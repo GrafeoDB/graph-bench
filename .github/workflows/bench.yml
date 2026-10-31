@@ -69,7 +69,14 @@ jobs:
         with:
           selection: full
       - name: Run the benchmarks
-        run: uv run --no-sync graph-bench bench --selection full --out out
+        # GitHub keeps no log of a lost runner (one died 68 minutes into this run on 2026-10-31), so a heartbeat
+        # pushes the run's state to the branch bot/heartbeat every minute (.github/scripts/heartbeat.sh).
+        run: |
+          set -o pipefail  # the bench's exit status, not tee's
+          bash .github/scripts/heartbeat.sh out "$RUNNER_TEMP/bench.log" &
+          heartbeat=$!
+          trap 'kill "$heartbeat" 2>/dev/null || true' EXIT
+          uv run --no-sync graph-bench bench --selection full --out out 2>&1 | tee "$RUNNER_TEMP/bench.log"
       - name: Write the results section
         run: uv run --no-sync graph-bench report --format readme --in out/results.json --write README.md
       - uses: actions/upload-artifact@v7
