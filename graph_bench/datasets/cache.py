@@ -35,6 +35,9 @@ def _read_sources() -> list[str]:
     """
     paths = [p for sub in ("datasets", "suites") for p in sorted((_PKG / sub).glob("*.py"))]
     paths.append(_PKG / "answers.py")
+    # The pinned downloads (Neo4j tarball, Temurin JRE) are cached under the same directory (`~/.cache/graph-bench`),
+    # so a changed pin must change the key too. Read as text: the module has no driver imports.
+    paths.append(_PKG / "databases" / "pins.py")
     return [f"{p.relative_to(_PKG).as_posix()}\n{p.read_text(encoding='utf-8')}" for p in paths]
 
 

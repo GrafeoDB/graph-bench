@@ -56,8 +56,12 @@ def heap_args() -> list[str]:
 
 
 def process_env(threads: int | None) -> dict[str, str]:
-    """The worker environment that makes `jvm_args()` single-threaded: `{THREADS_ENV: "1"}` for threads=1."""
-    return {THREADS_ENV: "1"} if threads == 1 else {}
+    """The worker environment that makes `jvm_args()` single-threaded: `{THREADS_ENV: "1"}` for threads=1.
+
+    The environment is applied over the caller's own, so an all-cores run (anything but 1) sets `THREADS_ENV` to
+    the empty string: a `THREADS_ENV=1` inherited from the caller's shell must not make it single-threaded.
+    """
+    return {THREADS_ENV: "1" if threads == 1 else ""}
 
 
 def single_threaded() -> bool:

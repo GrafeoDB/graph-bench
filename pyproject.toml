@@ -118,6 +118,20 @@ omit = [
 
 [tool.coverage.report]
 fail_under = 88
+# The same files as `run.omit`: `coverage report` applies its own omit list to files that were never imported.
+omit = [
+    "*/__init__.py",
+    "graph_bench/databases/grafeo.py",
+    "graph_bench/databases/ladybug.py",
+    "graph_bench/databases/neug.py",
+    "graph_bench/databases/falkordb.py",
+    "graph_bench/databases/turingdb.py",
+    "graph_bench/databases/helixdb.py",
+    "graph_bench/databases/helix_queries.py",
+    "graph_bench/databases/duckdb.py",
+    "graph_bench/databases/arcadedb.py",
+    "graph_bench/databases/neo4j.py",
+]
 exclude_lines = [
     "pragma: no cover",
     "if TYPE_CHECKING:",

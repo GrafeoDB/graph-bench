@@ -149,12 +149,9 @@ class ArcadeDatabase(Database):
 
     @classmethod
     def process_env(cls, threads: int | None) -> dict[str, str]:
-        if threads != 1:
-            return jvm.process_env(threads)
-        return {
-            **jvm.process_env(threads),
-            JVM_ARGS_ENV: " ".join(f"-D{key}={value}" for key, value in SINGLE_THREAD.items()),
-        }
+        # An all-cores run clears an inherited ARCADEDB_JVM_ARGS (the environment is applied over the caller's own).
+        args = " ".join(f"-D{key}={value}" for key, value in SINGLE_THREAD.items()) if threads == 1 else ""
+        return {**jvm.process_env(threads), JVM_ARGS_ENV: args}
 
     @classmethod
     def prepare_environment(cls) -> None:

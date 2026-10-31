@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import os
 import re
@@ -396,6 +397,21 @@ def test_budget_rule_is_order_independent() -> None:
 def test_budget_rule_compares_with_the_others() -> None:
     markers = _markers([("a", 1), ("b", 15), ("c", 2), ("d", 3)])
     assert all(marker == ("ok", None) for marker in markers.values()), markers  # 15 vs others' mean 2: budget 20
+
+
+def test_budget_rule_exempts_loads() -> None:
+    entries = [dataclasses.replace(_entry(db, ms), category="load") for db, ms in (("a", 1), ("b", 1), ("c", 500))]
+    results = _results(entries)
+    apply_budget_rule(results)
+    assert [(e.status, e.error) for e in results.entries] == [("ok", None)] * 3
+    mixed = [*entries, dataclasses.replace(_entry("d", 1000), category="load")]
+    assert all(e.status == "ok" for e in _apply(mixed))
+
+
+def _apply(entries: list[Entry]) -> list[Entry]:
+    results = _results(entries)
+    apply_budget_rule(results)
+    return results.entries
 
 
 def test_budget_rule_needs_another_database() -> None:

@@ -33,6 +33,8 @@ venv/
 # ── Testing & coverage ───────────────────────────────────────────────
 .pytest_cache/
 .coverage
+.coverage.*
+.cache-*/
 htmlcov/
 .tox/
 .nox/

@@ -16,6 +16,7 @@ from graph_bench.databases.helix_queries import BUILDERS, snb_ic13
 from graph_bench.runner.supervisor import run_bench
 from graph_bench.suites import snb
 from graph_bench.types import Model
+from tests.conftest import warn_if_fixed
 
 # The worker's model gate error, exactly: f"model {case.item.model} not supported".
 MODEL_GATE = re.compile(f"model ({'|'.join(get_args(Model))}) not supported")
@@ -40,6 +41,7 @@ def test_helixdb_push_agrees(
         # ⊘ passes only for the worker's model gate ("model <model> not supported"): the database lacks the data
         # model. Any other ⊘ (a missing capability) must be allowlisted in docs/known-disagreements.md.
         lacks_model = entry.status == "not_supported" and MODEL_GATE.fullmatch(entry.error or "") is not None
+        warn_if_fixed(entry, known)
         if entry.benchmark in known or lacks_model:
             continue
         # A load must agree too: its node and edge counts (`counts()`) match the dataset's.

@@ -24,9 +24,11 @@ reports "No valid GDS license specified."), https://neo4j.com/docs/graph-data-sc
 Nothing is redistributed: the downloads stay in the data cache.
 """
 
+import contextlib
 import os
 import platform
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
@@ -41,34 +43,20 @@ import jpype.imports
 
 from graph_bench.databases import jvm
 from graph_bench.databases.base import Database, DatabaseInfo, NotSupported
+from graph_bench.databases.pins import (
+    GDS_JAR,
+    JRE_RELEASE,
+    JRE_VERSION,
+    JRES,
+    NEO4J_HOME_NAME,
+    NEO4J_SHA256,
+    NEO4J_URL,
+    NEO4J_VERSION,
+)
 from graph_bench.datasets.schema import Column, Dataset
 from graph_bench.types import Model
 
-# The latest stable Neo4j release (Maven Central `org.neo4j:neo4j`, `<release>` in maven-metadata.xml), its
-# Community tarball and the checksum Neo4j publishes at `<url>.sha256`.
-NEO4J_VERSION = "2026.10.1"
-NEO4J_HOME_NAME = f"neo4j-community-{NEO4J_VERSION}"
-NEO4J_URL = f"https://dist.neo4j.org/{NEO4J_HOME_NAME}-unix.tar.gz"
-NEO4J_SHA256 = "afcf4986d47d13dd908427d301d5a9278b2ec7d615a12bb40e22087c7e133e78"
-GDS_JAR = f"neo4j-graph-data-science-{NEO4J_VERSION}.jar"
-# Neo4j 2026.10 runs on Java 21 or 25 ("Java SE 21 and Java SE 25 Platform Specification",
-# https://neo4j.com/docs/operations-manual/current/installation/requirements/); its class files are Java 21 (major
-# 65), so the JRE is Temurin 21, pinned to one release so the checksums stay valid (Adoptium's API,
-# https://api.adoptium.net/v3/assets/latest/21/hotspot?architecture=x64&image_type=jre&vendor=eclipse&os=<os>,
-# `binary.package.checksum`).
-JRE_RELEASE = "jdk-21.0.13+9"
-JRE_VERSION = "21.0.13"
-_JRE_BASE = "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.13%2B9"
-JRES: dict[tuple[str, str], tuple[str, str]] = {
-    ("linux", "x86_64"): (
-        f"{_JRE_BASE}/OpenJDK21U-jre_x64_linux_hotspot_21.0.13_9.tar.gz",
-        "a535a1df9c6284d9618872984e026ae0352d1f7e9e0605425c0e6114f47351dd",
-    ),
-    ("win32", "amd64"): (
-        f"{_JRE_BASE}/OpenJDK21U-jre_x64_windows_hotspot_21.0.13_9.zip",
-        "2332c0b4cff6bed722da3567c91d5e47568bcba863fa4945d0a8d6fc76158628",
-    ),
-}
+# The pinned Neo4j tarball and Temurin JRE (versions, URLs, SHA-256) are in `pins.py`, which `data key` hashes.
 # The JVM options Neo4j's default `conf/neo4j.conf` gives under "Open modules for neo4j" and "Enable access to
 # JDK incubator module", plus the netty reflection flag from the same file: the embedded engine needs them as well.
 NEO4J_JVM_ARGS = (
@@ -390,6 +378,83 @@ def admin_conf(home: Path, workdir: Path) -> str:
     return default.rstrip("\n") + "\n\n# graph-bench\n" + "\n".join(lines) + "\n"
 
 
+# The caller's environment variables the importer keeps: what a process needs to run (the search path for the
+# launcher script's tools, the Windows system directories, temporary directories, locale, home). Everything else,
+# notably JVM option variables (JAVA_TOOL_OPTIONS, JDK_JAVA_OPTIONS, _JAVA_OPTIONS, JAVA_OPTS) and CLASSPATH, stays
+# out, so the importer's JVM gets only the configuration below.
+_ADMIN_ENV_KEEP = (
+    "PATH",
+    "SYSTEMROOT",
+    "WINDIR",
+    "SYSTEMDRIVE",
+    "COMSPEC",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "HOME",
+    "USERPROFILE",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+)
+# A hung import is killed after this long. A load reports nothing until it is done, so the supervisor's silence
+# cap (`--case-timeout`, default 600 s) would otherwise kill the worker first and leave the importer's JVMs
+# running; 540 s stays inside that default with room for the rest of the load. The push loads take about 5 s.
+IMPORT_TIMEOUT_S = 540.0
+
+
+def admin_env(jre: Path, conf: Path) -> dict[str, str]:
+    """The importer's environment: `_ADMIN_ENV_KEEP` from this process, the JRE, the configuration and the heap.
+
+    neo4j-admin reads NEO4J_CONF (the directory of neo4j.conf) and HEAP_SIZE (the maximum heap); "If set, HEAP_SIZE
+    and JAVA_OPTS override all relevant settings specified in the configuration file", so JAVA_OPTS is never set
+    (https://neo4j.com/docs/operations-manual/current/neo4j-admin-neo4j-cli/).
+    """
+    upper = {key.upper(): value for key, value in os.environ.items()}
+    env = {key: upper[key] for key in _ADMIN_ENV_KEEP if key in upper}
+    return {**env, "JAVA_HOME": str(jre), "NEO4J_CONF": str(conf), "HEAP_SIZE": jvm.MAX_HEAP}
+
+
+def _kill_tree(proc: "subprocess.Popen[str]") -> None:
+    """Kill a process and every process it started: the launcher JVM starts the import JVM as its child."""
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, check=False)
+    else:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(proc.pid, signal.SIGKILL)  # the process group of `start_new_session`
+    proc.kill()
+    proc.communicate()
+
+
+def run_admin(command: list[str], cwd: Path, env: dict[str, str], timeout_s: float = IMPORT_TIMEOUT_S) -> str:
+    """Run `command` (neo4j-admin) to completion; its output. A failure or a timeout raises RuntimeError.
+
+    On POSIX the command gets a session (and process group) of its own; on a timeout, or any interruption, the
+    whole tree is killed (`_kill_tree`), so no import JVM outlives the call.
+    """
+    proc = subprocess.Popen(
+        command,
+        cwd=cwd,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        start_new_session=os.name != "nt",
+    )
+    try:
+        output, _ = proc.communicate(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        _kill_tree(proc)
+        raise RuntimeError(f"neo4j-admin did not finish in {timeout_s:g} s; its processes were killed") from None
+    except BaseException:
+        _kill_tree(proc)
+        raise
+    if proc.returncode != 0:
+        raise RuntimeError(f"neo4j-admin failed (exit {proc.returncode}): {output.strip()[-2000:]}")
+    return output
+
+
 class Neo4jDatabase(Database):
     """An embedded Neo4j Community database in `workdir`, written by `neo4j-admin database import full`.
 
@@ -421,10 +486,12 @@ class Neo4jDatabase(Database):
         query, so no load or query path is warmed up (ArcadeDB, NeuG and LadybugDB likewise open a throwaway
         database here).
         """
+        if _STATE.get("ready"):
+            # Once per process: `load` calls this too (for direct use), and a load must not fetch, hash or start
+            # anything (`jvm.fetch` re-hashes the cached archives).
+            return
         install()
         jvm.start_once(cls.name, _start)
-        if _STATE.get("ready"):
-            return
         scratch = Path(tempfile.mkdtemp(prefix="graph-bench-neo4j-"))
         try:
             _builder(scratch).build().shutdown()
@@ -460,18 +527,11 @@ class Neo4jDatabase(Database):
         args = import_arguments(dataset, work / "import", self.threads)
         # The report file defaults to `import.report` in the current directory.
         args.append(f"--report-file={work / 'import.report'}")
-        env = {**os.environ, "JAVA_HOME": str(jre), "NEO4J_CONF": str(conf), "HEAP_SIZE": jvm.MAX_HEAP}
-        env.pop("JAVA_OPTS", None)  # "HEAP_SIZE and JAVA_OPTS override all relevant settings": keep the conf's
-        done = subprocess.run(
-            admin_command(home, jre, args), cwd=work, env=env, capture_output=True, text=True, check=False
-        )
-        if done.returncode != 0:
-            tail = (done.stdout + done.stderr).strip()[-2000:]
-            raise RuntimeError(f"neo4j-admin database import failed (exit {done.returncode}): {tail}")
+        run_admin(admin_command(home, jre, args), work, admin_env(jre, conf))
 
     def load(self, dataset: Dataset) -> None:
-        # The benchmark paths (worker, CodSpeed session) call prepare_environment first, so the JVM start is never in
-        # a load clock; this lazy start only serves direct use such as the tests.
+        # The benchmark paths (worker, CodSpeed session) call prepare_environment first, so the downloads and the JVM
+        # start are never in a load clock: this call returns at once then, and only serves direct use (tests).
         self.prepare_environment()
         jvm.check_threads(self.threads)
         self._import(dataset)

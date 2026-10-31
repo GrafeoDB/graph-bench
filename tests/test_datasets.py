@@ -98,6 +98,23 @@ def test_key_changes_with_generator_source(monkeypatch: pytest.MonkeyPatch) -> N
     assert cache.dataset_key("push") != cache.dataset_key("full")
 
 
+def test_key_changes_with_pinned_downloads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The Neo4j tarball and Temurin JRE pins (databases/pins.py, no driver imports) are in the key."""
+    before = cache.dataset_key("push")
+    pkg = tmp_path / "graph_bench"
+    for sub in ("datasets", "suites"):
+        shutil.copytree(cache._PKG / sub, pkg / sub, ignore=shutil.ignore_patterns("__pycache__"))
+    (pkg / "databases").mkdir()
+    shutil.copy2(cache._PKG / "answers.py", pkg / "answers.py")
+    shutil.copy2(cache._PKG / "databases" / "pins.py", pkg / "databases" / "pins.py")
+    monkeypatch.setattr(cache, "_PKG", pkg)
+    assert cache.dataset_key("push") == before
+    pins = pkg / "databases" / "pins.py"
+    pins.write_text(pins.read_text(encoding="utf-8").replace("21.0.13", "21.0.14"), encoding="utf-8")
+    assert cache.dataset_key("push") != before
+    assert "jpype" not in (cache._PKG / "databases" / "pins.py").read_text(encoding="utf-8")
+
+
 def test_key_changes_with_answers_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The cached references are canonicalized by answers.py and computed with NetworkX: both are in the key."""
     before = cache.dataset_key("push")
@@ -105,6 +122,8 @@ def test_key_changes_with_answers_source(tmp_path: Path, monkeypatch: pytest.Mon
     for sub in ("datasets", "suites"):
         shutil.copytree(cache._PKG / sub, pkg / sub, ignore=shutil.ignore_patterns("__pycache__"))
     shutil.copy2(cache._PKG / "answers.py", pkg / "answers.py")
+    (pkg / "databases").mkdir()
+    shutil.copy2(cache._PKG / "databases" / "pins.py", pkg / "databases" / "pins.py")
     monkeypatch.setattr(cache, "_PKG", pkg)
     assert cache.dataset_key("push") == before
 

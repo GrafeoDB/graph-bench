@@ -60,7 +60,7 @@ the plans show avoidable work. They carry no `- id:` line, so the adapter test s
 
 Load uses the batch API, Grafeo's fastest documented bulk path; LOAD CSV will be tracked as its own benchmark,
 Load (query language). The LOAD CSV load is correct (every node and edge count matches the CSVs, and all checked
-queries agree afterwards), but slower than the batch API. A load entry has no answer, so there is no `- id:` line.
+queries agree afterwards), but slower than the batch API. It is not a disagreement, so there is no `- id:` line.
 
 - Benchmarks: `load_snb`, `load_graphalytics` (the worker's load clock around `GrafeoDatabase.load()`), measured
   with a LOAD CSV version of the adapter (Task 7b, round 0).
@@ -111,7 +111,8 @@ queries agree afterwards), but slower than the batch API. A load entry has no an
 - Reference answers: the openCypher SNB references (`snb_is4`, `snb_is6`, `snb_ic13`), the same bindings and rows.
 - Cause: Grafeo engine (SQL/PGQ parser), confirmed by grafeo-31 on release/0.6.1. IS4: the label disjunction
   `Post|Comment` (grafeo-31: "SQL/PGQ node pattern reads only :A:B"). IS6 and IC13: the `ANY SHORTEST` path
-  search prefix (with it, quantified edges inside `GRAPH_TABLE`). The decision on the target release is the
+  search prefix (with it, quantified edges inside `GRAPH_TABLE`). For IS6 this is the first failure: the label
+  disjunction `Post|Comment` in the same text could fail next. The decision on the target release is the
   user's (decisions.md, 6).
 
 ## Grafeo: SPARQL IS6 property path is slow (not allowlisted)
@@ -231,8 +232,8 @@ line because the adapter test runs NeuG alone, where no budget applies and it mu
 ## NeuG: load is slow (not allowlisted)
 
 Node and edge counts match and every checked query agrees, but the load clock is long: about 2 to 4 s for
-`graphalytics-small` and 4 to 6 s for `snb-small` (Windows, Python 3.12), against Grafeo's 0.07 s and 0.13 s. A
-load entry has no answer, so there is no `- id:` line.
+`graphalytics-small` and 4 to 6 s for `snb-small` (Windows, Python 3.12), against Grafeo's 0.07 s and 0.13 s. It is
+not a disagreement, so there is no `- id:` line.
 
 - Statements: one explicit-schema `CREATE NODE TABLE` / `CREATE REL TABLE` per table, then `COPY ... (header=true,
   delim=",")` per CSV (https://neug.io/docs/data_io/import_data/). Each COPY commits a private copy-on-write graph
@@ -655,7 +656,8 @@ Measured on Windows (one thread, push data, three loads per dataset in one proce
 - The shared SQL/PGQ texts say "a Post or a Comment" as the standard label expression `m:Post|Comment` (ISO/IEC
   9075-16). DuckPGQ 2.0 (extension build `9c11bc192a`, DuckDB 2.0.0) rejects it while parsing:
   `Parser Error: syntax error at or near "|"`, at `MATCH (m:Post|Comment)` (IS4) and at
-  `MATCH ANY SHORTEST (m:Post|Comment)-[r:REPLY_OF]->*(p:Post)` (IS6). The cases show ✗ with that error.
+  `MATCH ANY SHORTEST (m:Post|Comment)-[r:REPLY_OF]->*(p:Post)` (IS6; first failure: the parser stops there). The
+  cases show ✗ with that error.
 - Not worked around: no union `Message` table and no DuckDB-specific text (a database whose feature does not work has
   to fix it). IS6 would also fail afterwards on the second gap: DuckPGQ needs unique labels, and `REPLY_OF` is two
   edge tables (comment to comment, comment to post) in the dataset, so the property graph labels them

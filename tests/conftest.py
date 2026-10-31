@@ -1,10 +1,12 @@
 import re
+import warnings
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
 
 from graph_bench.datasets import cache
+from graph_bench.results import Entry
 
 KNOWN_DISAGREEMENTS = Path(__file__).resolve().parent.parent / "docs" / "known-disagreements.md"
 
@@ -31,3 +33,12 @@ def _known(db: str) -> set[str]:
 def known_disagreements() -> Callable[[str], set[str]]:
     """The allowlist reader: database name -> benchmark ids that may fail in the adapter tests."""
     return _known
+
+
+def warn_if_fixed(entry: Entry, known: set[str]) -> None:
+    """Warn when an allowlisted benchmark's entry now agrees, so a fixed upstream bug is noticed.
+
+    The adapter test keeps passing (an allowlisted id may agree); pytest lists the warning in its summary.
+    """
+    if entry.benchmark in known and entry.status == "ok" and entry.answer == "agree":
+        warnings.warn(f"ALLOWLISTED BUT NOW AGREES: {entry.database}/{entry.benchmark}", stacklevel=2)

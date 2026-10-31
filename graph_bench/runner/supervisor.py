@@ -194,14 +194,14 @@ def apply_budget_rule(results: Results) -> None:
 
     A benchmark is an item at one scale and thread setting, across databases. Each entry's budget is 10x the
     mean of the 3 fastest other databases' ok/agree values for it (of all others if fewer than 3); with no
-    other such database no budget applies. The entry itself never counts, so the outcome does not depend on
-    order. Speed is `timing.median_ns` in bench mode and `preflight_ns` in codspeed mode. The timing of a
-    marked entry is kept.
+    other such database no budget applies. Loads (category "load") are exempt, as entries and as
+    yardsticks. The entry itself never counts, so the outcome does not depend on order. Speed is
+    `timing.median_ns` in bench mode and `preflight_ns` in codspeed mode. The timing of a marked entry is kept.
     """
     groups: dict[tuple[str, str, int | None], list[tuple[Entry, float]]] = {}
     for e in results.entries:
-        if e.status != "ok" or e.answer != "agree":
-            continue
+        if e.status != "ok" or e.answer != "agree" or e.category == "load":
+            continue  # a load is exempt: it has no budget and is not a yardstick (as in the in-run `m.load` rule)
         speed = (e.timing.median_ns if e.timing is not None else None) if results.mode == "bench" else e.preflight_ns
         if speed is not None:
             groups.setdefault((e.benchmark, e.scale, e.threads), []).append((e, float(speed)))

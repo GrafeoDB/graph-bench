@@ -27,6 +27,7 @@ from graph_bench.databases import neo4j as neo
 from graph_bench.datasets.schema import Column, Dataset, EdgeTable, NodeTable
 from graph_bench.runner.supervisor import run_bench
 from graph_bench.types import Model
+from tests.conftest import warn_if_fixed
 
 # The worker's model gate error, exactly: f"model {case.item.model} not supported".
 MODEL_GATE = re.compile(f"model ({'|'.join(get_args(Model))}) not supported")
@@ -62,6 +63,7 @@ def test_neo4j_push_agrees(
         # ⊘ passes only for the worker's model gate; any other ⊘ (a missing capability) must be allowlisted in
         # docs/known-disagreements.md.
         lacks_model = entry.status == "not_supported" and MODEL_GATE.fullmatch(entry.error or "") is not None
+        warn_if_fixed(entry, known)
         if entry.benchmark in known or lacks_model:
             continue
         good = entry.status == "ok" and entry.answer == "agree"
@@ -89,7 +91,7 @@ def test_neo4j_info_and_env(tmp_path: Path) -> None:
     assert "-XX:ParallelGCThreads=1, -XX:ConcGCThreads=1, -XX:CICompilerCount=2" in info.threads_note
     assert "not capped" in info.threads_note
     assert re.fullmatch(r"Temurin \d+(\.\d+)*", info.java or "")
-    assert cls.process_env(None) == {}
+    assert cls.process_env(None) == {"GRAPH_BENCH_JVM_THREADS": ""}
     assert cls.process_env(1) == {"GRAPH_BENCH_JVM_THREADS": "1"}
 
 
@@ -193,14 +195,23 @@ def _run(script: str, cwd: Path, env: dict[str, str]) -> subprocess.CompletedPro
 
 
 def test_neo4j_load_algorithms_and_jvm(push_data_dir: Path, tmp_path: Path, shared_downloads: str) -> None:
-    """One JVM per process with the shared caps; two loads in one process; counts, BFS, IC13 on one person."""
+    """One JVM per process with the shared caps; two loads in one process; counts, BFS, IC13 on one person.
+
+    After `prepare_environment`, a load fetches, hashes, installs and starts nothing: `jvm.fetch`, `install` and
+    `jvm.start_once` are replaced by counters for the loads.
+    """
     script = """
         from pathlib import Path
         from graph_bench.databases import get_database, jvm
+        from graph_bench.databases import neo4j as neo
         from graph_bench.databases.base import NotSupported
         from graph_bench.datasets import cache
         cls = get_database("neo4j")
         cls.prepare_environment()
+        calls = []
+        jvm.fetch = lambda *a, **k: calls.append("fetch")
+        neo.install = lambda: calls.append("install")
+        jvm.start_once = lambda *a, **k: calls.append("start_once")
         cls.prepare_environment()  # once per process: a second call does nothing
         assert jvm.owner() == "neo4j"
         assert jvm.effective_heap_flag() == jvm.HEAP_FLAG
@@ -229,6 +240,7 @@ def test_neo4j_load_algorithms_and_jvm(push_data_dir: Path, tmp_path: Path, shar
         Path("snb").mkdir()
         db = cls(Path("snb"), 1)
         db.load(snb)
+        assert calls == [], calls  # three loads: no fetch, hash, install or JVM start inside a load
         assert db.counts() == (snb.node_count, snb.edge_count)
         same = "MATCH (p1:Person {id: $a}), (p2:Person {id: $b}) " \\
             "OPTIONAL MATCH path = shortestPath((p1)-[:KNOWS*]-(p2)) " \\
@@ -267,3 +279,62 @@ def test_neo4j_load_refuses_a_jvm_without_thread_options(
     done = _run(script, tmp_path, env)
     assert done.returncode == 0, done.stderr[-3000:]
     assert "the JVM's thread options are" in done.stdout
+
+
+def test_prepare_environment_returns_at_once_when_ready(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without a JVM: once the process is prepared, the call (also made by `load`) does no download or JVM work."""
+
+    def forbidden(*args: object, **kwargs: object) -> None:
+        raise AssertionError("called after the process was prepared")
+
+    monkeypatch.setattr(neo, "_STATE", {"ready": True})
+    monkeypatch.setattr(neo, "install", forbidden)
+    monkeypatch.setattr(jvm, "fetch", forbidden)
+    monkeypatch.setattr(jvm, "start_once", forbidden)
+    neo.Neo4jDatabase.prepare_environment()
+
+
+def test_admin_env_drops_the_callers_jvm_options(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS", "JAVA_OPTS", "CLASSPATH", "NEO4J_HOME"):
+        monkeypatch.setenv(name, "-Xmx64m")
+    monkeypatch.setenv("PATH", "/usr/bin")
+    env = neo.admin_env(tmp_path / "jre", tmp_path / "conf")
+    assert env["PATH"] == "/usr/bin"
+    assert env["JAVA_HOME"] == str(tmp_path / "jre")
+    assert env["NEO4J_CONF"] == str(tmp_path / "conf")
+    assert env["HEAP_SIZE"] == jvm.MAX_HEAP
+    assert not set(env) - {*neo._ADMIN_ENV_KEEP, "JAVA_HOME", "NEO4J_CONF", "HEAP_SIZE"}
+
+
+def test_run_admin_kills_the_whole_tree_on_a_timeout(tmp_path: Path) -> None:
+    """A hung command is killed with the process it started (the launcher JVM starts the import JVM)."""
+    psutil = pytest.importorskip("psutil")
+    pid_file = tmp_path / "child.pid"
+    parent = textwrap.dedent(
+        f"""
+        import subprocess, sys, time
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+        open({str(pid_file)!r}, "w").write(str(child.pid))
+        time.sleep(120)
+        """
+    )
+    with pytest.raises(RuntimeError, match="did not finish in 5 s"):
+        neo.run_admin([sys.executable, "-c", parent], tmp_path, dict(os.environ), timeout_s=5)
+    child = int(pid_file.read_text())
+    gone = False
+    for _ in range(50):
+        try:
+            gone = psutil.Process(child).status() == psutil.STATUS_ZOMBIE
+        except psutil.NoSuchProcess:
+            gone = True
+        if gone:
+            break
+        psutil.wait_procs([], timeout=0.1)
+    assert gone, f"child {child} outlived the timeout"
+
+
+def test_run_admin_reports_a_failure(tmp_path: Path) -> None:
+    command = [sys.executable, "-c", "print('bad input'); raise SystemExit(3)"]
+    with pytest.raises(RuntimeError, match=r"failed \(exit 3\): bad input"):
+        neo.run_admin(command, tmp_path, dict(os.environ))
+    assert neo.run_admin([sys.executable, "-c", "print('done')"], tmp_path, dict(os.environ)).strip() == "done"

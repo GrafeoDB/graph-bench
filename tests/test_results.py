@@ -1,4 +1,8 @@
+import dataclasses
+import warnings
 from pathlib import Path
+
+import pytest
 
 from graph_bench.databases.base import DatabaseInfo
 from graph_bench.results import SCHEMA_VERSION, Entry, Results
@@ -50,3 +54,25 @@ def test_results_round_trip(tmp_path: Path) -> None:
     back = Results.read(path)
     assert back == results
     assert back.schema_version == SCHEMA_VERSION
+
+
+def test_warn_if_fixed_flags_an_allowlisted_entry_that_agrees() -> None:
+    from tests.conftest import warn_if_fixed
+
+    entry = Entry(
+        id="x/snb_is1/small/1",
+        category="hops",
+        model="property_graph",
+        benchmark="snb_is1",
+        database="x",
+        scale="small",
+        threads=1,
+        status="ok",
+        answer="agree",
+    )
+    with pytest.warns(UserWarning, match=r"ALLOWLISTED BUT NOW AGREES: x/snb_is1"):
+        warn_if_fixed(entry, {"snb_is1"})
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        warn_if_fixed(entry, set())
+        warn_if_fixed(dataclasses.replace(entry, answer="disagree"), {"snb_is1"})

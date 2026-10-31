@@ -31,7 +31,11 @@ def test_heap_cap_is_one_constant() -> None:
 def test_jvm_args_cap_threads_only_when_single_threaded(monkeypatch: pytest.MonkeyPatch) -> None:
     caps = ["-XX:ParallelGCThreads=1", "-XX:ConcGCThreads=1", "-XX:CICompilerCount=2"]
     assert jvm.process_env(1) == {"GRAPH_BENCH_JVM_THREADS": "1"}
-    assert jvm.process_env(None) == {}
+    assert jvm.process_env(None) == {jvm.THREADS_ENV: ""}
+    # An all-cores run overrides an inherited THREADS_ENV=1 (the worker applies process_env over os.environ).
+    monkeypatch.setenv(jvm.THREADS_ENV, "1")
+    monkeypatch.setenv(jvm.THREADS_ENV, jvm.process_env(None)[jvm.THREADS_ENV])
+    assert not jvm.single_threaded()
     monkeypatch.delenv(jvm.THREADS_ENV, raising=False)
     assert not jvm.single_threaded()
     assert jvm.jvm_args() == ["-Xmx4g"]
