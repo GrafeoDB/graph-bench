@@ -17,7 +17,7 @@ from graph_bench.results import Entry, Results
 from graph_bench.runner import supervisor
 from graph_bench.suites import catalog
 from graph_bench.suites.catalog import Case
-from tests.conftest import resources_off
+from tests.conftest import HANG_TIMEOUT_S, resources_off
 
 ROOT = Path(__file__).resolve().parents[1]
 EXTRA = (
@@ -310,7 +310,7 @@ def test_codspeed_rerun_remeasures_passed_cases(
     monkeypatch.setattr(supervisor, "_launch", _without_codspeed(launches))
     resources_off(monkeypatch)
     out = tmp_path / "out"
-    results = supervisor.run_codspeed("push", ["fake"], out, workdir=tmp_path / "work", case_timeout_s=6)
+    results = supervisor.run_codspeed("push", ["fake"], out, workdir=tmp_path / "work", case_timeout_s=HANG_TIMEOUT_S)
 
     ids = [e.id for e in results.entries]
     assert len(ids) == len(set(ids))
@@ -318,7 +318,7 @@ def test_codspeed_rerun_remeasures_passed_cases(
     assert set(entries) == _expected_ids("fake")
     hung = entries.pop(_id("snb_is4"))
     assert hung.status == "timeout"
-    assert "no output for 6 s" in (hung.error or "")
+    assert f"no output for {HANG_TIMEOUT_S:g} s" in (hung.error or "")
     wrong = entries.pop(_id("snb_is3"))
     assert (wrong.status, wrong.answer) == ("ok", "disagree")
     assert all(e.status == "ok" for e in entries.values()), [e for e in entries.values() if e.status != "ok"]
@@ -349,7 +349,7 @@ def test_codspeed_rerun_when_the_last_case_hangs(
     monkeypatch.setattr(supervisor, "_launch", _without_codspeed(launches))
     resources_off(monkeypatch)
     out = tmp_path / "out"
-    results = supervisor.run_codspeed("push", ["fake"], out, workdir=tmp_path / "work", case_timeout_s=6)
+    results = supervisor.run_codspeed("push", ["fake"], out, workdir=tmp_path / "work", case_timeout_s=HANG_TIMEOUT_S)
 
     lines = [json.loads(line) for line in (out / "raw" / "fake-1" / "pytest.jsonl").read_text("utf-8").splitlines()]
     hung = _id("snb_rdf_is6")  # the last case: the RDF store is loaded and run last

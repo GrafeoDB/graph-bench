@@ -13,6 +13,10 @@ from graph_bench.runner.supervisor import run_bench
 from graph_bench.suites import catalog
 from graph_bench.types import Model
 
+# The silence limit of tests that hang a case on purpose. Startup children get half of it, and a fresh Python
+# importing graph-bench can take several seconds on a loaded machine, so 6 s (3 s per child) was flaky.
+HANG_TIMEOUT_S = 12.0
+
 KNOWN_DISAGREEMENTS = Path(__file__).resolve().parent.parent / "docs" / "known-disagreements.md"
 
 

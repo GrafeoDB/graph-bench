@@ -20,7 +20,7 @@ from graph_bench.runner.supervisor import apply_budget_rule, run_bench
 from graph_bench.suites import catalog
 from graph_bench.suites.catalog import Case
 from graph_bench.types import Timing
-from tests.conftest import resources_off
+from tests.conftest import HANG_TIMEOUT_S, resources_off
 
 EXTRA = (
     "fake=tests.fakes:FakeDatabase,fake2=tests.fakes:FakeDatabase2,"
@@ -330,7 +330,7 @@ def test_supervisor_resumes_after_crash(bench_env: pytest.MonkeyPatch, tmp_path:
 
 def test_supervisor_marks_hang_as_timeout(bench_env: pytest.MonkeyPatch, tmp_path: Path) -> None:
     bench_env.setenv("GRAPH_BENCH_FAKE", "hang:snb_is4")
-    results = run_bench("push", ["fake"], tmp_path / "out", workdir=tmp_path / "work", case_timeout_s=6)
+    results = run_bench("push", ["fake"], tmp_path / "out", workdir=tmp_path / "work", case_timeout_s=HANG_TIMEOUT_S)
     entries = _by_id(results)
     assert set(entries) == _expected_ids("fake")
     hung = entries.pop(_id("snb_is4"))
@@ -460,12 +460,12 @@ def test_startup_hang_is_a_timeout_without_cascade(bench_env: pytest.MonkeyPatch
     """The worker kills a silent startup child at half the case timeout (at most `STARTUP_TIMEOUT_S`), before
     the supervisor's silence limit, so no child outlives its worker; the entry is ⏱ and nothing else is touched."""
     bench_env.setenv("GRAPH_BENCH_FAKE", "hang:startup")
-    results = run_bench("push", ["fake"], tmp_path / "out", workdir=tmp_path / "work", case_timeout_s=6)
+    results = run_bench("push", ["fake"], tmp_path / "out", workdir=tmp_path / "work", case_timeout_s=HANG_TIMEOUT_S)
     entries = _by_id(results)
     assert set(entries) == _expected_ids("fake")
     hung = entries.pop(catalog.startup_id("fake", 1))
     assert (hung.status, hung.category, hung.scale) == ("timeout", "startup", "empty")
-    assert hung.error == "startup child 1 gave no answer within 3 s"
+    assert hung.error == f"startup child 1 gave no answer within {HANG_TIMEOUT_S / 2:g} s"
     assert all(e.status == "ok" for e in entries.values()), [e for e in entries.values() if e.status != "ok"]
 
 
