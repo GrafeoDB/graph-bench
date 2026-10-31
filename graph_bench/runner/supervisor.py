@@ -67,6 +67,10 @@ STARTUP_TIMEOUT_S = 120.0
 PYTEST_TESTS_FAILED = 1
 BUDGET_FACTOR = 10
 IN_RUN_FACTOR = 30
+# The in-run guard never cuts a case off below this: it exists to stop runaways, and a cold first run (a JVM
+# compiling a new query, a planner's first plan) can take tens of ms where the timed median is within budget. The
+# final 10x rule on medians decides the marker; the floor only bounds what a runaway costs.
+IN_RUN_FLOOR_S = 10.0
 _POLL_S = 0.05
 _ROOT = Path(__file__).resolve().parents[2]
 
@@ -171,7 +175,8 @@ def _top3_mean(values: Sequence[float]) -> float:
 
 
 def _budgets(entries: Sequence[Entry], db: str, meta: dict[str, _Meta]) -> dict[str, float]:
-    """Seconds per case: 30x the mean of the 3 smallest `preflight_ns` among earlier databases' ok/agree entries.
+    """Seconds per case: 30x the mean of the 3 smallest `preflight_ns` among earlier databases' ok/agree entries,
+    and at least `IN_RUN_FLOOR_S`.
 
     This in-run cutoff is a runaway guard on first (cold) runs; `apply_budget_rule` at 10x on the final timings
     decides the marker. Only cases with at least 3 such entries get a budget, so the in-run budget never depends
@@ -185,7 +190,7 @@ def _budgets(entries: Sequence[Entry], db: str, meta: dict[str, _Meta]) -> dict[
     for bench_id, m in meta.items():
         values = found.get((m.benchmark, m.scale, m.threads))
         if values and len(values) >= 3 and not m.load:
-            budgets[bench_id] = IN_RUN_FACTOR * _top3_mean(values) / 1e9
+            budgets[bench_id] = max(IN_RUN_FACTOR * _top3_mean(values) / 1e9, IN_RUN_FLOOR_S)
     return budgets
 
 
@@ -507,7 +512,8 @@ class _Run:
             budget = f"{attempt.cutoff_s:.3g}"
             status, error = (
                 "timeout",
-                f"too slow: cut off at {budget} s ({IN_RUN_FACTOR}x the top-3 average of earlier databases)",
+                f"too slow: cut off at {budget} s ({IN_RUN_FACTOR}x the top-3 average of earlier databases, "
+                f"at least {IN_RUN_FLOOR_S:g} s)",
             )
         elif attempt.hung:
             status, error = "timeout", f"no output for {attempt.silence_s:g} s"

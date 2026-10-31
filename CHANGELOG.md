@@ -30,7 +30,7 @@ benchmark moves to `legacy/` untouched and is deleted once the new comparison re
 - **Time budget**: 10x the average median of the 3 fastest other databases with correct answers, applied over
   all results at the end, so the run order never decides a marker from this final rule. During the run a
   runaway guard cuts a preflight's database call (cold first run, harness work excluded) off at 30x the average
-  of the 3 fastest earlier preflights, once 3 earlier results exist; this guard depends on which databases ran
+  of the 3 fastest earlier preflights and never below 10 s, once 3 earlier results exist; this guard depends on which databases ran
   earlier. Before that a hard cap applies (`--case-timeout`, default 600 s of worker silence). Loads are exempt
   from the budget.
 - **Load count check**: right after each timed load, outside the clock, the adapter's optional `counts()` counts

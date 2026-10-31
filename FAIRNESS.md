@@ -53,7 +53,8 @@ benchmark, servers included, is kept in [legacy/](legacy/README.md).
    result). This final rule, on medians, decides the ⏱ marker.
    - **During a run, a runaway guard:** databases run one after another. Once at least 3 earlier databases have
      correct times, a later database's preflight, its first (cold) run, is cut off at 30x the average of their
-     3 fastest preflights: the supervisor stops the worker as soon as the preflight's database call runs past
+     3 fastest preflights, and never below 10 s (a cold first run, such as a JVM compiling a new query, can take
+     tens of milliseconds where the timed median is within budget): the supervisor stops the worker as soon as the preflight's database call runs past
      that budget, and the case becomes ⏱ ("too slow: cut off at ..."). Only the database call is timed against
      the cutoff; graph-bench's own work around it (loading the reference, checking the answer) is not. The
      cutoff only stops runaway cases early; because it measures cold first runs, it is set well above the final

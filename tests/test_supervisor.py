@@ -191,9 +191,18 @@ def test_budgets_need_three_earlier_databases() -> None:
         _entry("e", 0.5, answer="disagree"),
         _entry("f", 0.5, status="failed"),
     ]
-    # 30x (a runaway guard on cold first runs), not the final rule's 10x
-    assert supervisor._budgets(four, "fake", meta) == {target: pytest.approx(30 * 2e6 / 1e9)}
-    assert supervisor._budgets([*four, _entry("fake", 0.1)], "fake", meta) == {target: pytest.approx(0.06)}
+    # 30x (a runaway guard on cold first runs), not the final rule's 10x, and never below the 10 s floor
+    assert supervisor._budgets(four, "fake", meta) == {target: pytest.approx(10.0)}
+    assert supervisor._budgets([*four, _entry("fake", 0.1)], "fake", meta) == {target: pytest.approx(10.0)}
+    slow = [_entry("a", 1000), _entry("b", 2000), _entry("c", 3000)]
+    assert supervisor._budgets(slow, "fake", meta) == {target: pytest.approx(30 * 2.0)}
+
+
+def test_in_run_floor_keeps_cold_first_runs() -> None:
+    """Fast earlier databases (2 ms preflights) no longer give a 60 ms cutoff: a cold JVM's first run survives."""
+    meta = supervisor._expected(catalog.selection("push"), "fake", 1)
+    fast = [_entry("a", 1), _entry("b", 2), _entry("c", 3)]
+    assert set(supervisor._budgets(fast, "fake", meta).values()) == {supervisor.IN_RUN_FLOOR_S}
 
 
 def test_in_run_cutoff_kills_a_slow_preflight(bench_env: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -213,7 +222,7 @@ def test_in_run_cutoff_kills_a_slow_preflight(bench_env: pytest.MonkeyPatch, tmp
 
     def budgets(entries: Any, db: str, meta: Any) -> dict[str, float]:
         found = computed(entries, db, meta)
-        return {i: s if i == tight else 0.5 if i == harness else 60.0 for i, s in found.items()}
+        return {i: 0.5 if i in (tight, harness) else 60.0 for i in found}
 
     bench_env.setattr(supervisor, "_budgets", budgets)
     launches: list[list[str]] = []
@@ -231,7 +240,7 @@ def test_in_run_cutoff_kills_a_slow_preflight(bench_env: pytest.MonkeyPatch, tmp
 
     entry = _by_id(results)[tight]
     assert entry.status == "timeout", entry
-    pattern = r"too slow: cut off at (\S+) s \(30x the top-3 average of earlier databases\)"
+    pattern = r"too slow: cut off at (\S+) s \(30x the top-3 average of earlier databases, at least 10 s\)"
     match = re.fullmatch(pattern, entry.error or "")
     assert match, entry.error
     assert float(match.group(1)) < 2.0
@@ -287,7 +296,7 @@ def test_in_run_cutoff_times_only_the_database_call(scenario: str, tmp_path: Pat
     else:
         assert (attempt.hung, attempt.cutoff_s) == (True, 0.3)
         run._settle(attempt, meta)
-        expected = "too slow: cut off at 0.3 s (30x the top-3 average of earlier databases)"
+        expected = "too slow: cut off at 0.3 s (30x the top-3 average of earlier databases, at least 10 s)"
         assert (run.recorded[bench_id].status, run.recorded[bench_id].error) == ("timeout", expected)
 
 
