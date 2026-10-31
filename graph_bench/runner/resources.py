@@ -58,14 +58,16 @@ from graph_bench.runner.sampler import (
     tree_names,
     tree_rss,
 )
-from graph_bench.runner.startup import fresh_dir, kill_tree, new_process_group
+from graph_bench.runner.startup import STARTUP_TIMEOUT_S, fresh_dir, kill_tree, new_process_group
 from graph_bench.runner.worker import count_check, prepare_environment
 from graph_bench.suites import catalog
 from graph_bench.types import Status, Store
 
-__all__ = ["Window", "main", "measure", "run_resource", "unmeasured", "window"]
+__all__ = ["EXIT_GRACE_S", "Window", "main", "measure", "run_resource", "unmeasured", "window"]
 
 _POLL_S = 0.05
+# How long a child may take to exit once its resource line is in (a runtime's shutdown); then its tree is killed.
+EXIT_GRACE_S = 30.0
 
 
 # The child -----------------------------------------------------------------------------------------------------
@@ -109,7 +111,10 @@ def measure(
     setup_error = prepare_environment(cls)
     if setup_error is not None:
         return _result("failed", setup_error)
-    instance = cls(workdir, threads)
+    try:
+        instance = cls(workdir, threads)
+    except Exception as exc:
+        return _result("failed", f"opening the instance: {message(exc)}")
     closed = False
     try:
         emit(_reading("before"))
@@ -124,8 +129,14 @@ def measure(
             answer, detail = count_check(instance, data)
         except Exception as exc:
             return _result("failed", f"counting the loaded data: {message(exc)}")
-        storage = instance.info().storage
-        paths = instance.store_paths()
+        try:
+            storage = instance.info().storage
+        except Exception as exc:
+            return _result("failed", f"reading the database info: {message(exc)}")
+        try:
+            paths = instance.store_paths()
+        except Exception as exc:
+            return _result("failed", f"reading the store paths: {message(exc)}")
         closed = True
         try:
             instance.close()
@@ -204,8 +215,13 @@ def unmeasured(
     return Resource(rid, db, dataset, store, scale, threads, status, error)
 
 
-def _follow(proc: "subprocess.Popen[bytes]", out: Path, timeout_s: float) -> tuple[list[dict[str, Any]], bool]:
-    """The child's lines until it exits; True when it stayed silent past `timeout_s` (it is then still running)."""
+def _follow(proc: "subprocess.Popen[bytes]", out: Path, timeout_s: float) -> tuple[list[dict[str, Any]], float | None]:
+    """The child's lines until it exits, and the silence limit it overran (None when it exited; else it is still
+    running).
+
+    The limit is `timeout_s`; before the first line (imports, `prepare_environment`, the instance) at least
+    `STARTUP_TIMEOUT_S`, as for the worker's start; once the resource line is in, at most `EXIT_GRACE_S`.
+    """
     lines: list[dict[str, Any]] = []
     offset = 0
     buffer = b""
@@ -226,16 +242,20 @@ def _follow(proc: "subprocess.Popen[bytes]", out: Path, timeout_s: float) -> tup
         if complete:
             last = time.monotonic()
         if code is not None:
-            return lines, False
-        if time.monotonic() - last > timeout_s:
-            return lines, True
+            return lines, None
+        limit = timeout_s if lines else max(timeout_s, STARTUP_TIMEOUT_S)
+        if any(line.get("kind") == "resource" for line in lines):
+            limit = min(timeout_s, EXIT_GRACE_S)
+        if time.monotonic() - last > limit:
+            return lines, limit
         time.sleep(_POLL_S)
 
 
 def _child(
     argv: list[str], env: Mapping[str, str] | None, out: Path, log: Path, timeout_s: float
-) -> tuple[list[dict[str, Any]], bool, int | None, list[Sample]]:
-    """Run the child with the sampler on its tree; its lines, whether it timed out, its exit code and the samples.
+) -> tuple[list[dict[str, Any]], float | None, int | None, list[Sample]]:
+    """Run the child with the sampler on its tree; its lines, the silence limit it overran (None when it exited),
+    its exit code and the samples.
 
     Afterwards its whole process tree is killed (`startup.kill_tree`), whether it answered or not.
     """
@@ -251,11 +271,11 @@ def _child(
         )
         sampler = TreeSampler(interpreter_pid(proc)).start()
         try:
-            lines, timed_out = _follow(proc, out, timeout_s)
+            lines, overran = _follow(proc, out, timeout_s)
         finally:
             samples = sampler.stop()
             kill_tree(proc, sampler.seen, before)
-    return lines, timed_out, (None if timed_out else proc.returncode), samples
+    return lines, overran, (None if overran is not None else proc.returncode), samples
 
 
 def _line(lines: list[dict[str, Any]], kind: str, phase: str | None = None) -> dict[str, Any] | None:
@@ -283,7 +303,9 @@ def run_resource(
 
     The child runs in the fresh directory `workdir` (removed afterwards) with `env` (default: this process's);
     its lines go to `raw/<load benchmark>-<scale>.jsonl`, its output to the `.log` next to it. A child silent for
-    longer than `timeout_s` is killed (`timeout`, "no output for <t> s"); one that exits without its resource line
+    longer than `timeout_s` is killed (`timeout`, "no output for <t> s"; before its first line the limit is at
+    least `STARTUP_TIMEOUT_S`, and a child that does not exit once its resource line is in is killed after
+    `EXIT_GRACE_S`, its record kept); one that exits without its resource line
     is `failed` ("resources child exited with code <n>: <last log line>"). A load error is `failed`, a count
     mismatch `ok` with answer `disagree`. Only an `ok` record carries bytes.
     """
@@ -297,14 +319,14 @@ def run_resource(
     argv += ["--workdir", str(workdir), "--out", str(out)]
     fresh_dir(workdir)
     try:
-        lines, timed_out, code, samples = _child(argv, env, out, log, timeout_s)
+        lines, overran, code, samples = _child(argv, env, out, log, timeout_s)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
     record = Resource(rid, db, dataset, store, scale, threads, "failed")
     result = _line(lines, "resource")
     if result is None:
-        if timed_out:
-            record.status, record.error = "timeout", f"no output for {timeout_s:g} s"
+        if overran is not None:
+            record.status, record.error = "timeout", f"no output for {overran:g} s"
         else:
             tail = log.read_text(encoding="utf-8", errors="replace").strip().splitlines()
             record.error = f"resources child exited with code {code}" + (f": {tail[-1]}" if tail else "")

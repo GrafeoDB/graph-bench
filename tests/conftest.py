@@ -1,3 +1,4 @@
+import dataclasses
 import re
 import warnings
 from collections.abc import Callable, Iterator
@@ -7,8 +8,19 @@ import pytest
 
 from graph_bench.datasets import cache
 from graph_bench.results import Entry
+from graph_bench.suites import catalog
 
 KNOWN_DISAGREEMENTS = Path(__file__).resolve().parent.parent / "docs" / "known-disagreements.md"
+
+
+def resources_off(mp: pytest.MonkeyPatch, name: str = "push") -> None:
+    """Switch selection `name`'s Memory and Disk records off for a test that does not check them.
+
+    `Selection.resources` is read only by the supervisor, in the test's own process (CliRunner included), so
+    patching `catalog.SELECTIONS` there is enough. Call it inside the fixture's or test's `MonkeyPatch` (module
+    fixtures need their own `MonkeyPatch.context()`, which an autouse function fixture would not reach).
+    """
+    mp.setitem(catalog.SELECTIONS, name, dataclasses.replace(catalog.SELECTIONS[name], resources=False))
 
 
 @pytest.fixture(scope="session")

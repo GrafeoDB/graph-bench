@@ -33,6 +33,10 @@ END = "<!-- results:end -->"
 _MARKER_ORDER = ("⊘", "✗", "≠", "⏱")
 MIB = 1 << 20
 IN_MEMORY = "in memory"
+MEMORY_NOTE = (
+    '"Loaded" is the memory the load added (after minus before); "peak" is the process tree\'s absolute peak during'
+    " the load, interpreter and started engine included."
+)
 
 Section = tuple[Category, str, int | None]  # category, scale, threads
 
@@ -205,7 +209,7 @@ def _resource_tables(results: Results, dbs: list[str], names: list[str]) -> list
             memory.append(_resource_row(f"{title(load)}, loaded", loads[load], dbs, "footprint_bytes"))
             memory.append(_resource_row(f"{title(load)}, peak during load", loads[load], dbs, "peak_bytes"))
         disk = [_resource_row(title(load), loads[load], dbs, "disk_bytes") for load in order]
-        lines += ["", f"### Memory ({where}, MiB)", "", *_table(["Dataset", *names], memory)]
+        lines += ["", f"### Memory ({where}, MiB)", "", *_table(["Dataset", *names], memory), "", MEMORY_NOTE]
         lines += ["", f"### Disk ({where}, MiB)", "", *_table(["Dataset", *names], disk)]
     return lines
 

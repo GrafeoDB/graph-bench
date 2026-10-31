@@ -37,13 +37,16 @@ nothing, `dirty` adds a row to the loaded state, `leak` adds a node per run that
 Resources (the Memory and Disk records): `memory:<load benchmark>=<MiB>` makes that load allocate and keep that
 many MiB, touched so they are resident (e.g. `memory:load_snb=200`); `disk:<load benchmark>=<bytes>` makes it write
 exactly that many bytes in two files under `<workdir>/store`, which `store_paths` then returns, and makes `info()`
-report on-disk storage.
+report on-disk storage. `crash_soft:instance` makes the constructor raise, `crash_soft:store_paths` makes
+`store_paths` raise, `slow:environment` makes `prepare_environment` sleep 3 s and `hang:exit` makes the process hang
+at exit (an atexit handler registered by `close()`), like a runtime whose shutdown never ends.
 
 With `GRAPH_BENCH_FAKE_TRACE` set to a file, every call of `provision`, `prepare_environment` ("environment"),
 `load`, `load_ql`, `open_empty` and every write phase ("setup", "run", "check", "teardown") appends a line to it:
 the call, the process id and, for `open_empty`, the instance's directory.
 """
 
+import atexit
 import os
 import subprocess
 import sys
@@ -82,6 +85,7 @@ class FakeDatabase(Database):
 
     def __init__(self, workdir: Path, threads: int | None) -> None:
         super().__init__(workdir, threads)
+        self._misbehave(self._flags("instance"))
         self.written: dict[str, set[int]] = {}
         self.prepared: dict[str, set[int]] = {}
         self.runs: dict[str, int] = {}
@@ -98,7 +102,10 @@ class FakeDatabase(Database):
     def prepare_environment(cls) -> None:
         cls.provision()
         cls._trace("environment")
-        cls._misbehave(cls._flags("environment"))
+        flags = cls._flags("environment")
+        cls._misbehave(flags)
+        if "slow" in flags:
+            time.sleep(3)
 
     def info(self) -> DatabaseInfo:
         storage = "on-disk" if "disk:" in os.environ.get(self.env_var, "") else "in-memory"
@@ -125,7 +132,7 @@ class FakeDatabase(Database):
         benchmark = catalog.load_benchmark(dataset.name, self.store)
         self._misbehave(self._flags(benchmark))
         for mib in self._values("memory", benchmark):
-            self.ballast.append(b"" * (int(mib) << 20))
+            self.ballast.append(b"\x01" * (int(mib) << 20))
         for size in self._values("disk", benchmark):
             store = self.workdir / "store"
             (store / "sub").mkdir(parents=True, exist_ok=True)
@@ -136,7 +143,12 @@ class FakeDatabase(Database):
         self.dataset = dataset
 
     def store_paths(self) -> list[Path]:
+        self._misbehave(self._flags("store_paths"))
         return list(self.stored)
+
+    def close(self) -> None:
+        if "hang" in self._flags("exit"):
+            atexit.register(time.sleep, 3600)
 
     def load_store(self, store: Store, dataset: Dataset) -> None:
         self.store = store

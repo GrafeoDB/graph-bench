@@ -29,7 +29,9 @@ Resources (the Memory and Disk records, `Selection.resources`): after a database
 one thread setting has finished, in both modes, the supervisor measures each load the database's models reach, one
 fresh child per (dataset, store, scale), sampling the child's process tree from here
 (`graph_bench.runner.resources.run_resource`). The child inherits the worker's environment and may stay silent for
-`case_timeout_s`. The selection's other loads get ⊘ records, and a database that is not installed ✗ records.
+`case_timeout_s` (at least `STARTUP_TIMEOUT_S` before its first line), each load in its own directory under
+`<workdir>/<db>-<threads>-resources/`. The selection's other loads get ⊘ records, a database that is not
+installed ✗ records, and a harness error in this process a `failed` record ("resources harness: ...").
 These go to results.json `resources`, never to CodSpeed.
 
 Resume rule: when a worker exits non-zero or is killed for silence, the last `start` id without an entry
@@ -64,6 +66,7 @@ from graph_bench.databases import model_support
 from graph_bench.databases.base import DatabaseInfo
 from graph_bench.datasets import cache
 from graph_bench.results import Entry, GrafeoSource, Machine, Reference, Resource, Results
+from graph_bench.runner import message
 from graph_bench.runner.resources import run_resource, unmeasured
 from graph_bench.runner.startup import STARTUP_TIMEOUT_S
 from graph_bench.runner.worker import DEFAULT_CASE_TIMEOUT_S, reference_kind
@@ -536,18 +539,23 @@ class _Run:
                 elif missing is not None:
                     record = unmeasured(db, dataset, store, scale, threads, "failed", missing)
                 else:
-                    record = run_resource(
-                        db,
-                        self.sel.name,
-                        dataset,
-                        store,
-                        scale,
-                        threads,
-                        workdir=self.workdir / f"{db}-{_tag(threads)}-resources",
-                        raw=raw,
-                        env=env,
-                        timeout_s=self.case_timeout_s,
-                    )
+                    name = f"{catalog.load_benchmark(dataset, store)}-{scale}"
+                    try:
+                        record = run_resource(
+                            db,
+                            self.sel.name,
+                            dataset,
+                            store,
+                            scale,
+                            threads,
+                            workdir=self.workdir / f"{db}-{_tag(threads)}-resources" / name,
+                            raw=raw,
+                            env=env,
+                            timeout_s=self.case_timeout_s,
+                        )
+                    except Exception as exc:  # a harness error fails this record only; the run goes on
+                        error = f"resources harness: {message(exc)}"
+                        record = unmeasured(db, dataset, store, scale, threads, "failed", error)
                 self.results.resources.append(record)
 
     def _worker(self, db: str, threads: int | None, meta: dict[str, _Meta], extra_env: dict[str, str]) -> None:

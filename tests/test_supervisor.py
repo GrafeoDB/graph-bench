@@ -20,6 +20,7 @@ from graph_bench.runner.supervisor import apply_budget_rule, run_bench
 from graph_bench.suites import catalog
 from graph_bench.suites.catalog import Case
 from graph_bench.types import Timing
+from tests.conftest import resources_off
 
 EXTRA = (
     "fake=tests.fakes:FakeDatabase,fake2=tests.fakes:FakeDatabase2,"
@@ -60,6 +61,7 @@ def _extra_databases() -> Iterator[None]:
 def bench_env(push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
     monkeypatch.chdir(tmp_path)
     _set_env(monkeypatch, push_data_dir)
+    resources_off(monkeypatch)  # `two_dbs` keeps them on for `test_supervisor_records_resources`
     return monkeypatch
 
 
@@ -494,6 +496,7 @@ def test_missing_driver_marks_failed(bench_env: pytest.MonkeyPatch, tmp_path: Pa
     bench_env.setitem(databases.MODELS, "ghost", frozenset({"property_graph"}))
     bench_env.setitem(databases.MODELS, "ghost_rdf", frozenset({"rdf"}))
     results = run_bench("push", ["ghost", "ghost_rdf"], tmp_path / "out", workdir=tmp_path / "work")
+    assert results.resources == []  # `bench_env` switches them off
     entries = _by_id(results)
     assert set(entries) == _expected_ids("ghost") | _expected_ids("ghost_rdf")
     for entry in entries.values():

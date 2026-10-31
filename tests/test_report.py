@@ -513,7 +513,7 @@ def test_report_memory_and_disk_tables(results: Results) -> None:
     assert _row(text, "Graphalytics, peak during load") == ["✗", "**30.5**", "⏱"]
     assert _row(text, "LDBC SNB (RDF), loaded") == ["5.00", "**1.50**", "⊘"]
     assert _row(text, "LDBC SNB (RDF), peak during load") == ["40.0", "**30.2**", "⊘"]
-    order = [line.split("|")[1].strip() for line in lines[memory + 4 : disk - 1]]
+    order = [line.split("|")[1].strip() for line in lines[memory + 4 : disk - 3]]
     assert order == [
         "LDBC SNB, loaded",
         "LDBC SNB, peak during load",
@@ -522,6 +522,10 @@ def test_report_memory_and_disk_tables(results: Results) -> None:
         "LDBC SNB (RDF), loaded",
         "LDBC SNB (RDF), peak during load",
     ]
+    assert lines[disk - 2] == (
+        '"Loaded" is the memory the load added (after minus before); "peak" is the process tree\'s absolute peak'
+        " during the load, interpreter and started engine included."
+    )
     disk_rows = lines[disk + 4 : disk + 7]
     assert disk_rows == [
         "| LDBC SNB | in memory | ≠ | in memory |",

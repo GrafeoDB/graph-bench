@@ -3,6 +3,7 @@
 import dataclasses
 import json
 import os
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -128,6 +129,8 @@ def test_rdf_store_is_its_own_record(push_data_dir: Path, tmp_path: Path) -> Non
         ("crash_soft:environment", "failed", "preparing the environment: RuntimeError: soft crash"),
         ("crash_soft:count_snb", "failed", "counting the loaded data: RuntimeError: soft crash"),
         ("crash:load_snb", "failed", "resources child exited with code 3"),
+        ("crash_soft:instance", "failed", "opening the instance: RuntimeError: soft crash"),
+        ("crash_soft:store_paths", "failed", "reading the store paths: RuntimeError: soft crash"),
         ("hang:load_snb", "timeout", "no output for 6 s"),
     ],
 )
@@ -135,6 +138,25 @@ def test_resource_failures(push_data_dir: Path, tmp_path: Path, fake: str, statu
     r = _measure(push_data_dir, tmp_path, fake, timeout_s=6)
     assert (r.status, r.error) == (status, error), r
     assert r.footprint_bytes is None and r.peak_bytes is None and r.disk_bytes is None
+
+
+def test_silence_before_the_first_line_gets_the_startup_limit(push_data_dir: Path, tmp_path: Path) -> None:
+    """Imports, `prepare_environment` (a JVM start) and the instance come before the child's first line: like the
+    worker's start, that stretch may last `STARTUP_TIMEOUT_S` even when the case timeout is shorter."""
+    r = _measure(push_data_dir, tmp_path, "slow:environment", timeout_s=2.5)
+    assert (r.status, r.answer) == ("ok", "agree"), r
+
+
+def test_a_child_hanging_at_exit_is_killed_after_its_record(
+    push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Once the resource line is in, a child that does not exit (a runtime's shutdown) is killed after a short
+    grace, not after the case timeout; the record stands."""
+    monkeypatch.setattr(resources, "EXIT_GRACE_S", 1.0)
+    start = time.monotonic()
+    r = _measure(push_data_dir, tmp_path, "hang:exit", timeout_s=60)
+    assert (r.status, r.answer) == ("ok", "agree"), r
+    assert time.monotonic() - start < 30
 
 
 def test_unsupported_count_leaves_the_record_unchecked(push_data_dir: Path, tmp_path: Path) -> None:
@@ -239,6 +261,26 @@ def test_resources_off_when_selection_disables(
     results = supervisor.run_bench("push", ["fake", "ghost"], tmp_path / "out", workdir=tmp_path / "work")
     assert results.resources == []
     assert Results.read(tmp_path / "out" / "results.json").resources == []
+
+
+def test_a_harness_error_fails_only_its_record(
+    push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An exception in the parent (e.g. a workdir it cannot empty) fails that record; the run goes on and writes
+    results.json."""
+
+    def broken(*args: Any, **kwargs: Any) -> Resource:
+        raise OSError("cannot empty the directory")
+
+    monkeypatch.setenv("GRAPH_BENCH_DATA_DIR", str(push_data_dir))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(supervisor._Run, "_worker", lambda self, *args: None)
+    monkeypatch.setattr(supervisor, "run_resource", broken)
+    results = supervisor.run_bench("push", ["fake"], tmp_path / "out", workdir=tmp_path / "work")
+    assert {r.id for r in results.resources} == _all_records("fake")
+    for r in results.resources:
+        assert (r.status, r.error) == ("failed", "resources harness: OSError: cannot empty the directory"), r
+    assert Results.read(tmp_path / "out" / "results.json").resources == results.resources
 
 
 def test_codspeed_mode_records_resources(push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

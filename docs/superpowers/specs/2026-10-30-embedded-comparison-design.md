@@ -154,7 +154,8 @@ Top level:
 - `storage` (`in-memory` | `on-disk`)
 - `baseline_bytes` (the process tree's RSS before the load, engine started), `after_bytes`, `footprint_bytes`
   (after minus before), `peak_bytes` (the highest reading from before to after), `samples` (the supervisor's
-  samples in that window), `sample_interval_ms`, `processes` (the most processes the tree held in it)
+  samples in that window), `sample_interval_ms` (nominal), `processes` (the largest process count seen during
+  the load, not the count at the peak reading)
 - `disk_bytes` (the store's files after `close()`; null for an in-memory store)
 
 The grafeo side annotates entries that match `database == "grafeo" and answer == "disagree"`.

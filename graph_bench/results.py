@@ -75,9 +75,11 @@ class Resource:
     `id` is `resources::<load benchmark>[<db>-<scale>]` (`catalog.resource_id`). Bytes: `baseline_bytes` is the
     process tree's RSS right before the load (engine started and warmed), `after_bytes` right after it,
     `footprint_bytes` the difference (may be negative) and `peak_bytes` the highest reading from before to after,
-    the supervisor's `samples` (taken every `sample_interval_ms`) included; `processes` is the most processes the
-    tree held in that window. `disk_bytes` is the size of the store's files after `close()`, None when the
-    database keeps its store in memory. `answer` is the load's node and edge count check.
+    the supervisor's `samples` included. `sample_interval_ms` is the sampler's nominal interval; a reading can
+    take longer (on Windows each one lists every process), so `samples` over the load time gives the effective
+    rate. `processes` is the largest process count seen during the load (in `before`, `after` and every sample of
+    the window), not the count at the peak reading. `disk_bytes` is the size of the store's files after `close()`,
+    None when the database keeps its store in memory. `answer` is the load's node and edge count check.
     """
 
     id: str

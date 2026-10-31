@@ -9,7 +9,9 @@ smaps, too slow to sample.
 
 The sampler runs in the supervisor, outside the measured process, as a thread (`TreeSampler`). Its sample times are
 `time.monotonic_ns()`, the same clock the measured process stamps its `before` and `after` readings with: the
-system-wide monotonic clock (Linux CLOCK_MONOTONIC, Windows QueryPerformanceCounter), so the two compare.
+system-wide monotonic clock, so the two compare. It is CLOCK_MONOTONIC on Linux and, on Windows,
+QueryPerformanceCounter from Python 3.13; Python 3.12 on Windows uses GetTickCount64, still one system-wide clock
+but with about 15.6 ms resolution, so the window's edges blur by more than one sampling interval there.
 
 A daemonized descendant (a server that double-forks, like redislite's redis-server) is re-parented to init and
 leaves the tree, unless the measured process is a child subreaper (`set_child_subreaper`, Linux).

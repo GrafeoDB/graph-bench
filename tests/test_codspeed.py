@@ -17,6 +17,7 @@ from graph_bench.results import Entry, Results
 from graph_bench.runner import supervisor
 from graph_bench.suites import catalog
 from graph_bench.suites.catalog import Case
+from tests.conftest import resources_off
 
 ROOT = Path(__file__).resolve().parents[1]
 EXTRA = (
@@ -86,6 +87,7 @@ def codspeed_run(
     launches: list[tuple[list[str], dict[str, str]]] = []
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(supervisor, "BUDGET_FACTOR", 1e9)
+        resources_off(mp)  # tests/test_resources.py covers resources in codspeed mode
         mp.setenv("GRAPH_BENCH_DATA_DIR", str(push_data_dir))
         mp.setenv("GRAPH_BENCH_FAKE", "")
         mp.setenv("GRAPH_BENCH_FAKE2", "wrong:snb_is5")
@@ -306,6 +308,7 @@ def test_codspeed_rerun_remeasures_passed_cases(
     monkeypatch.setenv("GRAPH_BENCH_FAKE", "wrong:snb_is3,hang:snb_is4")
     launches: list[tuple[list[str], dict[str, str]]] = []
     monkeypatch.setattr(supervisor, "_launch", _without_codspeed(launches))
+    resources_off(monkeypatch)
     out = tmp_path / "out"
     results = supervisor.run_codspeed("push", ["fake"], out, workdir=tmp_path / "work", case_timeout_s=6)
 
@@ -344,6 +347,7 @@ def test_codspeed_rerun_when_the_last_case_hangs(
     monkeypatch.setenv("GRAPH_BENCH_FAKE", "hang:snb_rdf_is6")
     launches: list[tuple[list[str], dict[str, str]]] = []
     monkeypatch.setattr(supervisor, "_launch", _without_codspeed(launches))
+    resources_off(monkeypatch)
     out = tmp_path / "out"
     results = supervisor.run_codspeed("push", ["fake"], out, workdir=tmp_path / "work", case_timeout_s=6)
 

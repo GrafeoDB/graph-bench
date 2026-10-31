@@ -27,7 +27,7 @@ from graph_bench.databases import neo4j as neo
 from graph_bench.datasets.schema import Column, Dataset, EdgeTable, NodeTable
 from graph_bench.runner.supervisor import run_bench
 from graph_bench.types import Model
-from tests.conftest import not_yet_implemented, warn_if_fixed
+from tests.conftest import not_yet_implemented, resources_off, warn_if_fixed
 
 # The worker's model gate error, exactly: f"model {case.item.model} not supported".
 MODEL_GATE = re.compile(f"model ({'|'.join(get_args(Model))}) not supported")
@@ -54,6 +54,7 @@ def test_neo4j_push_agrees(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("GRAPH_BENCH_DATA_DIR", str(push_data_dir))
+    resources_off(monkeypatch)  # Task 4 turns them on with test_<db>_resources_ok
     results = run_bench("push", ["neo4j"], tmp_path / "out", workdir=tmp_path / "work", case_timeout_s=300)
     known = known_disagreements("neo4j")
     entries = [e for e in results.entries if e.database == "neo4j"]
