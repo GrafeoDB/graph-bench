@@ -16,9 +16,12 @@ GRAFEO = "grafeo"
 
 
 def grafeo_label(results: Results) -> str:
-    """`Grafeo <version> (<sha[:7]>)`, with `-dirty` kept and the install source in place of a missing sha."""
+    """`Grafeo <version> (<sha[:7]>)`, with `-dirty` kept and the install source in place of a missing sha.
+
+    The grafeo commit (`git_sha`) is preferred over a wheel's file SHA-256, which names no commit.
+    """
     version = results.grafeo.get("version") or "unknown"
-    sha = results.grafeo.get("sha")
+    sha = results.grafeo.get("git_sha") or results.grafeo.get("sha")
     if not sha:
         return f"Grafeo {version} ({results.grafeo.get('source', 'unknown')})"
     dirty = "-dirty" if sha.endswith("-dirty") else ""

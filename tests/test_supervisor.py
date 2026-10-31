@@ -128,7 +128,7 @@ def _grafeo_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, installed: str
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(supervisor.importlib.metadata, "version", lambda name: installed)
     (tmp_path / ".graph-bench").mkdir()
-    doc = {"version": "0.6.1.dev0", "source": "git", "sha": "abc123"}
+    doc = {"version": "0.6.1.dev0", "source": "git", "sha": "abc123", "git_sha": "abc123"}
     (tmp_path / ".graph-bench" / "grafeo.json").write_text(json.dumps(doc), encoding="utf-8")
     return doc
 
@@ -141,7 +141,7 @@ def test_grafeo_source_from_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 def test_grafeo_source_ignores_a_stale_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A later `uv sync` replaced the recorded build: the installed version wins, from PyPI."""
     _grafeo_file(tmp_path, monkeypatch, installed="0.6.0")
-    assert supervisor.grafeo_source() == {"version": "0.6.0", "source": "pypi", "sha": None}
+    assert supervisor.grafeo_source() == {"version": "0.6.0", "source": "pypi", "sha": None, "git_sha": None}
 
 
 def test_supervisor_marks_wrong_answer(two_dbs: tuple[Results, list[list[str]], Path]) -> None:

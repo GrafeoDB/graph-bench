@@ -361,3 +361,10 @@ def test_a_database_without_an_rdf_store_shows_not_available_in_the_load_row(res
     assert _row(text, "LDBC SNB (RDF)") == ["**0.621**", "", "⊘"]
     assert _row(text, "LDBC SNB") == ["0.137", "", "**0.136**"]
     assert _row(text, "Load") == ["✓ 2/2", "", "✓ 1/2 ⊘1"]
+
+
+def test_summary_label_prefers_the_git_sha(results: Results) -> None:
+    """A wheel install records the file's SHA-256 as sha; the grafeo commit (git_sha) is what the label shows."""
+    results.grafeo["sha"] = "da7ada7929a5e7978cd444dcb34ee206f2af33b82627549eb44cac7bb22a1288"
+    results.grafeo["git_sha"] = "9164e307"
+    assert "Grafeo 0.6.1 (9164e30)" in render_summary(results)

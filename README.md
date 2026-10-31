@@ -133,12 +133,14 @@ median rank. It names no other database; this README names them all. At each Gra
 checklist runs, locally:
 
 ```bash
-uv run --no-sync graph-bench setup --grafeo path/to/grafeo.whl
+uv run --no-sync graph-bench setup --grafeo path/to/grafeo.whl --grafeo-sha <commit>
 uv run --no-sync graph-bench bench --selection full --out out
 uv run --no-sync graph-bench report --format summary --in out/results.json
 ```
 
-and commits the block on grafeo's release branch. No automation writes to grafeo.
+and commits the block on grafeo's release branch. No automation writes to grafeo. `--grafeo-sha` records the
+grafeo commit the wheel was built from, since a wheel does not name it and local builds of a release branch share
+one version string.
 
 ### CI
 

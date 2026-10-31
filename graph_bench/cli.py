@@ -28,6 +28,9 @@ app.add_typer(data_app, name="data")
 _SELECTION = typer.Option(..., "--selection", help="Selection name: push or full.")
 _WORKDIR = typer.Option(None, "--workdir", help="Directory for database files; default: a temporary one.")
 _GRAFEO_SOURCE = typer.Option(..., "--grafeo", help="A grafeo .whl file or a grafeo checkout (built with maturin).")
+_GRAFEO_SHA = typer.Option(
+    None, "--grafeo-sha", help="The grafeo commit a wheel was built from, recorded in results.json as git_sha."
+)
 _OUT = typer.Option(..., "--out", help="Output directory for results.json and the raw worker output.")
 _REPORT_IN = typer.Option(..., "--in", help="The results.json to report on.")
 _REPORT_WRITE = typer.Option(
@@ -54,13 +57,13 @@ def _dbs(value: str | None) -> list[str]:
     return [name.strip() for name in value.split(",") if name.strip()]
 
 
-def _install_requested(grafeo: str | None) -> dict[str, str] | None:
+def _install_requested(grafeo: str | None, *, git_sha: str | None = None) -> dict[str, str | None] | None:
     """Install the Grafeo from `--grafeo`, else from GRAPH_BENCH_GRAFEO; None when neither is given."""
     source = grafeo or os.environ.get("GRAPH_BENCH_GRAFEO")
     if not source:
         return None
     try:
-        return install_grafeo(Path(source))
+        return install_grafeo(Path(source), git_sha=git_sha)
     except (ValueError, RuntimeError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(2) from None
@@ -91,12 +94,13 @@ def list_benchmarks(
 @app.command()
 def setup(
     grafeo: Path = _GRAFEO_SOURCE,
+    grafeo_sha: str | None = _GRAFEO_SHA,
 ) -> None:
     """Install the Grafeo under test and print what was installed as JSON.
 
     Building a checkout needs a lot of disk: set CARGO_TARGET_DIR to a drive with ~90 GB free.
     """
-    info = _install_requested(str(grafeo))
+    info = _install_requested(str(grafeo), git_sha=grafeo_sha)
     typer.echo(json.dumps(info))
 
 

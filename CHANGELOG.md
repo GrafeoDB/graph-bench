@@ -7,10 +7,9 @@ benchmark moves to `legacy/` untouched and is deleted once the new comparison re
 
 ### Added
 
-- **Embedded comparison**: ten embedded databases are planned (Grafeo, LadybugDB, TuringDB, FalkorDB through
-  falkordblite, NeuG, ArcadeDB, Neo4j Community, DuckDB + DuckPGQ, Oxigraph, HelixDB). Grafeo, LadybugDB, NeuG,
-  FalkorDB, HelixDB, ArcadeDB, Neo4j Community, Oxigraph (RDF/SPARQL only) and DuckDB + DuckPGQ (SQL/PGQ only)
-  are implemented, on Load (SNB, Graphalytics), Complex queries (SNB IS1 to IS7, IC2, IC6), Hops (IC13) and
+- **Embedded comparison**: ten embedded databases, all implemented: Grafeo, LadybugDB, NeuG, FalkorDB (through
+  falkordblite), TuringDB, HelixDB, ArcadeDB, Neo4j Community, Oxigraph (RDF/SPARQL only) and DuckDB + DuckPGQ
+  (SQL/PGQ only), on Load (SNB, Graphalytics), Complex queries (SNB IS1 to IS7, IC2, IC6), Hops (IC13) and
   Algorithms (Graphalytics BFS, WCC, PageRank). See the README for the categories and their status. The JVM
   databases share one heap cap and start their JVM outside every clock (`graph_bench/databases/jvm.py`).
 - **Data models**: a database declares one dialect per model it serves, and the harness routes each query by
@@ -19,6 +18,9 @@ benchmark moves to `legacy/` untouched and is deleted once the new comparison re
   Property graph and SQL/PGQ read one loaded graph; RDF has its own load and Load row (`load_snb_rdf`), from an
   N-Triples file written when the data is prepared. Algorithms run on any database with a property graph or
   SQL/PGQ model; a load a database's models do not reach is ⊘. Grafeo runs all three models.
+- **Grafeo build provenance**: `setup --grafeo <wheel> --grafeo-sha <commit>` records the grafeo commit a wheel was
+  built from as `git_sha` in `results.json`, beside the wheel's SHA-256; a checkout records its own commit. The
+  summary label shows the commit.
 - **One process per database**: `graph-bench bench` runs one worker process per database, one after another, and
   writes `results.json` (schema in the design spec) with the machine, the Grafeo build and each database's
   version, process kind, storage and thread setting.

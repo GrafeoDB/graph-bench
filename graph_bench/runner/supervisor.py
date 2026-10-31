@@ -242,8 +242,13 @@ def grafeo_source() -> GrafeoSource:
     if GRAFEO_FILE.is_file():
         doc = json.loads(GRAFEO_FILE.read_text(encoding="utf-8"))
         if doc.get("version") == version:
-            return {"version": version, "source": doc.get("source", "unknown"), "sha": doc.get("sha")}
-    return {"version": version, "source": "pypi", "sha": None}
+            return {
+                "version": version,
+                "source": doc.get("source", "unknown"),
+                "sha": doc.get("sha"),
+                "git_sha": doc.get("git_sha"),
+            }
+    return {"version": version, "source": "pypi", "sha": None, "git_sha": None}
 
 
 def _native_cpu_name() -> str | None:

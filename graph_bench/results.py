@@ -3,7 +3,7 @@
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
 from graph_bench.databases.base import DatabaseInfo
 from graph_bench.types import AnswerVerdict, Category, Model, Status, Timing
@@ -17,6 +17,8 @@ class GrafeoSource(TypedDict):
     version: str | None
     source: str
     sha: str | None
+    # The grafeo commit: a checkout's sha, or `setup --grafeo-sha` for a wheel; None when unknown.
+    git_sha: NotRequired[str | None]
 
 
 class Machine(TypedDict):

@@ -104,7 +104,7 @@ These go into FAIRNESS.md, which is trimmed to embedded use.
 
 | Command | Purpose |
 |---|---|
-| `graph-bench setup --grafeo <wheel-or-checkout>` | installs a grafeo wheel, or builds one from a checkout with maturin; writes `.graph-bench/grafeo.json` (version, wheel sha256, git sha). `GRAPH_BENCH_GRAFEO=<path>` does the same at the start of `bench`/`codspeed` |
+| `graph-bench setup --grafeo <wheel-or-checkout>` | installs a grafeo wheel, or builds one from a checkout with maturin; writes `.graph-bench/grafeo.json` (version, wheel sha256, git sha: a checkout's commit, or `--grafeo-sha <commit>` for a wheel, which records no commit). `GRAPH_BENCH_GRAFEO=<path>` does the same at the start of `bench`/`codspeed` |
 | `graph-bench data prepare --selection S` / `data key --selection S` | generate or download datasets, JRE, jars; print the cache key |
 | `graph-bench list --selection S` | stable, sorted plan: one benchmark id per line |
 | `graph-bench bench --selection S [--db a,b] [--grafeo PATH] --out DIR` | local and pre-release run: one worker process per database, writes `DIR/results.json` |
