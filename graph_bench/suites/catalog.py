@@ -7,7 +7,8 @@ Suite modules: each module in `SUITES` exports its items (`QUERIES`, `ALGORITHMS
 `bindings(item_id, graph, n)` and `reference(item_id, graph, binding)`, where `graph` is the dataset's reference
 graph (`datasets.snb.SnbGraph` for SNB, the `Dataset` itself for Graphalytics). A query's or algorithm's
 `reference` returns its answer; a write's returns `(after, before)`, the read-back rows after the write and in the
-loaded state. `reference_source(item_id)` names the module that holds an item's references.
+loaded state, or `(after, before, ready)` for a write with `ready` (the rows after its setup).
+`reference_source(item_id)` names the module that holds an item's references.
 
 `GRAPH_BENCH_EXTRA_SUITES` (a comma list of module names, read at import) adds suite modules after the built-in
 ones, as `GRAPH_BENCH_EXTRA_DATABASES` adds databases; the test suite uses it for fake write cases.
@@ -52,6 +53,7 @@ __all__ = [
     "load_ql_ids",
     "load_ql_keys",
     "load_reference",
+    "load_write_ready",
     "load_write_reference",
     "param_id",
     "reference_items",
@@ -341,18 +343,25 @@ def reference_source(item_id: str) -> ModuleType:
 
 
 def reference_document(
-    item: Item, bindings: list[dict[str, Any]], answers: list[Any], *, before: list[Any] | None = None
+    item: Item,
+    bindings: list[dict[str, Any]],
+    answers: list[Any],
+    *,
+    before: list[Any] | None = None,
+    ready: list[Any] | None = None,
 ) -> dict[str, Any]:
     """The JSON document of a reference file. Algorithm maps become `[vertex, value]` pairs sorted by vertex.
 
     A write's file also holds `before`, the read-back rows of the loaded state per binding (`answers` holds the
-    rows after the write).
+    rows after the write), and for a write with `ready` the rows after its setup, `ready` (absent otherwise).
     """
     if isinstance(item, Algorithm):
         answers = [sorted([int(k), v] for k, v in answer.items()) for answer in answers]
     doc: dict[str, Any] = {"bindings": bindings, "answers": answers}
     if before is not None:
         doc["before"] = before
+    if ready is not None:
+        doc["ready"] = ready
     return doc
 
 
@@ -374,3 +383,9 @@ def load_write_reference(path: Path) -> tuple[list[dict[str, Any]], list[Any], l
     """Read a write's reference file: its bindings, the rows after the write and the rows before it."""
     doc = json.loads(path.read_text(encoding="utf-8"))
     return doc["bindings"], doc["answers"], doc["before"]
+
+
+def load_write_ready(path: Path) -> list[Any] | None:
+    """The rows after the setup, per binding, of a write's reference file; None when the write has no `ready`."""
+    ready: list[Any] | None = json.loads(path.read_text(encoding="utf-8")).get("ready")
+    return ready

@@ -489,9 +489,11 @@ def test_codspeed_order_startup_first_writes_after_reads(writes_dir: Path) -> No
     )
 
 
-def _write_session(writes_dir: Path, tmp_path: Path, fake: str = "") -> tuple[dict[str, Any], list[str], list[str]]:
-    """`pytest benches` on the snb load, IS4 and the fake write case: the write's entry, the spy's calls and the
-    traced phases."""
+def _write_session(
+    writes_dir: Path, tmp_path: Path, fake: str = "", item: str = "fake_write"
+) -> tuple[dict[str, Any], list[str], list[str]]:
+    """`pytest benches` on the snb load, IS4 and one fake write case: the entries, the spy's calls and the traced
+    phases."""
     trace, calls = tmp_path / "trace.txt", tmp_path / "calls.txt"
     env = {
         **_env(writes_dir, fake),
@@ -502,7 +504,7 @@ def _write_session(writes_dir: Path, tmp_path: Path, fake: str = "") -> tuple[di
     }
     out = tmp_path / "gb.jsonl"
     args = ["--db", "fake", "--selection", "push", "-p", "tests.benchmark_spy", "--gb-out", str(out)]
-    args += ["-k", "test_load_snb or test_snb_is4 or test_fake_write"]
+    args += ["-k", f"test_load_snb or test_snb_is4 or test_{item}["]
     proc = _pytest(args, env)
     lines = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
     entries = {line["id"]: line for line in lines if line["kind"] == "entry"}
@@ -579,3 +581,52 @@ def test_codspeed_startup_and_load_ql_outcomes(push_data_dir: Path, tmp_path: Pa
     kind, reason = _junit_outcomes(wrong / "j.xml")["test_startup[fake-empty]"]
     assert (kind, reason) == ("failure", "wrong answer: child 1: probe returned [[1]], expected [[0]]")
     assert not (wrong / "spy.txt").exists()
+
+
+def test_codspeed_write_case_checks_the_setup_state(writes_dir: Path, tmp_path: Path) -> None:
+    """CodSpeed's pedantic setup checks the `ready` reference too: a setup that misses it after the preflight
+    fails the case."""
+    write_id = "benches/test_batch_writes.py::test_fake_setup_write[fake-small]"
+    entries, calls, _ = _write_session(writes_dir, tmp_path, item="fake_setup_write")
+    assert entries.pop("returncode") == 0
+    assert (entries[write_id]["status"], entries[write_id]["answer"]) == ("ok", "agree")
+    later = tmp_path / "later"
+    later.mkdir()
+    entries, calls, _ = _write_session(writes_dir, later, "nosetup_later:fake_setup_write", item="fake_setup_write")
+    assert entries.pop("returncode") == 1
+    entry = entries[write_id]
+    assert entry["status"] == "failed"
+    assert entry["error"] == "setup did not reach its state: binding 0, row 0, col 1: 'loaded' != 'ready'"
+    assert any(call.startswith(write_id + " pedantic setup=True") for call in calls)
+
+
+class _Rounds:
+    """A stand-in for the benchmark fixture whose `pedantic` runs every round, as CodSpeed does."""
+
+    def __init__(self) -> None:
+        self.targets = 0
+
+    def pedantic(self, target: Any, setup: Any = None, rounds: int = 1, **_: Any) -> None:
+        for _ in range(rounds):
+            args, kwargs = setup() if setup is not None else ((), {})
+            self.targets += 1
+            target(*args, **kwargs)
+
+
+def test_codspeed_startup_series_stops_at_the_first_failing_child(
+    push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With CodSpeed's rounds, a failing child after the preflight ends the series, as in bench mode."""
+    from benches._cases import Bench, StartupCase, run_startup
+
+    monkeypatch.setenv("GRAPH_BENCH_FAKE", "crash_soft:startup_later")
+    out = tmp_path / "gb.jsonl"
+    bench = Bench("fake", catalog.selection("push"), (1,), out, tmp_path / "work", {}, 60.0)
+    benchmark = _Rounds()
+    with pytest.raises(pytest.fail.Exception, match="error: RuntimeError: soft crash"):
+        run_startup(benchmark, bench, StartupCase("fake", 1))
+    bench.close()
+    assert benchmark.targets == 1  # the second round never starts
+    entry = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()][-1]
+    assert (entry["status"], entry["error"], entry["timing"]) == ("failed", "RuntimeError: soft crash", None)
+    assert entry["preflight_ns"] > 0

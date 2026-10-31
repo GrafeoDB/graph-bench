@@ -97,11 +97,21 @@ class Write(_Eligibility):
     """A write case: a timed write, checked by reading it back, then undone, on the dataset's loaded instance.
 
     Every map takes a dialect and falls back to the model's standard dialect, as `Query.text_for`; `setup` and
-    `teardown` may be empty (no statements). Each run, for every binding: the `setup` statements (untimed), the
-    `run` statement (timed; one committed `Database.write` call per binding), the `check` read (untimed, compared
-    with the reference's `answers`, the rows after the write), the `teardown` statements (untimed) and the `check`
-    read again (compared with the reference's `before`, the rows of the loaded state). The worker runs write cases
-    after every read case of their dataset's instance.
+    `teardown` may be empty (no statements). Each run, for every binding: the `setup` statements (untimed); with
+    `ready`, the `check` read (untimed, compared with the reference's `ready` rows: a mismatch fails the case,
+    "setup did not reach its state: ..."); the `run` statement (timed; one committed `Database.write` call per
+    binding); the `check` read (untimed, compared with the reference's `answers`, the rows after the write); the
+    `teardown` statements (untimed); and the `check` read again (compared with the reference's `before`, the rows
+    of the loaded state, which the check must also return before the case). The worker runs write cases after
+    every read case of their dataset's instance.
+
+    `ready` is for a case whose setup builds the state its run changes, so that a setup that did nothing cannot
+    make the run a timed no-op. Batch delete (`write_delete`) is the example: its setup inserts its own new ids
+    and its run deletes them, so `before` is `[]` (the ids are not in the loaded data), `ready` is the 100 inserted
+    rows per batch and `answers` is `[]` again; the teardown deletes the ids too, for a run that deleted nothing.
+
+    Teardown statements must be idempotent: after a phase raised or a read-back differed, the harness runs the
+    teardown again (best effort) to leave the loaded state for the cases after it.
     """
 
     id: str
@@ -115,6 +125,7 @@ class Write(_Eligibility):
     teardown: Mapping[str, tuple[str, ...]] = field(hash=False)
     ordered: bool
     rel_eps: float
+    ready: bool = False
 
     @property
     def reference_id(self) -> str:

@@ -60,8 +60,8 @@ def _write_references(selection: str, snb_ds: Dataset, ga_ds: Dataset) -> None:
 
     Each item's suite module (`catalog.reference_source`) computes them on its dataset's reference graph: the
     `SnbGraph` for SNB, the `Dataset` itself for Graphalytics. A write's file holds the rows after the write
-    (`answers`) and before it (`before`). An item that shares another item's references (`Query.same_as`) uses that
-    item's file, written once.
+    (`answers`), before it (`before`) and, with `Write.ready`, after its setup (`ready`). An item that shares
+    another item's references (`Query.same_as`) uses that item's file, written once.
     """
     sel = catalog.selection(selection)
     graphs: dict[str, Any] = {"snb": snb.SnbGraph.from_dataset(snb_ds), "graphalytics": ga_ds}
@@ -71,8 +71,9 @@ def _write_references(selection: str, snb_ds: Dataset, ga_ds: Dataset) -> None:
         bindings = source.bindings(item.id, graph, sel.bindings)
         results = [source.reference(item.id, graph, b) for b in bindings]
         if isinstance(item, catalog.Write):
-            after, before = [a for a, _ in results], [b for _, b in results]
-            doc = catalog.reference_document(item, bindings, after, before=before)
+            after, before = [r[0] for r in results], [r[1] for r in results]
+            ready = [r[2] for r in results] if item.ready else None
+            doc = catalog.reference_document(item, bindings, after, before=before, ready=ready)
         else:
             doc = catalog.reference_document(item, bindings, results)
         path = catalog.reference_path(item, snb_ds.scale, base=snb_ds.root.parent)

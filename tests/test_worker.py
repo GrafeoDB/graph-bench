@@ -414,16 +414,19 @@ def writes_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return tmp_path_factory.mktemp("writes-data")
 
 
-def _write_id(db: str = "fake") -> str:
-    return f"benches/test_batch_writes.py::test_fake_write[{db}-small]"
+def _write_id(db: str = "fake", item: str = "fake_write") -> str:
+    return f"benches/test_batch_writes.py::test_{item}[{db}-small]"
 
 
-def _run_writes(writes_dir: Path, tmp_path: Path, fake: str = "", trace: Path | None = None) -> Lines:
-    """The worker on the snb graph store only, with the fake write suite; the other loads and cases skipped."""
+def _run_writes(
+    writes_dir: Path, tmp_path: Path, fake: str = "", trace: Path | None = None, item: str = "fake_write"
+) -> Lines:
+    """The worker on the snb graph store only, with one write case of the fake write suite; the other loads and
+    cases skipped."""
     env = {**WRITES, **({"GRAPH_BENCH_FAKE_TRACE": str(trace)} if trace else {})}
     ids = _ids_with_writes()
     keep = {i for i in ids if i.endswith("[fake-small]") and ("snb_is" in i or "test_load_snb[" in i)}
-    keep.add(_write_id())
+    keep.add(_write_id(item=item))
     skip = sorted(set(ids) - keep)
     lines, proc = run_worker(tmp_path / "w.jsonl", writes_dir, "--skip", *skip, fake=fake, env=env)
     assert proc.returncode == 0, proc.stderr
@@ -497,6 +500,24 @@ def test_write_case_leaving_state_fails_the_guard(writes_dir: Path, tmp_path: Pa
     leaked = f"{nodes + 3 * runs} nodes, {edges} edges; expected {nodes} nodes, {edges} edges"
     assert entry["error"] == f"the case left the graph changed: {leaked}"
     assert entries[_id("snb_is4")]["answer"] == "agree"
+
+
+def test_write_setup_state_is_checked(writes_dir: Path, tmp_path: Path) -> None:
+    """A write case with a `ready` reference: a setup that reaches it lets the case run and agree."""
+    lines = _run_writes(writes_dir, tmp_path, item="fake_setup_write")
+    entry = _entries(lines)[_write_id(item="fake_setup_write")]
+    assert (entry["status"], entry["answer"], entry["error"]) == ("ok", "agree", None), entry
+    assert entry["timing"]["iterations"] == catalog.selection("push").iterations
+
+
+@pytest.mark.parametrize("fake", ["nosetup:fake_setup_write", "nosetup_later:fake_setup_write"])
+def test_write_setup_that_misses_its_state_fails(writes_dir: Path, tmp_path: Path, fake: str) -> None:
+    """A setup that inserts nothing fails the case, at the preflight or at a later run, and it is not timed."""
+    lines = _run_writes(writes_dir, tmp_path, fake=fake, item="fake_setup_write")
+    entry = _entries(lines)[_write_id(item="fake_setup_write")]
+    assert (entry["status"], entry["timing"]) == ("failed", None), entry
+    assert entry["error"] == "setup did not reach its state: binding 0, row 0, col 1: 'loaded' != 'ready'"
+    assert entry["answer"] == ("unchecked" if fake.startswith("nosetup:") else "agree")
 
 
 def test_write_case_run_error_fails(writes_dir: Path, tmp_path: Path) -> None:
@@ -579,9 +600,15 @@ def test_load_ql_probe_error_fails_the_entry(
     assert (entry["status"], entry["error"]) == ("failed", "content probe snb_is4: RuntimeError: soft crash")
     monkeypatch.setenv("GRAPH_BENCH_FAKE", "unsupported:snb_is4")
     lines.clear()
-    worker.run_load_ql(FakeDatabase, data, tmp_path / "work", 1, 1, base, load_id, lines.append)
+    worker.run_load_ql(FakeDatabase, data, tmp_path / "work", 1, 2, base, load_id, lines.append)
     entry = _entries(lines)[load_id]
-    assert (entry["status"], entry["answer"]) == ("ok", "agree")  # a probe the database cannot run: counts only
+    # A probe the database cannot run leaves the content unchecked, and says so; the counts agreed.
+    assert (entry["status"], entry["answer"]) == ("ok", "unchecked")
+    assert entry["detail"] == "content probe snb_is4 not run: fake does not run snb_is4"
+    monkeypatch.setenv("GRAPH_BENCH_FAKE", "unsupported:snb_is4,short:count_ql_snb")
+    lines.clear()
+    worker.run_load_ql(FakeDatabase, data, tmp_path / "work", 1, 1, base, load_id, lines.append)
+    assert _entries(lines)[load_id]["answer"] == "disagree"  # a count mismatch still wins
     lines.clear()
     worker.run_load_ql(FakeDatabase, data, tmp_path / "work", 1, 1, base, load_id, lines.append, "setup broke")
     assert _entries(lines)[load_id] == {"kind": "entry", "id": load_id, "status": "failed", "error": "setup broke"}

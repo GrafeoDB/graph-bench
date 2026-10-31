@@ -59,6 +59,7 @@ __all__ = [
     "Loaded",
     "Preflight",
     "ReadbackDiffers",
+    "SetupDiffers",
     "WriteRun",
     "case_entry",
     "database_line",
@@ -122,12 +123,17 @@ class ReadbackDiffers(Exception):
     """A write case's read-back after a run (past the preflight) did not match its references."""
 
 
+class SetupDiffers(Exception):
+    """A write case's setup did not leave the state of its `ready` reference: the case fails (✗)."""
+
+
 @dataclass
 class WriteRun:
     """A write case's phases on one loaded instance, in the database's dialect; each runs once per binding.
 
-    `after` and `before` are the reference rows per binding after the write and in the loaded state. `baseline` is
-    the instance's `counts()` before the case (None when it cannot count), which `write_guard` compares with.
+    `after` and `before` are the reference rows per binding after the write and in the loaded state; `ready` the
+    rows after the setup, for a write with `Write.ready` (else None). `baseline` is the instance's `counts()` before
+    the case (None when it cannot count), which `write_guard` compares with.
     """
 
     db: Database
@@ -136,6 +142,7 @@ class WriteRun:
     after: list[Any]
     before: list[Any]
     baseline: tuple[int, int] | None = None
+    ready: list[Any] | None = None
 
     @property
     def dialect(self) -> str:
@@ -149,6 +156,14 @@ class WriteRun:
     def setup(self) -> None:
         """The untimed statements before a run."""
         self._statements(self.item.setup_for(self.dialect))
+
+    def prepare(self) -> None:
+        """Before every run, untimed: `setup`, then the check against `ready`; `SetupDiffers` when it misses."""
+        self.setup()
+        if self.ready is not None:
+            problem = self.differs(self.ready)
+            if problem is not None:
+                raise SetupDiffers(f"setup did not reach its state: {problem}")
 
     def run(self) -> list[Any]:
         """The timed write: one committed `write` call per binding."""
@@ -269,15 +284,17 @@ def write_preflight(
     """The first run of a write case: every phase once, the run wall-clocked; the verdict and the budget.
 
     Before it, untimed: the instance's counts (the guard's baseline) and the check read, which must return the
-    reference's `before` rows, else ✗ "the graph is not in its loaded state before the case: ...". Then `setup`,
-    the timed `run` (bracketed by the `run` and `progress` lines like a query's call), the check against `after`
-    (the verdict), the `teardown` and the check against `before` again (a teardown that does not restore the
-    loaded state is ≠ too). A run or setup that raises gets a best-effort teardown.
+    reference's `before` rows, else ✗ "the graph is not in its loaded state before the case: ...". Then `setup`
+    and, with `ready`, its check (else ✗ "setup did not reach its state: ..."), the timed `run` (bracketed by the
+    `run` and `progress` lines like a query's call), the check against `after` (the verdict), the `teardown` and
+    the check against `before` again (a teardown that does not restore the loaded state is ≠ too). A phase that
+    raises, or a setup that misses its state, gets a best-effort teardown.
     """
     item = case.item
     assert isinstance(item, Write)
     bindings, after, before = catalog.load_write_reference(reference_file)
-    write = WriteRun(db, item, bindings, after, before)
+    ready = catalog.load_write_ready(reference_file) if item.ready else None
+    write = WriteRun(db, item, bindings, after, before, ready=ready)
     result = Preflight(write.run, bindings, write=write)
     try:
         write.baseline = _counts(db)
@@ -291,7 +308,11 @@ def write_preflight(
         result.status, result.error = "failed", f"the graph is not in its loaded state before the case: {state}"
         return result
     try:
-        write.setup()
+        write.prepare()
+    except SetupDiffers as exc:
+        write.undo()
+        result.status, result.error = "failed", str(exc)
+        return result
     except Exception as exc:
         write.undo()
         return result.fail(exc, "setup: ")
@@ -311,6 +332,7 @@ def write_preflight(
         write.teardown()
         restored = write.differs(before)
     except Exception as exc:
+        write.undo()
         return result.fail(exc, "checking the answer: ")
     result.answer = "agree"
     if problem is not None:
@@ -323,11 +345,12 @@ def write_preflight(
 def time_write(
     write: WriteRun, *, warmup: int, iterations: int, on_run: Callable[[], None] | None = None
 ) -> dict[str, Any]:
-    """Time a write case's runs after its preflight: setup before each, read-back and teardown after each, untimed.
+    """Time a write case's runs after its preflight: setup (and its `ready` check) before each, read-back and
+    teardown after each, all untimed.
 
     Returns the entry fields: `timing`, or (answer `disagree`, detail "read-back after timed run <k> differs:
     ...", k counting every run after the preflight, warm-ups included) at the first read-back that differs, or
-    (status `failed`, error) when a phase raised.
+    (status `failed`, error) when a phase raised or a setup missed its state.
     """
     runs = [0]
 
@@ -339,10 +362,13 @@ def time_write(
 
     try:
         timing, _ = measure(
-            write.run, warmup=warmup, iterations=iterations, on_run=on_run, before=write.setup, after=after
+            write.run, warmup=warmup, iterations=iterations, on_run=on_run, before=write.prepare, after=after
         )
     except ReadbackDiffers as exc:
         return {"answer": "disagree", "detail": str(exc)}
+    except SetupDiffers as exc:
+        write.undo()
+        return {"status": "failed", "error": str(exc)}
     except Exception as exc:
         write.undo()
         return {"status": "failed", "error": message(exc)}
@@ -440,12 +466,14 @@ def count_check(db: Database, dataset: Dataset) -> tuple[AnswerVerdict, str | No
 class LoadCheck:
     """The count check over a load's iterations: the first disagreement or counting error is kept.
 
-    Load (query language) adds its content probe (`probe`) to the same verdict.
+    Load (query language) adds its content probe (`probe`) to the same verdict. A probe that could not run
+    (`skipped`) leaves the answer `unchecked`, with its reason as the detail, unless a count disagrees.
     """
 
     answer: AnswerVerdict = "unchecked"
     detail: str | None = None
     error: str | None = None
+    skipped: str | None = None
 
     @property
     def settled(self) -> bool:
@@ -456,24 +484,29 @@ class LoadCheck:
         if self.settled:
             return
         try:
-            self.answer, self.detail = count_check(db, dataset)
+            answer, detail = count_check(db, dataset)
         except Exception as exc:
             self.error = f"counting the loaded data: {message(exc)}"
+            return
+        if answer == "disagree" or self.skipped is None:
+            self.answer, self.detail = answer, detail
 
     def probe(self, case: Case, db: Database, reference_file: Path) -> None:
         """Run `case`'s preflight call on a query-language load (untimed) against its references.
 
         A mismatch makes the load ≠ ("content probe <item>: ..."), an error fails it; a database that does not run
-        the probe item (`NotSupported`) keeps the count verdict.
+        the probe item (`NotSupported`) leaves the load `unchecked`, "content probe <item> not run: <reason>".
         """
-        if self.settled:
+        if self.settled or self.skipped is not None:
             return
         label = f"content probe {case.item.id}: "
         try:
             bindings, _ = catalog.load_reference(reference_file)
             answers = canonical_answers(case.item, make_run(db, case.item, bindings)())
             verdict, detail = check_case(case, answers, reference_file)
-        except NotSupported:
+        except NotSupported as exc:
+            self.skipped = f"content probe {case.item.id} not run: {message(exc)}"
+            self.answer, self.detail = "unchecked", self.skipped
             return
         except Exception as exc:
             self.error = label + message(exc)

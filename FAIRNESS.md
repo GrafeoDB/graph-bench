@@ -91,7 +91,8 @@ measured, while results.json and the matrix show ⏱. A ⏱ from the in-run cuto
 - **Load (query language):** the same datasets loaded through each database's query language (for example
   `LOAD CSV` or `COPY ... FROM`), each into a fresh instance, timed around that load alone. Each instance is
   count-checked like Load and then answers one content probe, outside the clock: a catalog query whose answer
-  depends on the loaded text values (a mismatch is ≠, "content probe <query>: ..."). These instances are closed
+  depends on the loaded text values (a mismatch is ≠, "content probe <query>: ..."; a database that cannot run
+  the probe query leaves the load unchecked, "content probe <query> not run: ..."). These instances are closed
   afterwards and never used by the queries. The row runs after its dataset's queries, and a failure in it fails
   only its own entry. The budget rule does not apply.
 - **Startup:** a cold start, in a fresh process per run (`graph_bench/runner/startup.py`). The clock starts after
@@ -104,13 +105,16 @@ measured, while results.json and the matrix show ⏱. A ⏱ from the in-run cuto
   OS-cache-cold one: the database's files are in the OS cache after the first run. In `graph-bench codspeed`,
   CodSpeed times the whole child processes, interpreter start included, while results.json records the
   in-process times. The budget rule does not apply.
-- **Write cases** (Batch writes): each run is untimed setup, the timed write (one committed statement per batch),
-  an untimed read-back compared with the reference rows after the write, an untimed teardown that undoes the
-  write, and a read-back compared with the loaded state. Before the first run the read-back must show the loaded
+- **Write cases** (Batch writes): each run is untimed setup (for a case whose setup builds the rows its write
+  changes, such as a batch delete, followed by a read-back that must show them, else ✗ "setup did not reach its
+  state: ..."), the timed write (one committed statement per batch), an untimed read-back compared with the
+  reference rows after the write, an untimed teardown that undoes the write, and a read-back compared with the
+  loaded state. Before the first run the read-back must show the loaded
   state, every run (preflight, warm-up and timed) is read back, and after the case the node and edge counts must
   equal those before it (else ✗, "the case left the graph changed: ..."). Write cases run after every read query
   of their dataset's instance. In `graph-bench codspeed` a run's read-back and teardown happen in the next round's
-  setup, so CodSpeed times the writes alone.
+  setup, so CodSpeed times the writes alone; a later run whose read-back differs has then already been measured
+  by CodSpeed, while results.json and the matrix show ≠.
 
 ## Loading
 

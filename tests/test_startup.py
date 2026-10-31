@@ -4,11 +4,14 @@ import json
 import os
 import subprocess
 import sys
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
+import psutil
 import pytest
 
+from graph_bench.databases.base import NotSupported
 from graph_bench.runner.startup import STARTUP_TIMEOUT_S, run_startups, startup_entry
 from graph_bench.suites import startup
 from graph_bench.types import STANDARD_DIALECT
@@ -16,7 +19,7 @@ from graph_bench.types import STANDARD_DIALECT
 ROOT = Path(__file__).resolve().parent.parent
 EXTRA = (
     "fake=tests.fakes:FakeDatabase,fake_rdf=tests.fakes:FakeRdfDatabase,fake_sql=tests.fakes:FakeSqlDatabase,"
-    "fake_nostart=tests.fakes:FakeNoStartup"
+    "fake_nostart=tests.fakes:FakeNoStartup,fake_badclose=tests.fakes:FakeBadClose"
 )
 
 
@@ -124,6 +127,42 @@ def test_startup_child_silent_too_long_is_timeout(tmp_path: Path, monkeypatch: p
     monkeypatch.setenv("GRAPH_BENCH_FAKE", "hang:startup")
     outcome = run_startups("fake", 1, 3, tmp_path, 2.0)
     assert (outcome.status, outcome.error) == ("timeout", "startup child 1 gave no answer within 2 s")
+
+
+@pytest.mark.parametrize(("flag", "status"), [("orphan", "timeout"), ("linger", "ok")])
+def test_startup_kills_the_childs_whole_process_tree(
+    flag: str, status: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A grandchild the child started (a server process, an engine) is killed with it: when the child hangs past
+    its timeout, and when it answered but left the grandchild running (which also must not hold the answer up)."""
+    pid_file = tmp_path / "grandchild.txt"
+    monkeypatch.setenv("GRAPH_BENCH_FAKE", f"{flag}:startup")
+    monkeypatch.setenv("GRAPH_BENCH_FAKE_GRANDCHILD", str(pid_file))
+    started = time.monotonic()
+    outcome = run_startups("fake", 1, 1, tmp_path / "work", 20.0)
+    assert outcome.status == status, outcome
+    if status == "ok":
+        assert time.monotonic() - started < 15  # the grandchild did not hold the child's output open
+    pid = int(pid_file.read_text(encoding="utf-8"))
+    deadline = time.monotonic() + 10
+    while _alive(pid) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert not _alive(pid)
+
+
+def _alive(pid: int) -> bool:
+    try:
+        return psutil.Process(pid).status() != psutil.STATUS_ZOMBIE
+    except psutil.NoSuchProcess:
+        return False
+
+
+def test_startup_close_error_keeps_the_original_error(tmp_path: Path) -> None:
+    """A database whose `close()` fails after `open_empty` failed reports the `open_empty` error."""
+    from graph_bench.runner.startup import measure_start
+
+    with pytest.raises(NotSupported, match="startup"):
+        measure_start("fake_badclose", 1, tmp_path)
 
 
 def test_startup_child_prints_one_json_line(tmp_path: Path) -> None:

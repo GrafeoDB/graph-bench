@@ -38,6 +38,7 @@ from graph_bench.runner.worker import (
     LoadCheck,
     Loaded,
     ReadbackDiffers,
+    SetupDiffers,
     WriteRun,
     case_entry,
     database_line,
@@ -359,7 +360,7 @@ def _bench_write(benchmark: Any, bench: Bench, write: WriteRun, entry: dict[str,
 
     def setup() -> tuple[tuple[()], dict[str, Any]]:
         settle()
-        write.setup()
+        write.prepare()
         return (), {}
 
     def target() -> None:
@@ -371,6 +372,9 @@ def _bench_write(benchmark: Any, bench: Bench, write: WriteRun, entry: dict[str,
         settle()
     except ReadbackDiffers as exc:
         entry["answer"], entry["detail"] = "disagree", str(exc)
+    except SetupDiffers as exc:
+        write.undo()
+        entry["status"], entry["error"] = "failed", str(exc)
     except Exception as exc:
         write.undo()
         entry["status"], entry["error"] = "failed", message(exc)
@@ -502,6 +506,10 @@ def run_load_ql(benchmark: Any, bench: Bench, lq: LoadQlCase) -> None:
         _outcome(entry)
 
 
+class _SeriesEnded(Exception):
+    """A startup child after the preflight failed or disagreed: no further child runs."""
+
+
 def run_startup(benchmark: Any, bench: Bench, sc: StartupCase) -> None:
     """Provision (untimed), run the preflight child, then let CodSpeed time further children, whole processes."""
     bench.emit({"kind": "start", "id": sc.bench_id})
@@ -531,9 +539,13 @@ def run_startup(benchmark: Any, bench: Bench, sc: StartupCase) -> None:
 
         def target(workdir: Path, index: int) -> None:
             children.append(spawn_child(bench.db, sc.threads, workdir, timeout_s, index=index))
+            if not passed(children[-1], model):
+                raise _SeriesEnded  # as in bench mode, the first failing child ends the series
 
         try:
             benchmark.pedantic(target, setup=setup, rounds=max(bench.selection.startup_iterations - 1, 1))
+        except _SeriesEnded:
+            pass
         finally:
             done()
     entry = startup_entry(sc.bench_id, summarize(model, children))

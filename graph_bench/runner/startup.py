@@ -13,21 +13,32 @@ the child provisions: the parent ran `Database.provision()` before, untimed. The
 environment, so the database's `process_env(threads)` applies.
 
 Parent: `run_startups` runs the children one after another, each in a fresh `workdir/startup-<i>` removed after
-it. The first child is the preflight: unless it completes with the expected probe answer, no other child runs.
-This measures a process-cold start, not an OS-cache-cold one: the driver's files are in the OS cache after the
-first child.
+it. Each child runs in its own process group (session on POSIX); when it ends or times out, every process it
+started is killed (`kill_tree`): its descendants, its process group and, on Linux where this process is a child
+subreaper, any daemonized descendant that was re-parented to this process. Its output goes to a temporary file, so
+a descendant that keeps the output open cannot hold the answer up. The first child is the preflight: unless it
+completes with the expected probe answer, no other child runs. This measures a process-cold start, not an
+OS-cache-cold one: the driver's files are in the OS cache after the first child.
 """
 
 import argparse
+import contextlib
+import ctypes
 import json
+import os
 import shutil
+import signal
 import subprocess
 import sys
+import tempfile
+import threading
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
+
+import psutil
 
 # graph-bench's own modules, imported before the child's clock starts (`time.perf_counter_ns` in `measure_start`):
 # every adapter imports some of them, and they cost every database the same.
@@ -47,6 +58,7 @@ __all__ = [
     "Child",
     "StartupOutcome",
     "fresh_dir",
+    "kill_tree",
     "main",
     "measure_start",
     "passed",
@@ -72,8 +84,13 @@ def measure_start(db: str, threads: int | None, workdir: Path) -> tuple[int, lis
         instance.open_empty()
         rows = [tuple(row) for row in instance.query_model(model, text, {})]
         elapsed = time.perf_counter_ns() - start
-    finally:
-        instance.close()
+    except BaseException:
+        try:
+            instance.close()
+        except Exception as close_error:  # the start's own error is the one the entry records
+            sys.stderr.write(f"closing after the failed start also failed: {message(close_error)}\n")
+        raise
+    instance.close()
     return elapsed, canonical(rows, ordered=False)
 
 
@@ -141,27 +158,123 @@ def run_child(db: str, threads: int | None, workdir: Path, timeout_s: float, *, 
         shutil.rmtree(workdir, ignore_errors=True)
 
 
+# PR_SET_CHILD_SUBREAPER (man 2 prctl): orphaned descendants are re-parented to this process, so a daemonized
+# grandchild of a startup child (a server that double-forks) stays findable and killable.
+_PR_SET_CHILD_SUBREAPER = 36
+_SUBREAPER: list[bool] = []
+# How often, on Windows, the child's descendants are listed while it runs: Windows does not re-parent an orphan,
+# so a descendant is only found while its parent lives.
+_SNAPSHOT_S = 0.05
+
+
+def _subreaper() -> bool:
+    """Make this process a child subreaper (Linux only, once); whether it is one."""
+    if not _SUBREAPER:
+        ok = False
+        if sys.platform.startswith("linux"):
+            try:
+                libc = ctypes.CDLL(None, use_errno=True)
+                ok = libc.prctl(_PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) == 0
+            except (OSError, AttributeError):
+                ok = False
+        _SUBREAPER.append(ok)
+    return _SUBREAPER[0]
+
+
+def _descendants(pid: int) -> list[psutil.Process]:
+    try:
+        return psutil.Process(pid).children(recursive=True)
+    except psutil.Error:
+        return []
+
+
+def kill_tree(proc: "subprocess.Popen[bytes]", seen: dict[int, psutil.Process], before: set[int]) -> None:
+    """Kill a startup child and every process it started, then reap it.
+
+    The victims: the child's descendants now and those `seen` while it ran, its process group (POSIX), and this
+    process's descendants that were not there before the child started (`before`): daemonized descendants a
+    subreaper adopted. psutil checks each process's identity, so a reused pid is never signalled.
+    """
+    victims = dict(seen)
+    victims.update((p.pid, p) for p in _descendants(proc.pid))
+    victims.update((p.pid, p) for p in _descendants(os.getpid()) if p.pid not in before and p.pid != proc.pid)
+    if sys.platform != "win32":
+        with contextlib.suppress(OSError):
+            os.killpg(proc.pid, signal.SIGKILL)  # the child leads its own session
+    if proc.poll() is None:
+        proc.kill()
+    for victim in victims.values():
+        try:
+            victim.kill()
+        except psutil.Error:
+            continue
+    proc.wait()
+    for victim in victims.values():
+        try:
+            victim.wait(timeout=1)  # reaps an adopted orphan
+        except psutil.Error:
+            continue
+
+
+def _wait(proc: "subprocess.Popen[bytes]", timeout_s: float, seen: dict[int, psutil.Process]) -> bool:
+    """Wait for the child to exit; True when it ran past `timeout_s` (it is then still running)."""
+    if sys.platform == "win32":
+        deadline = time.monotonic() + timeout_s
+        while True:
+            seen.update((p.pid, p) for p in _descendants(proc.pid))
+            try:
+                proc.wait(timeout=max(min(_SNAPSHOT_S, deadline - time.monotonic()), 0))
+                return False
+            except subprocess.TimeoutExpired:
+                if time.monotonic() >= deadline:
+                    return True
+    expired = threading.Event()
+
+    def expire() -> None:
+        expired.set()
+        seen.update((p.pid, p) for p in _descendants(proc.pid))  # before the child dies and they are orphaned
+        proc.kill()
+
+    timer = threading.Timer(timeout_s, expire)  # a blocking wait returns the moment the child exits
+    timer.start()
+    try:
+        proc.wait()
+    finally:
+        timer.cancel()
+    return expired.is_set()
+
+
 def spawn_child(db: str, threads: int | None, workdir: Path, timeout_s: float, *, index: int = 1) -> Child:
     """Start one child in the existing directory `workdir` and read its answer: the process alone, which is what
-    CodSpeed times (`benches`); `run_child` adds the directory's creation and removal."""
+    CodSpeed times (`benches`); `run_child` adds the directory's creation and removal.
+
+    Whether it answered, failed or timed out, the child's whole process tree is killed afterwards (`kill_tree`).
+    """
     argv = [sys.executable, "-m", "graph_bench.runner.startup", "--db", db]
     argv += ["--threads", "1" if threads == 1 else "all", "--workdir", str(workdir)]
-    try:
-        proc = subprocess.run(
-            argv,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout_s,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        return Child("timeout", error=f"startup child {index} gave no answer within {timeout_s:g} s")
-    doc = _answer(proc.stdout)
+    _subreaper()
+    group: dict[str, Any] = (
+        {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+        if sys.platform == "win32"
+        else {"start_new_session": True}
+    )
+    before = {p.pid for p in _descendants(os.getpid())}
+    seen: dict[int, psutil.Process] = {}
+    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=err, **group)
+        try:
+            timed_out = _wait(proc, timeout_s, seen)
+        finally:
+            kill_tree(proc, seen, before)
+        if timed_out:
+            return Child("timeout", error=f"startup child {index} gave no answer within {timeout_s:g} s")
+        out.seek(0)
+        err.seek(0)
+        stdout = out.read().decode("utf-8", errors="replace")
+        stderr = err.read().decode("utf-8", errors="replace")
+    doc = _answer(stdout)
     if doc is None:
-        tail = proc.stderr.strip().splitlines()
+        tail = stderr.strip().splitlines()
         error = f"startup child {index} exited with code {proc.returncode}" + (f": {tail[-1]}" if tail else "")
         return Child("failed", error=error)
     if "error" in doc:

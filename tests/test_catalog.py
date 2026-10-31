@@ -271,3 +271,16 @@ def test_write_reference_holds_before_and_after(tmp_path: Path) -> None:
     path = tmp_path / "w-small.json"
     path.write_text(json.dumps(doc), encoding="utf-8")
     assert catalog.load_write_reference(path) == ([{"ids": ["a"]}], [[["a", 1]]], [[]])
+
+
+def test_write_reference_holds_ready_only_when_defined(tmp_path: Path) -> None:
+    plain = tmp_path / "w-small.json"
+    plain.write_text(json.dumps(catalog.reference_document(_WRITE, [{}], [[]], before=[[]])), encoding="utf-8")
+    assert "ready" not in json.loads(plain.read_text(encoding="utf-8"))
+    assert catalog.load_write_ready(plain) is None
+    doc = catalog.reference_document(_WRITE, [{}], [[]], before=[[]], ready=[[["a"]]])
+    path = tmp_path / "r-small.json"
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    assert catalog.load_write_ready(path) == [[["a"]]]
+    assert catalog.load_write_reference(path) == ([{}], [[]], [[]])
+    assert not _WRITE.ready

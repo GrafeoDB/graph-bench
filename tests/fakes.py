@@ -20,15 +20,19 @@ RuntimeError. After a query-language load the flags are `short:count_ql_<dataset
 
 Startup: `open_empty` makes the instance answer the startup probe of its primary model (`suites.startup`), checking
 that the text is the probe of the model's dialect. Its flags target `startup` (`wrong:startup` answers one more,
-`unsupported:startup` raises NotSupported, `slow:startup` sleeps 0.2 s), and `crash_soft:provision` makes
-`provision` raise. FakeNoStartup keeps the base class's `open_empty`. `load_ql` loads like `load`; its flags target
-`load_ql_<dataset>`.
+`unsupported:startup` raises NotSupported, `slow:startup` sleeps 0.2 s, `orphan:startup` starts a grandchild
+process and hangs, `linger:startup` starts a grandchild and answers, leaving it running; the grandchild's pid goes
+to the file `GRAPH_BENCH_FAKE_GRANDCHILD` names; `crash_soft:startup_later` fails every child after the
+first), and `crash_soft:provision` makes `provision` raise. FakeNoStartup keeps the base class's `open_empty`, and
+FakeBadClose also fails in `close()`. `load_ql` loads like `load`; its flags target `load_ql_<dataset>`.
 
 Writes (the items of `tests.fake_writes`, added with GRAPH_BENCH_EXTRA_SUITES): the instance keeps which bindings
-a run wrote, so the check read answers the reference's `before` rows until a run and its `answers` rows until the
-teardown. Flags on the item id: `wrong` perturbs every read-back after a run, `wrong_later` only after the second
-run, `sticky` makes the teardown undo nothing, `dirty` adds a row to the loaded state, `leak` adds a node per run
-that no read-back sees (only `counts()`), and `crash`, `crash_soft`, `hang` and `unsupported` apply to the run.
+a setup prepared and a run wrote, so the check read answers the reference's `before` rows, then its `ready` rows
+after a setup (items with `ready`), then its `answers` rows until the teardown. Flags on the item id: `wrong`
+perturbs every read-back after a run, `wrong_later` only after the second run, `sticky` makes the teardown undo
+nothing, `dirty` adds a row to the loaded state, `leak` adds a node per run that no read-back sees (only
+`counts()`), `nosetup` makes the setup prepare nothing and `nosetup_later` only after the first run, and `crash`,
+`crash_soft`, `hang` and `unsupported` apply to the run.
 
 With `GRAPH_BENCH_FAKE_TRACE` set to a file, every call of `provision`, `prepare_environment` ("environment"),
 `load`, `load_ql`, `open_empty` and every write phase ("setup", "run", "check", "teardown") appends a line to it:
@@ -36,6 +40,8 @@ the call, the process id and, for `open_empty`, the instance's directory.
 """
 
 import os
+import subprocess
+import sys
 import time
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
@@ -72,6 +78,7 @@ class FakeDatabase(Database):
     def __init__(self, workdir: Path, threads: int | None) -> None:
         super().__init__(workdir, threads)
         self.written: dict[str, set[int]] = {}
+        self.prepared: dict[str, set[int]] = {}
         self.runs: dict[str, int] = {}
         self.leaked = 0
 
@@ -93,10 +100,16 @@ class FakeDatabase(Database):
         self._trace("open_empty", str(self.workdir))
         flags = self._flags("startup")
         self._misbehave(flags)
+        if self.workdir.name != "startup-0":  # a child after the preflight
+            self._misbehave(self._flags("startup_later"))
         if "slow" in flags:
             time.sleep(0.2)
         if "unsupported" in flags:
             raise NotSupported(f"{self.name} does not start empty")
+        if "orphan" in flags or "linger" in flags:
+            grandchild = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(3600)"])
+            Path(os.environ["GRAPH_BENCH_FAKE_GRANDCHILD"]).write_text(str(grandchild.pid), encoding="utf-8")
+            time.sleep(3600 if "orphan" in flags else 0.5)  # long enough for the parent to see it running
         self.empty = True
 
     def load(self, dataset: Dataset) -> None:
@@ -225,17 +238,23 @@ class FakeDatabase(Database):
         self._trace(phase)
         index, _, _ = self._write_reference(item, params)
         written = self.written.setdefault(item.id, set())
+        prepared = self.prepared.setdefault(item.id, set())
         flags = self._flags(item.id)
-        if phase == "run":
+        if phase == "setup":
+            if "nosetup" not in flags and not ("nosetup_later" in flags and self.runs.get(item.id, 0) >= 1):
+                prepared.add(index)
+        elif phase == "run":
             self._misbehave(flags)
             if "unsupported" in flags:
                 raise NotSupported(f"{self.name} does not run {item.id}")
             if index == 0:
                 self.runs[item.id] = self.runs.get(item.id, 0) + 1
             written.add(index)
+            prepared.discard(index)
             self.leaked += "leak" in flags
-        elif phase == "teardown" and "sticky" not in flags:
+        elif "sticky" not in flags:
             written.discard(index)
+            prepared.discard(index)
         return []
 
     def _check(self, item: Write, params: Mapping[str, Any]) -> list[tuple[Any, ...]]:
@@ -243,6 +262,10 @@ class FakeDatabase(Database):
         index, after, before = self._write_reference(item, params)
         flags = self._flags(item.id)
         if index not in self.written.get(item.id, set()):
+            if item.ready and index in self.prepared.get(item.id, set()):
+                assert self.dataset is not None
+                path = catalog.reference_path(item, self.dataset.scale, base=self.dataset.root.parent)
+                return [tuple(row) for row in (catalog.load_write_ready(path) or [])[index]]
             return [tuple(row) for row in before] + ([("dirty",)] if "dirty" in flags else [])
         wrong = "wrong" in flags or ("wrong_later" in flags and self.runs.get(item.id, 0) > 1)
         return [tuple(row) for row in after] + ([("wrong",)] if wrong else [])
@@ -318,3 +341,12 @@ class FakeNoStartup(FakeDatabase):
     env_var: ClassVar[str] = "GRAPH_BENCH_FAKE_NOSTART"
 
     open_empty = _Base.open_empty
+
+
+class FakeBadClose(FakeNoStartup):
+    """Without `open_empty`, and its `close()` raises: the startup child must report the `open_empty` error."""
+
+    name: ClassVar[str] = "fake_badclose"
+
+    def close(self) -> None:
+        raise RuntimeError("close failed")
