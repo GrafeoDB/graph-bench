@@ -48,8 +48,8 @@ the Load table has a separate row for it (⊘ for a database without RDF, as a l
 | Load | bulk load per dataset (SNB, Graphalytics, SNB as RDF triples), each database's fastest documented bulk path | all | implemented |
 | Load (query language) | bulk load through the query language (`LOAD CSV`, `COPY` from a query) | databases with a query-language loader | planned |
 | Batch writes | batch insert, update, delete, upsert | property graph | planned |
-| Scans | label scan, property filter, aggregation, order and limit | property graph | planned |
-| Hops | 1, 2 and 3 hop expansion, variable-length paths, shortest path | property graph | IC13 implemented, the rest planned |
+| Scans | label scan, property filter, aggregation, order plus limit, property filter with average | property graph, plus SQL/PGQ and SPARQL twins | implemented |
+| Hops | 1, 2 and 3 hop expansion, variable length 1 to 3, shortest path | property graph, plus SQL/PGQ and SPARQL twins | implemented |
 | Pattern matching | triangles, cycles, multi-pattern joins | property graph | planned |
 | Complex queries | LDBC SNB Interactive short reads IS1 to IS7 and complex reads | property graph | IS1 to IS7, IC2, IC6 implemented |
 | Algorithms | Graphalytics BFS, WCC, PageRank, then CDLP, LCC, SSSP, Louvain, betweenness | databases with native algorithms and a property graph or SQL/PGQ model | BFS, WCC, PR implemented |
@@ -60,6 +60,13 @@ the Load table has a separate row for it (⊘ for a database without RDF, as a l
 | Crash and restore | on disk: reopen, crash mid-transaction, rollback, snapshot isolation, torn WAL tail, backup and restore | all | planned |
 | Deriva workload | a simulated multi-repo roundtrip using deriva's pipeline patterns | property graph | planned |
 | Project suites | each project's own published queries, as written | the owning database and any that can run them | planned |
+
+Memory and Disk are records beside the matrix, not timed rows: each load is repeated once in a fresh process whose
+whole process tree (the interpreter, the started engine, an importer, a server that daemonizes) is read for its
+resident memory, loaded and at its peak during the load, and the store's files are measured after the database has
+closed. An in-memory store has no disk size. The details and their limits are in
+[FAIRNESS.md](FAIRNESS.md#memory-and-disk); the files each on-disk database counts are in
+[docs/known-disagreements.md](docs/known-disagreements.md).
 
 Algorithms always use the database's native implementation, as a procedure or as a query in its own language. A
 database without one gets ⊘; NetworkX is only the reference for the answer check.

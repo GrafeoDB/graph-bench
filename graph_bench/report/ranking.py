@@ -1,9 +1,10 @@
 """Ranking of results: per benchmark, the databases with a correct, in-budget result, fastest first.
 
-A result is ranked when its status is `ok` and its answer `agree`. A load's answer is its node and edge count
-check (`unchecked` when the database has no `counts()`), so a load is ranked when its status is `ok` and its
-answer is not `disagree`, by `load_ns`. Other results rank by `timing.median_ns` in bench mode and by
-`preflight_ns` in codspeed mode, where timings are null.
+A result is ranked when its status is `ok` and its answer `agree`. A load's answer (Load and Load (query
+language)) is its node and edge count check (`unchecked` when the database has no `counts()`), so a load is ranked
+when its status is `ok` and its answer is not `disagree`, by `load_ns`. Startup ranks by `timing.median_ns` in
+both modes (its children's in-process times, which a CodSpeed run records too). Other results rank by
+`timing.median_ns` in bench mode and by `preflight_ns` in codspeed mode, where timings are null.
 """
 
 import math
@@ -12,8 +13,8 @@ from dataclasses import dataclass
 
 from graph_bench.databases import display_name
 from graph_bench.results import Entry, Results
-from graph_bench.suites.catalog import ITEMS, load_benchmark
-from graph_bench.types import CATEGORY_ORDER, Category
+from graph_bench.suites.catalog import ITEMS, load_benchmark, load_ql_benchmark
+from graph_bench.types import CATEGORY_ORDER, LOAD_CATEGORIES, Category
 
 SCALE_ORDER: tuple[str, ...] = ("small", "medium", "large")
 
@@ -33,8 +34,13 @@ _LOADS = {
     )
 }
 _LOAD_ORDER = list(_LOADS)
+# Load (query language) benchmark -> dataset, in the order of the graph loads.
+_LOADS_QL = {load_ql_benchmark(dataset): dataset for dataset, store in _LOADS.values() if store == "graph"}
+_LOAD_QL_ORDER = list(_LOADS_QL)
 
 LOAD_PREFIX = "load_"
+LOAD_QL_PREFIX = "load_ql_"
+STARTUP_TITLE = "Empty database"
 
 _CATEGORY_INDEX: dict[str, int] = {c: i for i, c in enumerate(CATEGORY_ORDER)}
 
@@ -66,7 +72,8 @@ class Ranked:
 
 
 def is_load(entry: Entry) -> bool:
-    return entry.category == "load"
+    """Either load row: Load or Load (query language)."""
+    return entry.category in LOAD_CATEGORIES
 
 
 def is_ranked(entry: Entry) -> bool:
@@ -77,17 +84,24 @@ def is_ranked(entry: Entry) -> bool:
 
 
 def speed(entry: Entry, mode: str) -> float | None:
-    """The value a result ranks by, in ns: `load_ns` for loads, else the median (bench) or preflight (codspeed)."""
+    """The value a result ranks by, in ns: `load_ns` for loads, the median for Startup, else the median (bench)
+    or preflight (codspeed)."""
     if is_load(entry):
         return float(entry.load_ns) if entry.load_ns is not None else None
-    if mode == "codspeed":
+    if mode == "codspeed" and entry.category != "startup":
         return float(entry.preflight_ns) if entry.preflight_ns is not None else None
     return entry.timing.median_ns if entry.timing is not None else None
 
 
 def title(benchmark: str) -> str:
     """The row label of a benchmark: the catalog title; for a load the dataset name, with the store if not the
-    property graph ("LDBC SNB (RDF)"); else the id."""
+    property graph ("LDBC SNB (RDF)"); for a query-language load the dataset name; "Empty database" for Startup;
+    else the id."""
+    if benchmark == "startup":
+        return STARTUP_TITLE
+    if benchmark.startswith(LOAD_QL_PREFIX):
+        dataset = benchmark.removeprefix(LOAD_QL_PREFIX)
+        return DATASET_NAMES.get(dataset, dataset)
     if benchmark in _LOADS:
         dataset, store = _LOADS[benchmark]
         name = DATASET_NAMES.get(dataset, dataset)
@@ -106,7 +120,11 @@ def _category_key(category: str) -> int:
     return _CATEGORY_INDEX.get(category, len(_CATEGORY_INDEX))
 
 
-def _benchmark_key(benchmark: str) -> tuple[int, str]:
+def benchmark_key(benchmark: str) -> tuple[int, str]:
+    """Sort key of a benchmark within its category: catalog order; loads in the order of `_LOADS`."""
+    if benchmark.startswith(LOAD_QL_PREFIX):
+        known = benchmark in _LOADS_QL
+        return (_LOAD_QL_ORDER.index(benchmark) if known else len(_LOAD_QL_ORDER), benchmark)
     if benchmark.startswith(LOAD_PREFIX):
         return (_LOAD_ORDER.index(benchmark) if benchmark in _LOADS else len(_LOAD_ORDER), benchmark)
     return (_ITEM_ORDER.get(benchmark, len(_ITEM_ORDER)), benchmark)
@@ -118,7 +136,7 @@ def group_key(entry: Entry) -> tuple[int, tuple[int, str], int, tuple[int, str]]
         _category_key(entry.category),
         scale_key(entry.scale),
         0 if entry.threads is not None else 1,
-        _benchmark_key(entry.benchmark),
+        benchmark_key(entry.benchmark),
     )
 
 

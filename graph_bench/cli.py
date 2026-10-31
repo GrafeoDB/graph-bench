@@ -126,10 +126,10 @@ def list_benchmarks(
     name = _check_selection(selection)
     dbs = _dbs(db)
     try:
-        ids = [c.bench_id for c in catalog.cases(name, dbs)] + catalog.load_ids(name, dbs)
+        ids = catalog.all_ids(name, dbs)
     except KeyError as exc:
         raise typer.BadParameter(str(exc.args[0]), param_hint="--db") from None
-    for bench_id in sorted(ids):
+    for bench_id in ids:
         typer.echo(bench_id)
 
 

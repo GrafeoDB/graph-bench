@@ -1,14 +1,33 @@
+import dataclasses
 import re
 import warnings
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
+from typing import get_args
 
 import pytest
 
 from graph_bench.datasets import cache
-from graph_bench.results import Entry
+from graph_bench.results import Entry, Resource, Results
+from graph_bench.runner.supervisor import run_bench
+from graph_bench.suites import catalog
+from graph_bench.types import Model
+
+# The silence limit of tests that hang a case on purpose. Startup children get half of it, and a fresh Python
+# importing graph-bench can take several seconds on a loaded machine, so 6 s (3 s per child) was flaky.
+HANG_TIMEOUT_S = 12.0
 
 KNOWN_DISAGREEMENTS = Path(__file__).resolve().parent.parent / "docs" / "known-disagreements.md"
+
+
+def resources_off(mp: pytest.MonkeyPatch, name: str = "push") -> None:
+    """Switch selection `name`'s Memory and Disk records off for a test that does not check them.
+
+    `Selection.resources` is read only by the supervisor, in the test's own process (CliRunner included), so
+    patching `catalog.SELECTIONS` there is enough. Call it inside the fixture's or test's `MonkeyPatch` (module
+    fixtures need their own `MonkeyPatch.context()`, which an autouse function fixture would not reach).
+    """
+    mp.setitem(catalog.SELECTIONS, name, dataclasses.replace(catalog.SELECTIONS[name], resources=False))
 
 
 @pytest.fixture(scope="session")
@@ -35,6 +54,59 @@ def known_disagreements() -> Callable[[str], set[str]]:
     return _known
 
 
+# The base class's errors for the rows later plan tasks implement per adapter: until an adapter has `load_ql`
+# (Load (query language), Task 8), those entries are ⊘ with exactly this error. Task 8 removes this allowance (and
+# `not_yet_implemented`) from the adapter tests. Every adapter has `open_empty` (Startup), so Startup has none.
+NOT_YET_IMPLEMENTED: dict[str, str] = {"load_ql": "no query-language bulk loader"}
+
+# The worker's model gate error, exactly: f"model {case.item.model} not supported".
+MODEL_GATE = re.compile(f"model ({'|'.join(get_args(Model))}) not supported")
+
+
+def not_yet_implemented(entry: Entry) -> bool:
+    """Whether an adapter test's entry is a Load (query language) ⊘ from the base class default."""
+    return entry.status == "not_supported" and NOT_YET_IMPLEMENTED.get(entry.category) == entry.error
+
+
+def run_push(
+    db: str,
+    root: Path,
+    data_dir: Path,
+    case_timeout_s: float,
+    env: Mapping[str, str] | None = None,
+) -> Results:
+    """One push run of `db` in `root` (the working directory, `out` and `work` go there), shared by an adapter
+    module's push, startup, load and resources tests. For module fixtures: it uses its own `MonkeyPatch`."""
+    with pytest.MonkeyPatch.context() as mp:
+        mp.chdir(root)
+        mp.setenv("GRAPH_BENCH_DATA_DIR", str(data_dir))
+        for key, value in (env or {}).items():
+            mp.setenv(key, value)
+        return run_bench("push", [db], root / "out", workdir=root / "work", case_timeout_s=case_timeout_s)
+
+
+def assert_startup_agrees(results: Results, db: str) -> Entry:
+    """The push run's Startup entry of `db`: ok, agree, every child timed (median and first child > 0)."""
+    [entry] = [e for e in results.entries if e.database == db and e.category == "startup"]
+    assert (entry.status, entry.answer) == ("ok", "agree"), f"{entry.error} {entry.detail}"
+    assert entry.timing is not None
+    assert entry.timing.median_ns > 0
+    assert entry.timing.iterations == catalog.SELECTIONS["push"].startup_iterations
+    assert entry.preflight_ns is not None and entry.preflight_ns > 0
+    return entry
+
+
+def assert_loads_agree(results: Results, db: str) -> None:
+    """Every Load entry of the push run that the model gate lets run is ok and agrees (its counts match)."""
+    loads = [e for e in results.entries if e.database == db and e.category == "load"]
+    run = [e for e in loads if not (e.status == "not_supported" and MODEL_GATE.fullmatch(e.error or ""))]
+    assert run
+    bad = [
+        f"{e.id}: {e.status} {e.answer} {e.error} {e.detail}" for e in run if (e.status, e.answer) != ("ok", "agree")
+    ]
+    assert not bad, "\n".join(bad)
+
+
 def warn_if_fixed(entry: Entry, known: set[str]) -> None:
     """Warn when an allowlisted benchmark's entry now agrees, so a fixed upstream bug is noticed.
 
@@ -42,3 +114,26 @@ def warn_if_fixed(entry: Entry, known: set[str]) -> None:
     """
     if entry.benchmark in known and entry.status == "ok" and entry.answer == "agree":
         warnings.warn(f"ALLOWLISTED BUT NOW AGREES: {entry.database}/{entry.benchmark}", stacklevel=2)
+
+
+def assert_resources_ok(results: Results, db: str, *, on_disk: bool) -> list[Resource]:
+    """The push run's Memory and Disk records of `db`: one per load the model gate lets run, each ok and agreeing.
+
+    Every record has the three readings in order (`peak_bytes >= max(baseline_bytes, after_bytes)`), and a disk
+    size above 0 for an on-disk database, None for an in-memory one. Returns the records that ran.
+    """
+    mine = [r for r in results.resources if r.database == db]
+    assert mine
+    ran = [r for r in mine if not (r.status == "not_supported" and MODEL_GATE.fullmatch(r.error or ""))]
+    assert ran
+    for r in ran:
+        assert (r.status, r.answer) == ("ok", "agree"), f"{r.id}: {r.status} {r.answer} {r.error} {r.detail}"
+        assert r.baseline_bytes is not None and r.after_bytes is not None and r.peak_bytes is not None
+        assert r.peak_bytes >= max(r.baseline_bytes, r.after_bytes), r.id
+        assert r.footprint_bytes == r.after_bytes - r.baseline_bytes, r.id
+        assert r.processes is not None and r.processes >= 1, r.id
+        if on_disk:
+            assert r.storage == "on-disk" and r.disk_bytes is not None and r.disk_bytes > 0, r.id
+        else:
+            assert r.storage == "in-memory" and r.disk_bytes is None, r.id
+    return ran

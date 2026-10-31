@@ -31,8 +31,8 @@ benchmark moves to `legacy/` untouched and is deleted once the new comparison re
   all results at the end, so the run order never decides a marker from this final rule. During the run a
   runaway guard cuts a preflight's database call (cold first run, harness work excluded) off at 30x the average
   of the 3 fastest earlier preflights and never below 10 s, once 3 earlier results exist; this guard depends on which databases ran
-  earlier. Before that a hard cap applies (`--case-timeout`, default 600 s of worker silence). Loads are exempt
-  from the budget.
+  earlier. Before that a hard cap applies (`--case-timeout`, default 600 s of worker silence). Startup and both
+  load rows are exempt from the budget.
 - **Load count check**: right after each timed load, outside the clock, the adapter's optional `counts()` counts
   the nodes and edges loaded through the database's own query interface; a mismatch with the dataset's counts
   (recorded in schema.json when the CSVs are written) makes the load ≠. Grafeo and LadybugDB count with Cypher.
@@ -52,6 +52,38 @@ benchmark moves to `legacy/` untouched and is deleted once the new comparison re
   selection in wall-time mode on CodSpeed's macro runners against the newest stable release of every database (grafeo from PyPI too), and a daily
   `full` run that opens a pull request updating the README results. `pins.yml` checks weekly for a newer Neo4j
   Community and Temurin JRE and opens a pull request on `bot/pins`.
+- **Startup row**: every database's cold start, timed in fresh child processes (`graph_bench/runner/startup.py`):
+  the driver's import, an empty database opened (`Database.open_empty`, starting whatever the process lacks) and
+  one probe query checked against the empty-database answer; downloads and installs run before, untimed
+  (`Database.provision`). The median over 3 processes in `push`, 5 in `full`; in CodSpeed, the whole child
+  processes are timed. Adapters implement `open_empty` in a later step; until then their Startup entry is ⊘.
+- **Load (query language) row**: each graph-store dataset loaded through the database's query language
+  (`Database.load_ql`) into fresh instances that no query uses, count-checked like Load plus a content probe,
+  run after the dataset's queries; a failure fails only that entry. Adapters implement `load_ql` in a later step.
+- **Write cases**: the harness for Batch writes (`suites.Write`): untimed setup, a timed committed write per batch,
+  untimed read-back and teardown after every run, a check of the loaded state before the first run and a node
+  and edge count guard after the case; write cases run after every read query of their dataset.
+- **Selections**: `push` now plans Startup, Load (query language), Batch writes, Scans and Pattern matching too
+  (their queries arrive with the next steps), and both selections turn the Memory and Disk records on.
+- **Scans**: label scan, property filter, aggregation, order plus limit and property filter with average over the
+  SNB comments and persons (`graph_bench/suites/scans.py`), each with an SQL/PGQ and a SPARQL twin in the same
+  category that shares its references, so DuckDB + DuckPGQ and Oxigraph take part. HelixDB runs four through DSL
+  builders (the aggregation is ⊘). The order plus limit scan is the Load (query language) content probe.
+- **Hops**: 1-hop, 2-hop, 3-hop and variable length 1 to 3 over KNOWS in either direction, each a distinct count of
+  the persons reached (`graph_bench/suites/hops.py`), beside IC13. Explicit node-distinctness conditions make
+  relationship-isomorphic and walk-based engines give the same answer, and the references check that KNOWS pairs are
+  unique and loop-free. Each has an SQL/PGQ twin and, but for the variable length (SPARQL 1.1 has no bounded
+  repetition), a SPARQL twin in the same category. HelixDB runs three through DSL builders (3-hop is ⊘).
+- **Memory and Disk records**: after each database's worker (or pytest process), the supervisor loads every
+  dataset and store the database's models reach once more, each in a fresh child process
+  (`graph_bench/runner/resources.py`), and samples the child's whole process tree every 10 ms from outside
+  (`graph_bench/runner/sampler.py`, psutil RSS; a child subreaper on Linux keeps daemonized servers in the tree).
+  Each record holds the resident memory before and after the load, the footprint (after minus before), the peak
+  during the load and, after `close()`, the size of the store's files (`Database.store_paths`; "in memory" for an
+  in-memory store), with the load's count check. They go to the new `resources` list of `results.json` (schema 2,
+  which also records `machine.memory_bytes`; schema 1 files still read), never to CodSpeed, and to the README's
+  Memory and Disk tables. The startup harness now uses the same subreaper, which ends and reaps the processes it
+  adopted when it exits.
 - **Known disagreements**: `docs/known-disagreements.md` records wrong answers, slow cases and engine findings as
   they are, instead of working around them in the adapters.
 
@@ -68,3 +100,6 @@ benchmark moves to `legacy/` untouched and is deleted once the new comparison re
 - **The 0.2.x benchmark** and its unreleased 0.3 work (native and fallback labels, `vector_ann_*`, the Uni-DB
   adapter, the grafeo-server adapter) move to [legacy/](legacy/README.md), together with the server databases
   and the Docker setup. Results measured with it are not comparable with the new comparison.
+- **The README's Latest Results section**, whose broken link was fixed twice: by
+  [@0xdevalias](https://github.com/0xdevalias) in June and again by [@bitsnaps](https://github.com/bitsnaps) in
+  October. 0.3.0 makes sure it never breaks again by deleting it. Thank you both.

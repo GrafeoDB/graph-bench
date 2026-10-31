@@ -41,8 +41,11 @@ def min_member(components: Mapping[Any, Any]) -> dict[int, int]:
     return {int(vertex): smallest[label] for vertex, label in components.items()}
 
 
-def bindings(algo_id: str, ds: Dataset) -> list[dict[str, Any]]:
-    """BFS starts at the vertex with the highest degree (lowest id on ties); WCC and PR take no parameters."""
+def bindings(algo_id: str, ds: Dataset, n: int = 1) -> list[dict[str, Any]]:
+    """BFS starts at the vertex with the highest degree (lowest id on ties); WCC and PR take no parameters.
+
+    One binding whatever `n` (the selection's binding count, which the SNB suites use).
+    """
     if _BY_ID[algo_id].name != "bfs":
         return [{}]
     g = _graph(ds)

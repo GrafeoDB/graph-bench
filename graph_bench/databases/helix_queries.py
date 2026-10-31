@@ -25,6 +25,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from helixdb import (
+    AggregateFunction,
     BindingProjection,
     NodeRef,
     Order,
@@ -56,6 +57,10 @@ _PERSON = define_params({"personId": param.string()})
 _MESSAGE = define_params({"messageId": param.string()})
 _IC2 = define_params({"personId": param.string(), "maxDate": param.i64()})
 _IC13 = define_params({"person1Id": param.string(), "person2Id": param.string()})
+_NONE = define_params({})
+_WINDOW = define_params({"from": param.i64(), "to": param.i64()})
+_MIN_LENGTH = define_params({"minLength": param.i64()})
+_THRESHOLD = define_params({"min": param.i64()})
 
 _B = BindingProjection
 
@@ -219,6 +224,89 @@ def snb_ic13(b: Mapping[str, Any]) -> tuple[QueryRequest, Rows]:
     return _request(_IC13, b, a=person1, b=person2, p=path), rows
 
 
+def scan_label(b: Mapping[str, Any]) -> tuple[QueryRequest, Rows]:
+    t = g().n_with_label("Comment").value_map(["id"])
+    return _request(_NONE, b, r=t), _columns(("r",), ("id",))
+
+
+def scan_filter(b: Mapping[str, Any]) -> tuple[QueryRequest, Rows]:
+    window = Predicate.and_([Predicate.gte("creationDate", _WINDOW["from"]), Predicate.lt("creationDate", _WINDOW.to)])
+    t = g().n_with_label("Comment").where(window).value_map(["id"])
+    return _request(_WINDOW, b, r=t), _columns(("r",), ("id",))
+
+
+def scan_order_limit(b: Mapping[str, Any]) -> tuple[QueryRequest, Rows]:
+    t = (
+        g()
+        .n_with_label("Comment")
+        .where(Predicate.gte("length", _MIN_LENGTH.minLength))
+        .order_by_multiple([("creationDate", Order.DESC), ("id", Order.ASC)])
+        .limit(20)
+        .value_map(["id", "content", "creationDate"])
+    )
+    return _request(_MIN_LENGTH, b, r=t), _columns(("r",), ("id", "content", "creationDate"))
+
+
+def scan_filter_avg(b: Mapping[str, Any]) -> tuple[QueryRequest, Rows]:
+    # `count` and `aggregate_by` are both terminal steps, so the count and the mean are two entries of one read batch,
+    # each over the same filtered stream (two scans where the shared text has one).
+    def longer() -> Any:
+        return g().n_with_label("Comment").where(Predicate.gt("length", _THRESHOLD.min))
+
+    def rows(result: Mapping[str, Any]) -> list[tuple[Any, ...]]:
+        # `aggregate_by` returns one map with one entry (`{"length_Mean": ...}` in helix-db 0.3.4): its value.
+        [mean] = [value for entry in result["mean"] for value in entry.values()]
+        return [(result["n"], mean)]
+
+    mean = longer().aggregate_by(AggregateFunction.MEAN, "length")
+    return _request(_THRESHOLD, b, n=longer().count(), mean=mean), rows
+
+
+def _distinct_count(t: Any, b: Mapping[str, Any]) -> tuple[QueryRequest, Rows]:
+    """`count(DISTINCT f.id)`: the persons the traversal ends at, deduplicated, then counted (both in HelixDB)."""
+
+    def rows(result: Mapping[str, Any]) -> list[tuple[Any, ...]]:
+        return [(result["n"],)]
+
+    return _request(_PERSON, b, n=t.dedup().count()), rows
+
+
+def _person() -> Any:
+    return g().n_with_label_where("Person", SourcePredicate.eq("id", _PERSON.personId))
+
+
+def hop_1(b: Mapping[str, Any]) -> tuple[QueryRequest, Rows]:
+    # `both` follows KNOWS in either direction, as the undirected `-[:KNOWS]-`; KNOWS joins persons only.
+    return _distinct_count(_person().both("KNOWS"), b)
+
+
+def hop_2(b: Mapping[str, Any]) -> tuple[QueryRequest, Rows]:
+    # Walks of two KNOWS edges; `f.id <> $personId` drops the walks back to the person, which are also the only
+    # ones that repeat an edge (the data has no repeated pair), so walks and the openCypher matches end at the same
+    # persons.
+    t = _person().both("KNOWS").both("KNOWS").where(Predicate.neq("id", _PERSON.personId))
+    return _distinct_count(t, b)
+
+
+def hop_var(b: Mapping[str, Any]) -> tuple[QueryRequest, Rows]:
+    # `*1..3`: `repeat` over `both("KNOWS")` three times, emitting the persons after every step (1, 2 and 3 hops),
+    # then without the person: the radius-3 ball, which walks and trails reach alike (see `suites/hops.py`).
+    config = RepeatConfig.new(sub().both("KNOWS")).times(3).emit_after()
+    t = _person().repeat(config).where(Predicate.neq("id", _PERSON.personId))
+    return _distinct_count(t, b)
+
+
+def startup_probe(b: Mapping[str, Any]) -> tuple[QueryRequest, Rows]:
+    """The Startup probe (`suites.startup.PROBE["helix"]`): the number of nodes, `MATCH (n) RETURN count(n)`, with
+    the `count` step over all nodes (https://docs.helix-db.com/database/helix-db/query-guides/projections)."""
+    request = read_batch().var_as("nodes", g().n(NodeRef.all()).count()).returning(["nodes"]).to_query_request()
+
+    def rows(result: Mapping[str, Any]) -> list[tuple[Any, ...]]:
+        return [(result["nodes"],)]
+
+    return request, rows
+
+
 def _unsupported_order(query: str, detail: str) -> str:
     return (
         f"{query}: the shared text's ORDER BY {detail}. The DSL's order_by sorts a stream by the properties of its "
@@ -244,4 +332,22 @@ BUILDERS: dict[str, Builder | str] = {
         "group_count is a terminal step whose result is a map that order_by and limit cannot rank by count"
     ),
     "snb_ic13": snb_ic13,
+    "scan_label": scan_label,
+    "scan_filter": scan_filter,
+    "scan_aggregate": (
+        "Aggregation: grouping by two properties (browser and gender) with a count, a minimum and a maximum per "
+        "group cannot be expressed: group and group_count group by one property and are terminal, and aggregate_by "
+        "computes one function over the whole stream"
+    ),
+    "scan_order_limit": scan_order_limit,
+    "scan_filter_avg": scan_filter_avg,
+    "hop_1": hop_1,
+    "hop_2": hop_2,
+    "hop_3": (
+        "3-hop: the condition f.id <> a.id compares the walk's last person with its first friend, and a predicate "
+        "compares a property only with a constant, a parameter or an expression over the current element (no "
+        "reference to a node bound earlier in the walk), so the distinct count over the pattern cannot be expressed"
+    ),
+    "hop_var": hop_var,
+    "startup_probe": startup_probe,
 }

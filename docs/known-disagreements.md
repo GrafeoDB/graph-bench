@@ -46,7 +46,7 @@ entries may fail without failing the test.
 ## Grafeo: slow but correct (not allowlisted)
 
 These cases agree with the reference and are timed as they are; they are listed for the Grafeo team because
-the plans show avoidable work. They carry no `- id:` line, so the adapter test still requires them to agree.
+the plans or the per-row costs leave room to improve. They carry no `- id:` line, so the adapter test still requires them to agree.
 
 - `snb_is7` on `snb-small` (median 497 ms for 10 bindings, about 50 ms each): the same uncorrelated `LeftJoin` as
   IC13. The `OPTIONAL MATCH (author)-[k:KNOWS]-(p)` side is planned as `Expand (author)--[:KNOWS]--(p)` over
@@ -55,6 +55,12 @@ the plans show avoidable work. They carry no `- id:` line, so the adapter test s
 - `snb_is4` on `snb-small` (median 45 ms for 10 bindings): `MATCH (m {id: $messageId}) WHERE m:Post OR m:Comment`
   is planned as `NodeScan (m:*)`, a label filter, then the `id` filter, so the property index on `id` is not
   used when the label is a disjunction or absent. Cause: Grafeo engine (query planner).
+- `scan_order_limit` and `scan_filter_avg` on `snb-small` (push run medians 3.35 ms and 2.15 ms for 7 and 10
+  bindings, against NeuG's 0.38 ms and 0.27 ms; within the 10x rule). Grafeo's `EXPLAIN` prints the logical plan
+  (`Limit (20)` over `Sort`), but the physical plan runs a top-k operator; per query, the text with `LIMIT 20` takes
+  about 0.4 ms against about 1.1 to 1.6 ms for the full sort (grafeo-31's measurement). The gap with NeuG is the
+  per-row cost of scanning, filtering and reading properties, the same as `scan_filter_avg`. Cause: Grafeo engine
+  (per-row scan and property read cost), covered by the A4 profile planned for grafeo 0.6.1.
 
 ## Grafeo: medium-scale RDF and IC13 (not allowlisted)
 
@@ -127,6 +133,62 @@ queries agree afterwards), but slower than the batch API. It is not a disagreeme
   search prefix (with it, quantified edges inside `GRAPH_TABLE`). For IS6 this is the first failure: the label
   disjunction `Post|Comment` in the same text could fail next. The decision on the target release is the
   user's (decisions.md, 6).
+
+## Grafeo: an SQL/PGQ parameter named `$from` does not parse (Property filter)
+
+- id: grafeo/scan_filter_sql
+- Query: `scan_filter_sql` (Property filter (SQL/PGQ)), the shared SQL/PGQ text in `graph_bench/suites/scans.py`,
+  no Grafeo override: `MATCH (m:Comment) WHERE m.creationDate >= $from AND m.creationDate < $to`, the same
+  parameter names as the openCypher `scan_filter`, whose bindings and references it shares.
+- Dataset: `snb-small`, the named graph `snb`.
+- Grafeo 0.6.0 outcome: ✗ at parse time on the first binding, `GRAFEO-Q001: syntax error: [SQL/PGQ] Expected
+  identifier` pointing at `$from`. The openCypher `scan_filter` with the same `$from` agrees, and DuckDB + DuckPGQ
+  runs the same SQL/PGQ text and agrees.
+- Reduced: on a one-node graph, `$x`, `$to` and `$min` parse in a graph pattern WHERE; `$from` and `$select` fail
+  with the same error, so a parameter whose name is an SQL reserved word is not accepted after `$`. `$name` is the
+  binding convention both engines' Python APIs take (see `snb_sql.py`), and a name after `$` is a parameter name,
+  not a keyword.
+- Reference answer: the openCypher `scan_filter` references (10 windows of about 200 comments each).
+- Cause: Grafeo engine (SQL/PGQ parser: the parameter name after `$` is lexed as a keyword). Confirmed by the
+  grafeo side for every reserved word (`from`, `select`, `where`, `match`, `order`, `limit`, `as`); queued for
+  grafeo 0.6.1. Not renamed in the shared text, which would hide it.
+
+## Grafeo: variable length `*1..3` from a hub exceeds the path search memory limit (Variable length 1 to 3)
+
+- id: grafeo/hop_var
+- Query: `hop_var` (Variable length 1 to 3), the shared openCypher text in `graph_bench/suites/hops.py`, no Grafeo
+  override: `MATCH (s:Person {id: $personId})-[:KNOWS*1..3]-(f:Person) WHERE f.id <> $personId RETURN
+  count(DISTINCT f.id) AS persons`.
+- Dataset: `snb-small`. Binding 0, `person_0`, one of the generator's influencers (571 KNOWS edges).
+- Grafeo 0.6.0 outcome: ✗ on the first binding, `GRAFEO-Q006: execution error: A variable-length pattern would
+  hold more than 1526945 paths at once, more than the 256 MiB of memory a path search may use: bound the
+  quantifier, or use TRAIL, ACYCLIC or ANY SHORTEST (...), or return DISTINCT nodes (`RETURN DISTINCT f`,
+  `count(DISTINCT f)`)`. The quantifier is bounded already, and `count(DISTINCT f)` in place of
+  `count(DISTINCT f.id)` fails the same way (tried outside the benchmark, not used). The other bindings
+  (`person_143`, `person_189`, degree 25 to 36) answer 999 in 60 to 90 ms each; `*1..2` from `person_0` answers
+  in 8 ms.
+- The SQL/PGQ twin `hop_var_sql`, the same pattern as `-[k:KNOWS]-{1,3}`, agrees on all 10 bindings in 11 ms in
+  total on the same Grafeo, so the engine can answer the question; the openCypher variable-length expand
+  materializes every path before the distinct count.
+- Reference answer: 999 for every binding (the radius-3 ball holds every person with friends on `snb-small`).
+- Cause: Grafeo engine (openCypher variable-length expand: all paths are kept, millions of trails of up to 3 edges
+  from this hub, although the result needs only the distinct end nodes). Not rewritten in the shared text.
+
+## Grafeo: SPARQL alternative of a path and its inverse is not supported (1-hop, 2-hop, 3-hop (SPARQL))
+
+- id: grafeo/hop_1_rdf
+- id: grafeo/hop_2_rdf
+- id: grafeo/hop_3_rdf
+- Queries: `hop_1_rdf`, `hop_2_rdf`, `hop_3_rdf`, the shared SPARQL texts in `graph_bench/suites/hops.py`; every
+  step is `?x (v:KNOWS|^v:KNOWS) ?y`, KNOWS in either direction (each pair is stored once, as one triple).
+- Dataset: `snb-small` as RDF triples.
+- Grafeo 0.6.0 outcome: ✗ on the first binding, `GRAFEO-Q004: unsupported: Complex property paths not yet
+  supported`. Reduced on an empty store: `?s (v:a|^v:a) ?o` fails the same way, while `?s v:a|v:b ?o` and
+  `?s ^v:a ?o` parse and run, so it is the alternative whose branch is an inverse path. Oxigraph runs the same three
+  texts and agrees.
+- Reference answers: the openCypher `hop_1`, `hop_2` and `hop_3` references.
+- Cause: Grafeo engine (SPARQL property path evaluation, SPARQL 1.1 section 9.1 alternative and inverse paths).
+  Not rewritten as a `UNION` of the two directions, which would be a different text for one engine.
 
 ## Grafeo: SPARQL IS6 property path is slow (not allowlisted)
 
@@ -254,6 +316,29 @@ not a disagreement, so there is no `- id:` line.
   Wrapping the COPY statements in one transaction did not make the load measurably faster.
 - Cause: NeuG engine (checkpoint per statement), not measured further.
 
+## NeuG: count over an empty database returns no row (Startup)
+
+- id: neug/startup
+- Benchmark: `startup` (the Startup row's probe `MATCH (n) RETURN count(n) AS nodes`, `suites/startup.py`), on
+  the empty database `open_empty` opens: `neug.Database("", max_thread_num=...)` and `connect()`, no table yet.
+- NeuG 0.3.0 answer: no row (`[]`), at the first child, so the entry is ≠ with no timing (the first child's time
+  is in `preflight_ns`). `MATCH (n) RETURN count(*)` gives no row as well, while `RETURN 1` gives `[(1,)]`.
+- Reference answer: `[[0]]`. In openCypher an aggregation without grouping keys returns exactly one row, also over
+  an empty match; the other seven property-graph databases answer `[[0]]` on their empty databases, LadybugDB (the
+  other Kuzu-derived engine) included.
+- Once any node table exists (`CREATE NODE TABLE P(id INT64, PRIMARY KEY(id))`, still without data), NeuG answers
+  `[(0,)]`, so the loaded cases are not affected. The probe is not changed for NeuG (a case that cannot run the
+  shared text keeps its marker).
+- Cause: NeuG engine (planner: a pattern over no node table yields no aggregate row). Reproduction:
+
+  ```python
+  import neug
+
+  db = neug.Database("", max_thread_num=1)
+  conn = db.connect()
+  print(list(conn.execute("MATCH (n) RETURN count(n)")))  # [], expected [[0]]
+  ```
+
 ## FalkorDB: no install on glibc older than 2.38 (the CI runner)
 
 - Package: falkordblite 0.11.0 (FalkorDB 4.22.1). Its PyPI wheels are `manylinux_2_38_x86_64` and
@@ -277,6 +362,23 @@ not a disagreement, so there is no `- id:` line.
 - Cause: FalkorDB engine (openCypher coverage). KNOWS is stored once per pair, so a directed form is not the same
   question. No rewrite is used: a database that cannot run the standard text gets the marker (FAIRNESS.md).
 
+## FalkorDB: the 3-hop count runs past the client's socket timeout (3-hop)
+
+- id: falkordb/hop_3
+- Query: `hop_3` (3-hop), the shared openCypher text in `graph_bench/suites/hops.py`, no FalkorDB override.
+- Dataset: `snb-small` (Linux, Docker ubuntu:24.04, falkordblite 0.11.0, FalkorDB 4.22.1).
+- FalkorDB outcome: ✗ on the first binding (`person_0`), `TimeoutError: Timeout reading from socket`, after about
+  58 s. The falkordblite client connection (redis-py 8.1.0) has a 5 s socket timeout and retries a timed-out
+  command 10 times with backoff; the adapter keeps falkordblite's client settings. With no socket timeout (tried
+  outside the benchmark, not used), the second binding alone, `person_143` (36 friends), answers 999, the
+  reference, in 45 s, so the 10 bindings would take minutes and the case would be ⏱ instead.
+- `hop_1`, `hop_2` and `hop_var` agree; `hop_var` is ⏱ by the budget rule in a multi-database run (6.6 s for 10
+  bindings in the Docker run against TuringDB's 26 ms).
+- Reference answer: 999 for every binding.
+- Cause: FalkorDB engine (the fixed-length 3-hop pattern with its `WHERE` conditions over 18,000 KNOWS edges, tens
+  of seconds per person), surfaced as ✗ by the client's socket timeout. A follow-up case can start while the
+  server still runs the timed-out query; in the Docker run `hop_var` (next) still agreed.
+
 ## FalkorDB: PageRank parameters are fixed (answer agrees)
 
 `algo.pageRank(label, relationship)` takes no damping, iteration or tolerance argument and its docs list none
@@ -290,6 +392,20 @@ becomes ≠ and belongs here. No `- id:` line: it agrees today.
 and falkordblite starts the module with none, so the server uses the core count, while every other database runs
 single-threaded where it can. The results record `threads_configurable=False`. The server is also a separate
 process (`local process`), so its memory is not under the harness's per-process caps.
+
+## FalkorDB: Startup starts a redis-server per child (note)
+
+The Startup time covers falkordblite starting its `redis-server` (with `save ""`, as in a load) and selecting the
+graph; the probe on the not yet existing graph answers `[[0]]`. That redis-server daemonizes and leaves the child's
+process tree: a child run by hand leaves it running after the child exits (re-parented to init), so the harness
+kills it with the child (`kill_tree`, which finds it through the Linux child subreaper), whether the child
+answered or timed out. `test_falkordb_startup_leaves_no_redis_server` and
+`test_falkordb_startup_timeout_kills_the_redis_server` check both on Linux.
+
+The Memory record needs the same tree: the redis-server is a child of the measuring process only through the Linux
+child subreaper, and holds the whole graph, so without it the load would read as a few MB.
+`test_falkordb_redis_server_in_tree` checks that the after-load tree holds it. The store is in memory (`save ""`),
+so there is no Disk size.
 
 ## FalkorDB: slow point lookups and IC6 under the 10x budget rule (not allowlisted)
 
@@ -373,8 +489,17 @@ alone, where no budget applies and they must agree.
   `prepare_environment` (outside every load clock; `data_dir` is a fresh temporary directory removed at exit) and
   gives each load a graph of its own (uuid4 name). TuringDB has no `DROP GRAPH`, so loaded graphs stay in that
   directory until the process exits.
+- Startup: a startup child has no engine yet, so its time covers the engine start (in a fresh temporary `data_dir`)
+  and a new empty graph made with `CREATE GRAPH` and `set_graph`
+  (https://docs.turingdb.ai/graph_dev/create_graph). The engine runs in the child's process ("no daemon"), so it
+  ends with the child; a child killed at its timeout leaves its temporary `data_dir` behind (its exit hook does not
+  run).
 - There is no in-memory mode: the graph is on disk (`storage="on-disk"`), and no thread setting is exposed
   (`threads_configurable=False`).
+- Disk: the graph's own directory `<data_dir>/graphs/<graph>` (`store_paths`), measured after `close()`. A listing
+  after a load shows its commit log, commits and data parts. The engine's own `graphs/default`, its lock and socket
+  files, and the Parquet staging under `data/<graph>` (removed by `close`) are not counted. The files are sized in
+  whole MiB blocks, so the apparent size is the engine's allocation, not the bytes of data.
 - The load clock covers the CSV to Parquet conversion with pyarrow and
   `LOAD PARQUET` (https://docs.turingdb.ai/import_data/parquet). TuringDB's load needs this conversion because it
   has no CSV bulk path for more than a few thousand edges (https://docs.turingdb.ai/import_data/csv).
@@ -402,6 +527,40 @@ alone, where no budget applies and they must agree.
   first and bind afterwards; IS2 follows the reply chain with 50 `optional` steps (the data's longest chain is 7)
   instead of `repeat`.
 - Cause: HelixDB DSL (feature coverage), not the adapter. The other seven SNB queries agree with the references.
+
+## HelixDB: the Aggregation scan cannot be expressed in the DSL (not available)
+
+- id: helixdb/scan_aggregate
+- Query: `scan_aggregate` (Aggregation): Persons grouped by `browserUsed` and `gender`, with `count(*)`,
+  `min(birthday)` and `max(creationDate)` per group, ordered by the two keys.
+- HelixDB outcome: `not_supported` (⊘), "Aggregation: grouping by two properties (browser and gender) with a count,
+  a minimum and a maximum per group cannot be expressed". `group` and `group_count` take one property and are
+  terminal steps, and `aggregate_by(fn, property)` computes one function over the whole stream (helix-db 0.3.4,
+  https://docs.helix-db.com/database/helix-db/query-guides/projections). Running one entry per known group would need
+  the groups in advance, and grouping in Python would compute the answer outside HelixDB; neither is done.
+- The other four scans agree. `scan_filter_avg` is two entries of one read batch, `count` and
+  `aggregate_by(MEAN, "length")`, each over the same filtered stream, since both steps are terminal: two scans
+  where the shared text has one (a disadvantage, not a workaround).
+- Cause: HelixDB DSL (feature coverage), not the adapter.
+
+## HelixDB: the 3-hop count cannot be expressed in the DSL (not available)
+
+- id: helixdb/hop_3
+- Query: `hop_3` (3-hop): `MATCH (s:Person {id: $personId})-[:KNOWS]-(a:Person)-[:KNOWS]-(b:Person)-[:KNOWS]-(f:Person)
+  WHERE b.id <> $personId AND f.id <> a.id AND f.id <> $personId RETURN count(DISTINCT f.id) AS persons`.
+- HelixDB outcome: `not_supported` (⊘), "3-hop: the condition f.id <> a.id compares the walk's last person with its
+  first friend, and a predicate compares a property only with a constant, a parameter or an expression over the
+  current element (no reference to a node bound earlier in the walk), so the distinct count over the pattern cannot
+  be expressed". In helix-db 0.3.4 `Predicate` compares a property with a value, a parameter or an `Expr`, and
+  `Expr` has properties of the current element, constants, parameters and arithmetic; a node named with `bind` can
+  only be projected (`BindingProjection`), not compared
+  (https://docs.helix-db.com/database/helix-db/query-guides/filtering). Dropping `f.id <> a.id` would count the
+  walks `s-a-b-a` and change the answer; checking it in Python would compute the answer outside HelixDB; neither is
+  done.
+- `hop_1`, `hop_2` and `hop_var` run as builders (`both("KNOWS")` steps, `dedup`, `count`; `hop_var` is `repeat`
+  three times with `emit_after`) and agree; `hop_2`'s one condition, `f.id <> $personId`, is a parameter
+  comparison.
+- Cause: HelixDB DSL (feature coverage), not the adapter.
 
 ## HelixDB: no BFS, WCC or PageRank (not available)
 
@@ -438,6 +597,18 @@ marked `timeout` (⏱) by the budget rule against Grafeo, not by a hang: 10 bind
 IS5 and IS6 (Grafeo 0.2 to 0.3 ms), 99 ms for IC13, 201 ms for IC2 and 239 ms for IS2 (the 50 `optional` steps).
 Load takes 8.3 s (Graphalytics) and 11.6 s (SNB) against 0.09 s and 0.14 s. No `- id:` line: the adapter test runs
 HelixDB alone and it must agree.
+
+The Scans it runs agree as well and are ⏱ by the same rule in `bench --selection push` (Windows, eight databases):
+`scan_label` 49 ms (32x the top-3 average), `scan_filter` 520 ms for 10 bindings (207x), `scan_order_limit` 543 ms
+for 7 bindings (249x) and `scan_filter_avg` 1051 ms for 10 bindings (924x, two filtered scans per binding, see the
+Aggregation section). Every filtered scan reads the label's nodes and filters them in the DSL; no range index is
+created on `creationDate` or `length`, as no other database gets one.
+
+The Hops it runs agree and are ⏱ by the same rule in `bench --selection push` (Windows, eight databases): `hop_1`
+37.7 ms for 10 bindings (64.7x), `hop_2` 3.68 s (123.5x) and `hop_var` 66.7 s (51.1x). The builders follow the
+shared texts: every walk is expanded (`both("KNOWS")` per step, `repeat` three times for `hop_var`) and deduplicated
+once at the end, as `count(DISTINCT f.id)`; no step deduplicates the intermediate persons, which the texts do not
+ask for either. `hop_var` makes the HelixDB adapter test take about 6 minutes longer (warm-up plus 5 runs).
 
 ## HelixDB: intermittent planner error during loads on a busy machine (✗ when it happens, not allowlisted)
 
@@ -533,9 +704,16 @@ at depth 0, the reference's definition. No `- id:` line.
   cache (`arcadedb.maxPageRAM`) keeps its default, a quarter of the heap.
 - Storage: ArcadeDB has no in-memory mode, so each load creates an on-disk database in its fresh workdir
   (`storage="on-disk"`). GraphBatch runs with its default, the write-ahead log off.
+- Disk: the database directory `workdir/db` alone (`store_paths`). After a load it holds the bucket files, the index,
+  the dictionary and the schema, statistics and configuration files, and nothing else lands in the workdir (the
+  engine log goes to a temporary directory).
 - The JVM starts once per process in `prepare_environment`, outside every clock, followed by creating and dropping
   one empty database (the engine's one-time start, about 0.25 s). Every load is in the load clock from
   `create_database` on: schema, unique `id` indexes, vertices and edges.
+- Startup: each startup child starts its own JVM (no warm start), so the Startup time includes the JVM start and
+  the engine's one-time start (its classes and its polyglot engine) before `create_database` on the child's workdir
+  and the probe. The JVM thread caps and the single-thread engine settings apply as in a load (the child inherits
+  `process_env(threads)`, and `open_empty` checks them).
 - Logging: the engine's built-in configuration writes `./log/arcadedb.log` into the working directory; the adapter
   passes `java.util.logging.config.file` with the same configuration and the file in a per-process temporary
   directory, removed at exit.
@@ -676,9 +854,22 @@ Measured on Windows (one thread, push data, three loads per dataset in one proce
 - Storage: Community has no in-memory mode, so each load writes an on-disk store in its fresh workdir
   (`storage="on-disk"`). The impermanent test builders are internal test utilities that the distribution does not
   ship.
+- Disk: `workdir/data` (`store_paths`): `data/databases` and `data/transactions` for the `neo4j` and `system`
+  databases, "all data-related content" in Neo4j's words. `conf/` (the importer's configuration), `import/` (the
+  CSV copies), `logs/` and `import.report` are the load's scaffolding and are not counted.
+- Memory: the importer's JVMs are children of the measuring process, so the peak during the load covers the
+  importer, then the embedded DBMS, as the load's real cost; `processes` is at least 2 for it.
 - JVM start: once per process in `prepare_environment`, outside every clock. It then opens and shuts down one
   empty DBMS (class loading and GDS registration, about 10 s cold), so the first load does not carry them. It holds
-  no data and runs no query. Fetching (SHA-256 checked) and extracting the tarball and the JRE also happen there.
+  no data and runs no query. Fetching (SHA-256 checked) and extracting the tarball and the JRE happen in
+  `provision`, which `prepare_environment` calls first; it runs once per process (a second call hashes nothing).
+- Startup: each startup child starts its own JVM and opens an empty DBMS on its workdir with the same builder
+  settings as a load (page cache, GDS plugin directory, procedure allowlist), so the Startup time includes the JVM
+  start, class loading and GDS registration: GDS is part of the benchmark's configuration, and every load's DBMS
+  registers it too. The shared JVM thread caps apply (the child inherits `process_env(threads)`, and the start is
+  checked like a load's). Nothing is fetched or extracted in a child: `provision` ran untimed in the worker before,
+  and a missing file fails the entry with "not provisioned: <path>". Measured on Windows: about 8 s per child once
+  the files are in the OS cache, 17 s for a cold first child.
 - Versions: Neo4j Community 2026.10.1 (the latest stable release, `<release>` in Maven Central's
   `org.neo4j:neo4j` metadata) on Temurin 21.0.13+9. Neo4j 2026.10 supports Java 21 and 25, and its class files are
   Java 21.
@@ -723,6 +914,11 @@ filters in the graph pattern WHERE, which DuckPGQ evaluates after matching, wher
 `(n:Person WHERE n.id = $personId)` took 1.2 ms in research). IC13 is 3.5 s for 10 bindings (`ANY SHORTEST` from the
 filtered endpoints). No `- id:` line: the adapter test runs DuckDB alone, where no budget applies. The texts are not
 rewritten.
+
+The Hops twins agree too; in `bench --selection push` (Windows, eight databases, Grafeo the only other SQL/PGQ
+database) `hop_1_sql` 26.3 ms for 10 bindings (72.5x Grafeo's 0.36 ms, the same graph pattern WHERE filter on the
+start person) and `hop_var_sql` 164 ms (15.9x Grafeo's 10.3 ms) are ⏱; `hop_2_sql` (58 ms) and `hop_3_sql` (7.9 s)
+are within the budget.
 
 ## DuckDB + DuckPGQ: SQL/PGQ IC13 does not finish on `snb-medium` (⏱, not allowlisted)
 

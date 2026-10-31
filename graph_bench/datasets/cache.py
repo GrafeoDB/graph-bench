@@ -12,8 +12,6 @@ import networkx
 from graph_bench.datasets import graphalytics, rdf, snb
 from graph_bench.datasets.schema import Dataset
 from graph_bench.suites import catalog
-from graph_bench.suites import graphalytics as ga_suite
-from graph_bench.suites import snb as snb_suite
 
 SEED = 42
 # Dataset-to-adapter loading contract; bump when the CSV layout or the N-Triples file the adapters consume changes.
@@ -38,7 +36,12 @@ def _read_sources() -> list[str]:
     # The pinned downloads (Neo4j tarball, Temurin JRE) are cached under the same directory (`~/.cache/graph-bench`),
     # so a changed pin must change the key too. Read as text: the module has no driver imports.
     paths.append(_PKG / "databases" / "pins.py")
-    return [f"{p.relative_to(_PKG).as_posix()}\n{p.read_text(encoding='utf-8')}" for p in paths]
+    texts = [f"{p.relative_to(_PKG).as_posix()}\n{p.read_text(encoding='utf-8')}" for p in paths]
+    # Suite modules added with GRAPH_BENCH_EXTRA_SUITES write references too.
+    for module in catalog.EXTRA_SUITES:
+        source = Path(module.__file__ or "")
+        texts.append(f"{module.__name__}\n{source.read_text(encoding='utf-8')}")
+    return texts
 
 
 def dataset_key(selection: str) -> str:
@@ -55,20 +58,26 @@ def dataset_key(selection: str) -> str:
 def _write_references(selection: str, snb_ds: Dataset, ga_ds: Dataset) -> None:
     """Write `references/<item_id>-<scale>.json` for every reference the selection's items use (`reference_items`).
 
-    An item that shares another item's references (`Query.same_as`) uses that item's file, written once.
+    Each item's suite module (`catalog.reference_source`) computes them on its dataset's reference graph: the
+    `SnbGraph` for SNB, the `Dataset` itself for Graphalytics. A write's file holds the rows after the write
+    (`answers`), before it (`before`) and, with `Write.ready`, after its setup (`ready`). An item that shares
+    another item's references (`Query.same_as`) uses that item's file, written once.
     """
     sel = catalog.selection(selection)
-    graph = snb.SnbGraph.from_dataset(snb_ds)
+    graphs: dict[str, Any] = {"snb": snb.SnbGraph.from_dataset(snb_ds), "graphalytics": ga_ds}
     for item in catalog.reference_items(selection):
-        if isinstance(item, catalog.Query):
-            bindings = snb_suite.bindings(item.id, graph, sel.bindings)
-            answers: list[Any] = [snb_suite.reference(item.id, graph, b) for b in bindings]
+        source = catalog.reference_source(item.id)
+        graph = graphs[item.dataset]
+        bindings = source.bindings(item.id, graph, sel.bindings)
+        results = [source.reference(item.id, graph, b) for b in bindings]
+        if isinstance(item, catalog.Write):
+            after, before = [r[0] for r in results], [r[1] for r in results]
+            ready = [r[2] for r in results] if item.ready else None
+            doc = catalog.reference_document(item, bindings, after, before=before, ready=ready)
         else:
-            bindings = ga_suite.bindings(item.id, ga_ds)
-            answers = [ga_suite.reference(item.id, ga_ds, b) for b in bindings]
+            doc = catalog.reference_document(item, bindings, results)
         path = catalog.reference_path(item, snb_ds.scale, base=snb_ds.root.parent)
         path.parent.mkdir(parents=True, exist_ok=True)
-        doc = catalog.reference_document(item, bindings, answers)
         path.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8", newline="\n")
 
 

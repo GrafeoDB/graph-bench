@@ -47,8 +47,12 @@ class OxigraphDatabase(Database):
         note = "bulk_load uses several threads internally, not configurable; queries run on the calling thread"
         return DatabaseInfo(self.name, ox.__version__, "in-process", False, note, "in-memory")
 
-    def load(self, dataset: Dataset) -> None:
+    def open_empty(self) -> None:
+        """An empty in-memory store (`Store()` without a path): what `load` does before the bulk load."""
         self.store = ox.Store()
+
+    def load(self, dataset: Dataset) -> None:
+        self.open_empty()
         self.store.bulk_load(path=str(rdf.ntriples_path(dataset)), format=ox.RdfFormat.N_TRIPLES)
 
     def load_store(self, store: Store, dataset: Dataset) -> None:

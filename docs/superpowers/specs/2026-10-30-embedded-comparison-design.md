@@ -30,7 +30,14 @@ New dependencies in graph-bench need no approval (user, 2026-10-30).
 The output is a capability matrix covering everything Grafeo does. Columns are the databases. The README shows:
 
 - an **overview**: one row per category, each cell showing how many of that category's benchmarks the database completed correctly, plus counts per marker;
-- **one detail table per category**: one row per benchmark, each cell the median time (fastest in bold) or a marker.
+- **one detail table per category**: one row per benchmark, each cell the median time (fastest in bold) or a marker;
+- **Memory and Disk tables** per scale, after the category tables and outside the overview and the summary block:
+  "### Memory (<scale> scale, MiB)" with the rows "<dataset>, loaded" (resident memory after the load minus
+  before) and "<dataset>, peak during load" (the process tree's highest reading during it), and "### Disk (<scale>
+  scale, MiB)" with one row per dataset and store (the store's files after `close()`, "in memory" for an
+  in-memory store); RDF stores as "<dataset> (RDF)", lowest bold, the same markers. They come from the
+  `resources` records, measured by graph-bench (FAIRNESS.md "Memory and disk"); CodSpeed holds no memory or disk
+  data.
 
 There is never one combined score across categories.
 
@@ -38,8 +45,9 @@ Each benchmark belongs to one category and one data model (property graph, SQL/P
 
 | Category | Benchmarks (first plan in brackets) | Databases |
 |---|---|---|
+| Startup | cold start in a fresh process per run: driver import, an empty database opened (whatever the process lacks started: JVM, engine, server process) and one checked probe query; downloads and installs untimed before; median over fresh processes | all |
 | Load | bulk load per dataset [SNB, Graphalytics] | all |
-| Load (query language) | bulk load through the database's query language where it has one (Grafeo `LOAD CSV`, Neo4j `LOAD CSV`, Kùzu-family `COPY` from a query), tracked separately so engine-side load fixes show up; the Load row above uses each database's fastest documented bulk path | DBs with a query-language loader |
+| Load (query language) | bulk load of the graph-store datasets through the database's query language (Grafeo `LOAD CSV`, Neo4j `LOAD CSV`, Kùzu-family `COPY` from a query, DuckDB SQL `COPY`, ArcadeDB's documented importer), tracked separately so engine-side load fixes show up; fresh instances, count-checked plus a content probe, never used by the queries; the Load row above uses each database's fastest documented bulk path | every database with a model that reads a property graph; ⊘ without a documented query-language loader for these files (FalkorDB, HelixDB) and for TuringDB, whose `LOAD CSV` is documented for small files only (user decision, 2026-10-31); RDF-only databases ⊘ by model |
 | Batch writes | batch insert, update, delete, upsert | property graph DBs |
 | Scans | label scan, property filter, aggregation, order + limit | property graph DBs |
 | Hops | 1, 2, 3 hop expansion, variable-length paths, shortest path [IC13] | property graph DBs |
@@ -88,7 +96,7 @@ These go into FAIRNESS.md, which is trimmed to embedded use.
 8. The time budget per benchmark is 10x the average median of the 3 fastest *other* databases with correct answers (the average over those available if fewer than 3; no budget when no other database has a correct result). This final rule, on medians, decides the ⏱ marker.
    - **During a run, a runaway guard:** databases run one after another. Once at least 3 earlier databases have correct times, a later database's preflight, its first (cold) run, is cut off at 30x the average of their 3 fastest preflights, and never below 10 s: the supervisor kills the worker as soon as the preflight's database call runs past that budget and records ⏱ with "too slow: cut off at <b> s (30x the top-3 average of earlier databases, at least 10 s)". The floor exists because a cold first run (a JVM compiling a new query, a first plan) can take tens of milliseconds where the timed median is within budget; it was added after a full run in which Neo4j, run last, had most of its small-scale cases cut off at 30 to 260 ms although their medians were within the final rule. The window is the database call alone: the worker writes a `run` line immediately before the call and a `progress` line immediately after it, and the supervisor arms the cutoff on the first and disarms it on the second, so reference loading and the answer check never count. The cutoff only stops runaway cases early; because it measures cold first runs, it is set well above the final rule. It depends on which databases ran earlier, so a ⏱ from the cutoff can depend on the run order. Before 3 earlier results exist, only a hard cap applies (`--case-timeout`, default 600 s, measured as silence: the worker reports progress after every run).
    - **After the run:** the 10x rule is applied over all results, each entry against the other databases. Any benchmark beyond its budget becomes ⏱. The run order never decides a ⏱ from this final rule (unlike the in-run cutoff above).
-   - Loads are exempt from this rule. They are count-checked: right after each timed load, outside the clock, the worker calls the adapter's optional `counts()` (the number of nodes and edges loaded, counted through the database's own query interface, e.g. a Cypher count over all nodes and over all relationships) and compares it with the dataset's `node_count` and `edge_count` in schema.json. A mismatch gives the load answer `disagree` (≠) with a detail like "loaded 4177 nodes, 37000 edges; expected 4177 nodes, 37860 edges"; an adapter without `counts()` (it raises `NotSupported`) leaves the load `unchecked`; an error while counting makes the load entry `failed` (✗), while its cases still run on the loaded instance.
+   - Startup and both load rows (Load, Load (query language)) are exempt from this rule, in the run and at the end. Loads are count-checked: right after each timed load, outside the clock, the worker calls the adapter's optional `counts()` (the number of nodes and edges loaded, counted through the database's own query interface, e.g. a Cypher count over all nodes and over all relationships) and compares it with the dataset's `node_count` and `edge_count` in schema.json. A mismatch gives the load answer `disagree` (≠) with a detail like "loaded 4177 nodes, 37000 edges; expected 4177 nodes, 37860 edges"; an adapter without `counts()` (it raises `NotSupported`) leaves the load `unchecked`; an error while counting makes the load entry `failed` (✗), while its cases still run on the loaded instance.
 
 ## Datasets
 
@@ -111,7 +119,7 @@ These go into FAIRNESS.md, which is trimmed to embedded use.
 | `graph-bench codspeed --selection S --out DIR` | CI entry point: one `pytest benches/ --codspeed --db X` process per database, keeps `CODSPEED_PROFILE_FOLDER`, then writes `DIR/results.json` (answers, no timings) |
 | `graph-bench report --format summary\|readme --in results.json` | summary block for grafeo's README / full section for graph-bench's README |
 
-- Benchmark names: `benches/test_<category>.py::test_<benchmark>[<db>-<scale>]`, e.g. `benches/test_complex_queries.py::test_snb_is1[ladybug-small]`, and `benches/test_load.py::test_load_<dataset>[<db>-<scale>]`. Names must be unique across processes.
+- Benchmark names: `benches/test_<category>.py::test_<benchmark>[<db>-<scale>]`, e.g. `benches/test_complex_queries.py::test_snb_is1[ladybug-small]`, `benches/test_load.py::test_load_<dataset>[<db>-<scale>]`, `benches/test_load_ql.py::test_load_ql_<dataset>[<db>-<scale>]` and `benches/test_startup.py::test_startup[<db>-empty]` (the Startup row's scale is `empty`). Names must be unique across processes.
 - Selections:
   - `push`: small scale, property-graph core categories, single-threaded.
   - `full`: every category and scale, single-threaded. All-cores runs come back with grafeo 0.6.4.
@@ -120,10 +128,10 @@ These go into FAIRNESS.md, which is trimmed to embedded use.
 ### results.json
 
 Top level:
-- `schema_version`
+- `schema_version` (2; a schema 1 file, without `resources` and `machine.memory_bytes`, still reads)
 - `graph_bench_commit`
 - `grafeo` `{version, source, sha}`
-- `machine` `{cpu, cores, os}`
+- `machine` `{cpu, cores, os, memory_bytes}`
 - `selection`, `mode` (`bench` | `codspeed`), `started_at`
 - `databases` `{name: {version, process, storage, threads_configurable, threads_note, java}}`
 
@@ -138,6 +146,17 @@ Top level:
 - `reference`: `python` | `networkx`
 - `answer_digest`
 - `detail`
+
+`resources[]`, one per (database, dataset, store, scale, threads), the Memory and Disk records (never in CodSpeed):
+- `id` (`resources::<load benchmark>[<db>-<scale>]`, e.g. `resources::load_snb_rdf[grafeo-small]`), `database`,
+  `dataset`, `store` (`graph` | `rdf`), `scale`, `threads`
+- `status`, `error`, `answer` (the load's count check), `detail`
+- `storage` (`in-memory` | `on-disk`)
+- `baseline_bytes` (the process tree's RSS before the load, engine started), `after_bytes`, `footprint_bytes`
+  (after minus before), `peak_bytes` (the highest reading from before to after), `samples` (the supervisor's
+  samples in that window), `sample_interval_ms` (nominal), `processes` (the largest process count seen during
+  the load, not the count at the peak reading)
+- `disk_bytes` (the store's files after `close()`; null for an in-memory store)
 
 The grafeo side annotates entries that match `database == "grafeo" and answer == "disagree"`.
 
@@ -178,7 +197,7 @@ grafeo's README never names other graph databases unless the user decides on tha
 ## Delivery order
 
 1. **Foundation** (plan `2026-10-30-embedded-foundation.md`): legacy move, datasets, answer check with preflight and the 10x budget, per-process runner, results.json, Grafeo + Ladybug on Load, Complex queries, Hops (IC13) and Algorithms (BFS, WCC, PR), `setup`, `report` (matrix + summary), pytest-codspeed entry point, CI workflow. grafeo-31 is told when this works locally.
-2. **Core graph categories:** Batch writes, Scans, Hops, Pattern matching (ported from the legacy suites, rewritten as checked queries).
+2. **Core graph categories:** Batch writes, Scans, Hops, Pattern matching (ported from the legacy suites, rewritten as checked queries). Delivered with the resources plan (`2026-10-31-resources-and-core-categories.md`), after the adapters (items 3, 4, 7 and 8 came first), together with the Startup and Load (query language) rows and the Memory and Disk records.
 3. **In-process Python adapters:** TuringDB embedded, FalkorDB (falkordblite), NeuG, HelixDB.
 4. **JVM adapters:** ArcadeDB, Neo4j Community via JPype, JRE and jar fetching, memory cap.
 5. **Vector search and Hybrid.**

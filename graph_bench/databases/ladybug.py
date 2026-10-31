@@ -5,7 +5,7 @@ from typing import Any, ClassVar
 
 import ladybug as lb
 
-from graph_bench.databases.base import Database, DatabaseInfo, NotSupported
+from graph_bench.databases.base import Database, DatabaseInfo, NotSupported, provision_once
 from graph_bench.datasets.schema import Column, Dataset, EdgeTable
 from graph_bench.types import Model
 
@@ -41,8 +41,9 @@ class LadybugDatabase(Database):
 
     Node tables are keyed by their `id` column. Each edge type is one rel table with a `FROM a TO b` pair per
     EdgeTable. On the graphalytics dataset the graph is projected as `g` in the load. The ALGO extension is
-    installed once per process (`prepare_environment`) and loaded by the first algorithm that needs it, both
-    outside the load clock, so a broken extension fails only those algorithms (✗), not the load or BFS.
+    installed once per process (`provision`) and loaded by the first algorithm that needs it, both outside the
+    load clock, so a broken extension fails only those algorithms (✗), not the load or BFS. `open_empty` (the
+    Startup row) is the load's first step: the empty database, its connection and the recursion depth setting.
     """
 
     name: ClassVar[str] = "ladybug"
@@ -56,13 +57,17 @@ class LadybugDatabase(Database):
     algo_loaded: bool = False
 
     @classmethod
-    def prepare_environment(cls) -> None:
-        """Install the ALGO extension (INSTALL may download it) on a throwaway in-memory database.
+    def provision(cls) -> None:
+        """Install the ALGO extension (INSTALL may download it) on a throwaway in-memory database, once per process.
 
-        Installing is a one-time download into LadybugDB's extension directory, so it stays out of the load clock.
-        A failure raises: the loads of this process fail (✗) with it.
-        https://docs.ladybugdb.com/get-started/graph-algorithms
+        Installing is a one-time download into LadybugDB's extension directory, so it stays out of every clock
+        (`prepare_environment` is this alone). A failure raises: the Startup entry and the loads of this process
+        fail (✗) with it. https://docs.ladybugdb.com/get-started/graph-algorithms
         """
+        provision_once(cls.name, cls._install)
+
+    @staticmethod
+    def _install() -> None:
         db = lb.Database()
         conn = lb.Connection(db)
         try:
@@ -83,13 +88,18 @@ class LadybugDatabase(Database):
     def _run(self, text: str) -> None:
         self.conn.execute(text).close()
 
-    def load(self, dataset: Dataset) -> None:
+    def open_empty(self) -> None:
+        """An empty in-memory database and its connection, with the recursion depth setting: what `load` does
+        before its first table. The ALGO extension is not loaded (only the first algorithm loads it)."""
         threads = self._num_threads
         # No path: an in-memory database (the `Database` docstring: "If the path is not specified, or empty, or
         # equal to `:memory:`, the database will be created in memory").
         self.db = lb.Database(max_num_threads=threads)
         self.conn = lb.Connection(self.db, num_threads=threads)
         self._run(f"CALL var_length_extend_max_depth={MAX_DEPTH}")
+
+    def load(self, dataset: Dataset) -> None:
+        self.open_empty()
         for table in dataset.nodes:
             self._run(f"CREATE NODE TABLE {table.label}({_columns(table.columns)}, PRIMARY KEY(id))")
             self._run(f"COPY {table.label} FROM '{_path(dataset, table.file)}' (HEADER=true)")

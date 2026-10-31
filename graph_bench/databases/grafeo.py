@@ -101,8 +101,13 @@ class GrafeoDatabase(Database):
             note = "query executor single-threaded (parallel queries from 0.6.4); rayon pool = all cores"
         return DatabaseInfo(self.name, grafeo.__version__, "in-process", True, note, "in-memory")
 
+    def open_empty(self) -> None:
+        """An empty in-memory `grafeo.GrafeoDB()`: what both loads do before their first data."""
+        self.db = grafeo.GrafeoDB()
+
     def load(self, dataset: Dataset) -> None:
-        db = self.db = grafeo.GrafeoDB()
+        self.open_empty()
+        db = self.db
         db.create_graph(dataset.name)
         db.set_graph(dataset.name)
         # label -> dataset id -> internal node id, for the edge endpoints.
@@ -131,7 +136,8 @@ class GrafeoDatabase(Database):
             self.load(dataset)
             return
         path = rdf.ntriples_path(dataset)
-        db = self.db = grafeo.GrafeoDB()
+        self.open_empty()
+        db = self.db
         load_rdf = getattr(db, "load_rdf", None)
         if load_rdf is not None:
             load_rdf(str(path), format="ntriples")

@@ -12,9 +12,16 @@ pytest.importorskip("ladybug")
 
 from graph_bench.databases import get_database
 from graph_bench.datasets import cache
-from graph_bench.runner.supervisor import run_bench
+from graph_bench.results import Results
 from graph_bench.types import Model
-from tests.conftest import warn_if_fixed
+from tests.conftest import (
+    assert_loads_agree,
+    assert_resources_ok,
+    assert_startup_agrees,
+    not_yet_implemented,
+    run_push,
+    warn_if_fixed,
+)
 
 # The worker's model gate error, exactly: f"model {case.item.model} not supported".
 MODEL_GATE = re.compile(f"model ({'|'.join(get_args(Model))}) not supported")
@@ -22,15 +29,14 @@ MODEL_GATE = re.compile(f"model ({'|'.join(get_args(Model))}) not supported")
 pytestmark = pytest.mark.ladybug
 
 
-def test_ladybug_push_agrees(
-    push_data_dir: Path,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    known_disagreements: Callable[[str], set[str]],
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("GRAPH_BENCH_DATA_DIR", str(push_data_dir))
-    results = run_bench("push", ["ladybug"], tmp_path / "out", workdir=tmp_path / "work", case_timeout_s=60)
+@pytest.fixture(scope="module")
+def push(push_data_dir: Path, tmp_path_factory: pytest.TempPathFactory) -> Results:
+    """One push run of ladybug, shared by the push, startup and load tests."""
+    return run_push("ladybug", tmp_path_factory.mktemp("push-ladybug"), push_data_dir, 60)
+
+
+def test_ladybug_push_agrees(push: Results, known_disagreements: Callable[[str], set[str]]) -> None:
+    results = push
     known = known_disagreements("ladybug")
     entries = [e for e in results.entries if e.database == "ladybug"]
     assert entries
@@ -40,7 +46,7 @@ def test_ladybug_push_agrees(
         # model. Any other ⊘ (a missing capability) must be allowlisted in docs/known-disagreements.md.
         lacks_model = entry.status == "not_supported" and MODEL_GATE.fullmatch(entry.error or "") is not None
         warn_if_fixed(entry, known)
-        if entry.benchmark in known or lacks_model:
+        if entry.benchmark in known or lacks_model or not_yet_implemented(entry):
             continue
         # A load must agree too: its node and edge counts (`counts()`) match the dataset's.
         good = entry.status == "ok" and entry.answer == "agree"
@@ -49,6 +55,21 @@ def test_ladybug_push_agrees(
             failing.append(f"    detail={entry.detail}")
     print("\n".join(failing))
     assert not failing, "\n".join(failing)
+
+
+def test_ladybug_startup_agrees(push: Results) -> None:
+    """The Startup row: every child opens an empty database and answers the probe as expected."""
+    assert_startup_agrees(push, "ladybug")
+
+
+def test_ladybug_load_unchanged(push: Results) -> None:
+    """The loads still load the whole dataset (their counts agree) with `open_empty` split out."""
+    assert_loads_agree(push, "ladybug")
+
+
+def test_ladybug_resources_ok(push: Results) -> None:
+    """Memory and Disk: one ok, agreeing record per load with ordered readings; in memory."""
+    assert_resources_ok(push, "ladybug", on_disk=False)
 
 
 def test_ladybug_threads_settings(tmp_path: Path) -> None:

@@ -1,13 +1,14 @@
+import json
 import re
 from pathlib import Path
 
 from typer.testing import CliRunner
 
 from graph_bench.cli import app
-from graph_bench.suites import GRAPH_MODELS, catalog, snb_rdf, snb_sql
+from graph_bench.suites import GRAPH_MODELS, Write, catalog, scans, snb_rdf, snb_sql
 from graph_bench.suites.catalog import Case, cases
 from graph_bench.suites.snb import QUERIES
-from graph_bench.types import STANDARD_DIALECT
+from graph_bench.types import BUDGET_EXEMPT, CATEGORY_NAMES, CATEGORY_ORDER, LOAD_CATEGORIES, STANDARD_DIALECT
 
 
 def _item(item_id: str) -> catalog.Query | catalog.Algorithm:
@@ -16,7 +17,9 @@ def _item(item_id: str) -> catalog.Query | catalog.Algorithm:
 
 def test_push_selection_cases() -> None:
     result = cases("push", ["grafeo", "ladybug"])
-    assert len(result) == 2 * (13 + 4 + 3)
+    # 13 SNB and Graphalytics items, 4 SQL/PGQ, 3 RDF, the 15 Scans rows (5 queries, each in three models) and the 11
+    # Hops rows besides IC13 (4 queries in openCypher and SQL/PGQ, 3 in SPARQL).
+    assert len(result) == 2 * (13 + 4 + 3 + 15 + 11)
     assert all(c.threads == 1 for c in result)
     assert all(c.scale == "small" for c in result)
     assert [c.bench_id for c in result] == sorted(c.bench_id for c in result)
@@ -45,10 +48,7 @@ def test_list_output_is_stable() -> None:
     lines = first.output.splitlines()
     assert lines == sorted(lines)
     assert first.output == second.output
-    expected = sorted(
-        [c.bench_id for c in cases("push", ["grafeo", "ladybug"])] + catalog.load_ids("push", ["grafeo", "ladybug"])
-    )
-    assert lines == expected
+    assert lines == catalog.all_ids("push", ["grafeo", "ladybug"])
     assert "benches/test_load.py::test_load_snb[grafeo-small]" in lines
     assert "benches/test_load.py::test_load_graphalytics[ladybug-small]" in lines
     # Grafeo's RDF store is a load of its own. LadybugDB serves no RDF: its RDF load is planned too, and reported ⊘.
@@ -60,8 +60,10 @@ def test_list_output_is_stable() -> None:
 
 def test_limited_queries_have_total_order() -> None:
     pattern = re.compile(r"(\w+\.)?\w*[iI]d\s+(ASC|DESC)?\s*LIMIT")
-    limited = [q for q in QUERIES if "LIMIT" in q.text["cypher"]]
-    assert limited
+    # The SNB queries and the openCypher and SQL/PGQ scans; the SPARQL scan orders with `ASC(?id)` (checked below).
+    texts = [*QUERIES, *(q for q in scans.QUERIES if q.model != "rdf")]
+    limited = [q for q in texts if any("LIMIT" in t for t in q.text.values())]
+    assert len(limited) > 2
     for q in limited:
         for dialect, text in q.text.items():
             if dialect == "helix":  # the name of a DSL builder, not query text
@@ -69,6 +71,8 @@ def test_limited_queries_have_total_order() -> None:
                 continue
             assert "ORDER BY" in text, q.id
             assert pattern.search(text), q.id
+    sparql = next(q for q in scans.QUERIES if q.id == "scan_order_limit_rdf").text["sparql"]
+    assert "ORDER BY DESC(?created) ASC(?id)\nLIMIT" in sparql
 
 
 def test_every_query_has_cypher_text() -> None:
@@ -178,3 +182,122 @@ def test_algorithms_run_on_any_graph_model() -> None:
         assert q.models == frozenset({q.model})
         assert q.supported_by(frozenset({q.model}))
         assert not q.supported_by(frozenset({"property_graph", "sql_pgq", "rdf"} - {q.model}))
+
+
+def test_category_order_starts_with_startup_and_loads() -> None:
+    assert CATEGORY_ORDER[:3] == ("startup", "load", "load_ql")
+    assert CATEGORY_ORDER[3:8] == ("batch_writes", "scans", "hops", "pattern_matching", "complex_queries")
+    assert CATEGORY_NAMES["startup"] == "Startup"
+    assert CATEGORY_NAMES["load_ql"] == "Load (query language)"
+    assert frozenset({"load", "load_ql"}) == LOAD_CATEGORIES
+    assert frozenset({"startup", "load", "load_ql"}) == BUDGET_EXEMPT
+    assert set(CATEGORY_NAMES) == set(CATEGORY_ORDER)
+
+
+def test_resource_id_format() -> None:
+    assert catalog.resource_id("snb", "fake", "small", 1) == "resources::load_snb[fake-small]"
+    assert catalog.resource_id("snb", "fake", "small", None, "rdf") == "resources::load_snb_rdf[fake-small-allcores]"
+
+
+def test_startup_id_format() -> None:
+    assert catalog.STARTUP_SCALE == "empty"
+    assert catalog.startup_id("fake", 1) == "benches/test_startup.py::test_startup[fake-empty]"
+    assert catalog.startup_id("fake", None) == "benches/test_startup.py::test_startup[fake-empty-allcores]"
+    assert catalog.startup_ids("push", ["ladybug", "grafeo"]) == [
+        "benches/test_startup.py::test_startup[grafeo-empty]",
+        "benches/test_startup.py::test_startup[ladybug-empty]",
+    ]
+
+
+def test_load_ql_ids_cover_the_graph_store_datasets() -> None:
+    assert catalog.load_ql_benchmark("snb") == "load_ql_snb"
+    assert catalog.load_ql_id("snb", "grafeo", "small", 1) == "benches/test_load_ql.py::test_load_ql_snb[grafeo-small]"
+    # Graph-store datasets only: the RDF store has no query-language load row. Every database gets them, as loads.
+    assert catalog.load_ql_ids("push", ["oxigraph"]) == [
+        "benches/test_load_ql.py::test_load_ql_graphalytics[oxigraph-small]",
+        "benches/test_load_ql.py::test_load_ql_snb[oxigraph-small]",
+    ]
+    assert catalog.load_ql_keys("push") == {"graphalytics": "property_graph", "snb": "property_graph"}
+    assert catalog.LOAD_QL_PROBES == {
+        ("snb", "property_graph"): "scan_order_limit",
+        ("snb", "sql_pgq"): "scan_order_limit_sql",
+    }
+    # Each probe is a query of its key's dataset and model, so a database of that primary model can run it.
+    for (dataset, model), item_id in catalog.LOAD_QL_PROBES.items():
+        assert (_item(item_id).dataset, _item(item_id).model) == (dataset, model)
+
+
+def test_selections_plan_startup_load_ql_and_the_core_categories() -> None:
+    push, full = catalog.selection("push"), catalog.selection("full")
+    assert {"startup", "load_ql", "batch_writes", "scans", "pattern_matching"} <= push.categories
+    assert (push.startup_iterations, full.startup_iterations) == (3, 5)
+    assert push.resources and full.resources
+    assert full.categories == frozenset(CATEGORY_ORDER)
+
+
+def test_all_ids_is_what_list_prints() -> None:
+    ids = catalog.all_ids("push", ["grafeo"])
+    assert ids == sorted(
+        [c.bench_id for c in cases("push", ["grafeo"])]
+        + catalog.load_ids("push", ["grafeo"])
+        + catalog.startup_ids("push", ["grafeo"])
+        + catalog.load_ql_ids("push", ["grafeo"])
+    )
+    assert "benches/test_startup.py::test_startup[grafeo-empty]" in ids
+    assert "benches/test_load_ql.py::test_load_ql_snb[grafeo-small]" in ids
+
+
+def test_each_item_has_a_reference_source() -> None:
+    from graph_bench.suites import graphalytics, snb
+
+    assert catalog.reference_source("snb_is1") is snb
+    assert catalog.reference_source("snb_sql_is1") is snb  # a twin's references come from the item it shares
+    assert catalog.reference_source("graphalytics_bfs") is graphalytics
+
+
+_WRITE = Write(
+    "w",
+    "W",
+    "batch_writes",
+    "property_graph",
+    "snb",
+    run={"cypher": "RUN", "ladybug": "RUN L"},
+    check={"cypher": "CHECK"},
+    setup={"cypher": ("S1", "S2")},
+    teardown={},
+    ordered=True,
+    rel_eps=0.0,
+)
+
+
+def test_write_texts_fall_back_to_the_standard_dialect() -> None:
+    assert _WRITE.run_for("ladybug") == "RUN L"
+    assert _WRITE.run_for("neug") == "RUN"
+    assert _WRITE.check_for("ladybug") == "CHECK"
+    assert _WRITE.setup_for("ladybug") == ("S1", "S2")
+    assert _WRITE.teardown_for("cypher") == ()
+    assert _WRITE.reference_id == "w"
+    assert _WRITE.store == "graph"
+    assert _WRITE.supported_by(frozenset({"property_graph"}))
+    assert not _WRITE.supported_by(frozenset({"sql_pgq"}))
+
+
+def test_write_reference_holds_before_and_after(tmp_path: Path) -> None:
+    doc = catalog.reference_document(_WRITE, [{"ids": ["a"]}], [[["a", 1]]], before=[[]])
+    assert doc == {"bindings": [{"ids": ["a"]}], "answers": [[["a", 1]]], "before": [[]]}
+    path = tmp_path / "w-small.json"
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    assert catalog.load_write_reference(path) == ([{"ids": ["a"]}], [[["a", 1]]], [[]])
+
+
+def test_write_reference_holds_ready_only_when_defined(tmp_path: Path) -> None:
+    plain = tmp_path / "w-small.json"
+    plain.write_text(json.dumps(catalog.reference_document(_WRITE, [{}], [[]], before=[[]])), encoding="utf-8")
+    assert "ready" not in json.loads(plain.read_text(encoding="utf-8"))
+    assert catalog.load_write_ready(plain) is None
+    doc = catalog.reference_document(_WRITE, [{}], [[]], before=[[]], ready=[[["a"]]])
+    path = tmp_path / "r-small.json"
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    assert catalog.load_write_ready(path) == [[["a"]]]
+    assert catalog.load_write_reference(path) == ([{}], [[]], [[]])
+    assert not _WRITE.ready

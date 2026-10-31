@@ -20,6 +20,7 @@ from graph_bench.runner.supervisor import apply_budget_rule, run_bench
 from graph_bench.suites import catalog
 from graph_bench.suites.catalog import Case
 from graph_bench.types import Timing
+from tests.conftest import HANG_TIMEOUT_S, resources_off
 
 EXTRA = (
     "fake=tests.fakes:FakeDatabase,fake2=tests.fakes:FakeDatabase2,"
@@ -38,7 +39,7 @@ def _by_id(results: Results) -> dict[str, Entry]:
 
 
 def _expected_ids(db: str) -> set[str]:
-    return {c.bench_id for c in catalog.cases("push", [db])} | set(catalog.load_ids("push", [db]))
+    return set(catalog.all_ids("push", [db]))
 
 
 def _set_env(mp: pytest.MonkeyPatch, data_dir: Path, fake: str = "", fake2: str = "") -> None:
@@ -60,6 +61,7 @@ def _extra_databases() -> Iterator[None]:
 def bench_env(push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
     monkeypatch.chdir(tmp_path)
     _set_env(monkeypatch, push_data_dir)
+    resources_off(monkeypatch)  # `two_dbs` keeps them on for `test_supervisor_records_resources`
     return monkeypatch
 
 
@@ -93,7 +95,7 @@ def test_supervisor_all_agree(two_dbs: tuple[Results, list[list[str]], Path]) ->
     assert {e.id for e in entries} == _expected_ids("fake")
     for entry in entries:
         assert entry.status == "ok", entry
-        if entry.category == "load":
+        if entry.category in ("load", "load_ql"):
             assert entry.load_ns is not None and entry.load_ns > 0
         else:
             assert entry.answer == "agree", entry
@@ -104,6 +106,20 @@ def test_supervisor_all_agree(two_dbs: tuple[Results, list[list[str]], Path]) ->
     assert results.mode == "bench"
     assert set(results.databases) == {"fake", "fake2"}
     assert results.databases["fake"].name == "fake"
+
+
+def test_supervisor_records_resources(two_dbs: tuple[Results, list[list[str]], Path]) -> None:
+    """After each worker, one measured Memory and Disk record per load, its lines under the raw directory."""
+    results, _, out = two_dbs
+    keys = catalog.all_load_keys("push")
+    for db in ("fake", "fake2"):
+        records = {r.id: r for r in results.resources if r.database == db}
+        assert set(records) == {catalog.resource_id(d, db, "small", 1, st) for d, st in keys}
+        for r in records.values():
+            assert (r.status, r.answer, r.disk_bytes) == ("ok", "agree", None), r
+            assert r.peak_bytes is not None and r.baseline_bytes is not None and r.after_bytes is not None
+            assert r.peak_bytes >= max(r.baseline_bytes, r.after_bytes)
+    assert (out / "raw" / "fake-1" / "resources" / "load_snb-small.jsonl").is_file()
 
 
 def test_supervisor_writes_raw_output(two_dbs: tuple[Results, list[list[str]], Path]) -> None:
@@ -314,7 +330,7 @@ def test_supervisor_resumes_after_crash(bench_env: pytest.MonkeyPatch, tmp_path:
 
 def test_supervisor_marks_hang_as_timeout(bench_env: pytest.MonkeyPatch, tmp_path: Path) -> None:
     bench_env.setenv("GRAPH_BENCH_FAKE", "hang:snb_is4")
-    results = run_bench("push", ["fake"], tmp_path / "out", workdir=tmp_path / "work", case_timeout_s=2)
+    results = run_bench("push", ["fake"], tmp_path / "out", workdir=tmp_path / "work", case_timeout_s=HANG_TIMEOUT_S)
     entries = _by_id(results)
     assert set(entries) == _expected_ids("fake")
     hung = entries.pop(_id("snb_is4"))
@@ -361,10 +377,11 @@ def test_supervisor_load_crash_is_not_retried(bench_env: pytest.MonkeyPatch, tmp
     assert "exited with code 3" in (entries[load_id].error or "")
     # The RDF store is a load of its own: the graph load's crash leaves it and its cases alone.
     assert entries[catalog.load_id("snb", "fake", "small", 1, "rdf")].status == "ok"
+    graph_cases = {i.id for i in catalog.ITEMS if (i.dataset, i.store) == ("snb", "graph")}
     for entry in entries.values():
         if entry.id == load_id:
             continue
-        if entry.benchmark.startswith("snb_") and entry.model != "rdf":
+        if entry.benchmark in graph_cases:
             assert entry.status == "failed", entry
             assert entry.error == f"load failed: {load_id}"
         else:
@@ -408,6 +425,51 @@ def test_budget_rule_compares_with_the_others() -> None:
     assert all(marker == ("ok", None) for marker in markers.values()), markers  # 15 vs others' mean 2: budget 20
 
 
+def test_budget_rule_exempts_startup_and_load_ql() -> None:
+    """Startup and Load (query language) entries are never marked by the final rule, nor get an in-run budget."""
+    for category, benchmark in (("startup", "startup"), ("load_ql", "load_ql_snb")):
+        entries = [
+            dataclasses.replace(_entry(db, ms), category=category, benchmark=benchmark)
+            for db, ms in (("a", 1), ("b", 1), ("c", 500))
+        ]
+        assert [(e.status, e.error) for e in _apply(entries)] == [("ok", None)] * 3, category
+    meta = supervisor._expected(catalog.selection("push"), "fake", 1)
+    startup, load_ql = catalog.startup_id("fake", 1), catalog.load_ql_id("snb", "fake", "small", 1)
+    assert (meta[startup].kind, meta[startup].scale, meta[startup].reference) == ("startup", "empty", "python")
+    assert (meta[load_ql].kind, meta[load_ql].benchmark, meta[load_ql].supported) == ("load_ql", "load_ql_snb", True)
+    earlier = [
+        dataclasses.replace(_entry(db, 1), id=i, category=m.category, benchmark=m.benchmark, scale=m.scale)
+        for db in ("a", "b", "c")
+        for i, m in ((startup, meta[startup]), (load_ql, meta[load_ql]))
+    ]
+    assert supervisor._budgets(earlier, "fake", meta) == {}
+
+
+def test_load_ql_crash_does_not_fail_the_cases(bench_env: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A query-language load that crashes the worker fails only its own entry: no "load failed" cascade."""
+    bench_env.setenv("GRAPH_BENCH_FAKE", "crash:load_ql_snb")
+    results = run_bench("push", ["fake"], tmp_path / "out", workdir=tmp_path / "work", case_timeout_s=60)
+    entries = _by_id(results)
+    assert set(entries) == _expected_ids("fake")
+    crashed = entries.pop(catalog.load_ql_id("snb", "fake", "small", 1))
+    assert crashed.status == "failed"
+    assert "exited with code 3" in (crashed.error or "")
+    assert all(e.status == "ok" for e in entries.values()), [e for e in entries.values() if e.status != "ok"]
+
+
+def test_startup_hang_is_a_timeout_without_cascade(bench_env: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The worker kills a silent startup child at half the case timeout (at most `STARTUP_TIMEOUT_S`), before
+    the supervisor's silence limit, so no child outlives its worker; the entry is ⏱ and nothing else is touched."""
+    bench_env.setenv("GRAPH_BENCH_FAKE", "hang:startup")
+    results = run_bench("push", ["fake"], tmp_path / "out", workdir=tmp_path / "work", case_timeout_s=HANG_TIMEOUT_S)
+    entries = _by_id(results)
+    assert set(entries) == _expected_ids("fake")
+    hung = entries.pop(catalog.startup_id("fake", 1))
+    assert (hung.status, hung.category, hung.scale) == ("timeout", "startup", "empty")
+    assert hung.error == f"startup child 1 gave no answer within {HANG_TIMEOUT_S / 2:g} s"
+    assert all(e.status == "ok" for e in entries.values()), [e for e in entries.values() if e.status != "ok"]
+
+
 def test_budget_rule_exempts_loads() -> None:
     entries = [dataclasses.replace(_entry(db, ms), category="load") for db, ms in (("a", 1), ("b", 1), ("c", 500))]
     results = _results(entries)
@@ -435,6 +497,7 @@ def test_missing_driver_marks_failed(bench_env: pytest.MonkeyPatch, tmp_path: Pa
     bench_env.setitem(databases.MODELS, "ghost", frozenset({"property_graph"}))
     bench_env.setitem(databases.MODELS, "ghost_rdf", frozenset({"rdf"}))
     results = run_bench("push", ["ghost", "ghost_rdf"], tmp_path / "out", workdir=tmp_path / "work")
+    assert results.resources == []  # `bench_env` switches them off
     entries = _by_id(results)
     assert set(entries) == _expected_ids("ghost") | _expected_ids("ghost_rdf")
     for entry in entries.values():

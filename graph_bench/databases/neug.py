@@ -5,7 +5,7 @@ from typing import Any, ClassVar
 
 import neug
 
-from graph_bench.databases.base import Database, DatabaseInfo, NotSupported
+from graph_bench.databases.base import Database, DatabaseInfo, NotSupported, provision_once
 from graph_bench.datasets.schema import Column, Dataset, EdgeTable
 from graph_bench.types import Model
 
@@ -43,7 +43,7 @@ class NeugDatabase(Database):
     """An in-memory `neug.Database`, loaded with `COPY FROM` CSV and queried with parameterized Cypher.
 
     Node tables are keyed by their `id` column. Each edge type is one rel table with a `FROM a TO b` pair per
-    EdgeTable. The GDS extension (bundled in the wheel) is installed once per process (`prepare_environment`).
+    EdgeTable. The GDS extension (bundled in the wheel) is installed once per process (`provision`).
     On the graphalytics dataset the load also loads GDS and projects the graph `g`, inside the load clock, like
     LadybugDB's projection: all three algorithms (BFS included) need it, so a GDS failure fails that load (✗).
     """
@@ -58,11 +58,16 @@ class NeugDatabase(Database):
     gds_ready: bool = False
 
     @classmethod
-    def prepare_environment(cls) -> None:
-        """Install the GDS extension on a throwaway in-memory database (it may download, so not in a load clock).
+    def provision(cls) -> None:
+        """Install the GDS extension on a throwaway in-memory database, once per process (it may download, so it is
+        in no clock; `prepare_environment` is this alone).
 
         https://neug.io/docs/extensions/load_gds/
         """
+        provision_once(cls.name, cls._install)
+
+    @staticmethod
+    def _install() -> None:
         db = neug.Database("", max_thread_num=1)
         conn = db.connect()
         try:
@@ -83,10 +88,14 @@ class NeugDatabase(Database):
     def _run(self, text: str) -> None:
         list(self.conn.execute(text))
 
-    def load(self, dataset: Dataset) -> None:
+    def open_empty(self) -> None:
+        """An empty in-memory database and its connection: what `load` does before its first table."""
         # An empty path opens an in-memory database (the `Database` docstring, https://neug.io/docs/reference/python_api/).
         self.db = neug.Database("", max_thread_num=self._max_thread_num)
         self.conn = self.db.connect()
+
+    def load(self, dataset: Dataset) -> None:
+        self.open_empty()
         for table in dataset.nodes:
             self._run(f"CREATE NODE TABLE {table.label}({_columns(table.columns)}, PRIMARY KEY(id))")
         groups: dict[str, list[EdgeTable]] = {}

@@ -480,19 +480,32 @@ class Neo4jDatabase(Database):
         return jvm.process_env(threads)
 
     @classmethod
+    def provision(cls) -> None:
+        """Fetch (SHA-256 checked) and extract the tarball and the JRE, and set up the plugins directory: `install`,
+        once per process.
+
+        The worker calls it before the Startup children and again through `prepare_environment`; `jvm.fetch`
+        re-hashes the cached archives on every call, so the second call returns at once instead.
+        """
+        if _STATE.get("provisioned"):
+            return
+        install()
+        _STATE["provisioned"] = True
+
+    @classmethod
     def prepare_environment(cls) -> None:
-        """Fetch and extract the tarball and the JRE, start the JVM, then open and shut down one empty DBMS.
+        """`provision`, start the JVM, then open and shut down one empty DBMS.
 
         All of it is outside every clock. The empty DBMS covers the engine's one-time start (class loading, GDS
         registration, several seconds) that would otherwise land in the first load; it holds no data and runs no
         query, so no load or query path is warmed up (ArcadeDB, NeuG and LadybugDB likewise open a throwaway
-        database here).
+        database here). The Startup row's `open_empty` runs without this warm start, so its time includes them.
         """
+        cls.provision()
         if _STATE.get("ready"):
             # Once per process: `load` calls this too (for direct use), and a load must not fetch, hash or start
-            # anything (`jvm.fetch` re-hashes the cached archives).
+            # anything.
             return
-        install()
         jvm.start_once(cls.name, _start)
         scratch = Path(tempfile.mkdtemp(prefix="graph-bench-neo4j-"))
         try:
@@ -531,14 +544,34 @@ class Neo4jDatabase(Database):
         args.append(f"--report-file={work / 'import.report'}")
         run_admin(admin_command(home, jre, args), work, admin_env(jre, conf))
 
+    def _open(self) -> None:
+        """Open the DBMS on `workdir` (its store under `workdir/data`) with the settings of every instance."""
+        self.dbms = _builder(self.workdir.resolve()).build()
+        self.db = self.dbms.database(DATABASE)
+
+    def open_empty(self) -> None:
+        """Start the JVM when this process has none (the tarball's jars, the GDS jar), check its thread options and
+        open an empty DBMS on `workdir` with the same builder settings as a load (GDS plugin directory included).
+
+        It never fetches, hashes or extracts: a file `provision` should have put in place that is missing raises
+        "not provisioned: <path>". A load cannot start with this: the importer needs a store directory no DBMS has
+        opened, so a load opens the DBMS only after the import (`_open`).
+        """
+        home = neo4j_home()
+        for path in (jvm_library(jre_home()), home / "lib", home / "products" / GDS_JAR, plugins_dir() / GDS_JAR):
+            if not path.exists():
+                raise RuntimeError(f"not provisioned: {path}")
+        jvm.start_once(self.name, _start)
+        jvm.check_threads(self.threads)
+        self._open()
+
     def load(self, dataset: Dataset) -> None:
         # The benchmark paths (worker, CodSpeed session) call prepare_environment first, so the downloads and the JVM
         # start are never in a load clock: this call returns at once then, and only serves direct use (tests).
         self.prepare_environment()
         jvm.check_threads(self.threads)
         self._import(dataset)
-        self.dbms = _builder(self.workdir.resolve()).build()
-        self.db = self.dbms.database(DATABASE)
+        self._open()
         for table in dataset.nodes:
             # https://neo4j.com/docs/cypher-manual/current/schema/constraints/create-constraints/ (property
             # uniqueness; it creates the range index that the `{id: ...}` lookups use).
@@ -550,6 +583,14 @@ class Neo4jDatabase(Database):
             read = ", {readConcurrency: 1}" if self.threads == 1 else ""
             self._run(f"CALL gds.graph.project('{GRAPH}', 'V', 'E'{read}) YIELD nodeCount", {}, commit=True)
             self.projected = True
+
+    def store_paths(self) -> list[Path]:
+        """`workdir/data`: "all data-related content, such as databases, transactions" (the data directory,
+        https://neo4j.com/docs/operations-manual/current/configuration/file-locations/; the transaction logs are
+        `data/transactions` by default). A directory listing after a load confirms it: `data/databases/{neo4j,system}`
+        and `data/transactions/{neo4j,system}`. The importer's CSV copies (`import/`), its configuration (`conf/`),
+        `logs/` and `import.report` are scaffolding, not stored data, and stay out."""
+        return [self.workdir / "data"]
 
     def _run(self, text: str, params: Mapping[str, Any], *, commit: bool = False) -> list[tuple[Any, ...]]:
         with self.db.beginTx() as tx:

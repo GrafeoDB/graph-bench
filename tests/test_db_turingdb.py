@@ -1,6 +1,7 @@
 """TuringDB adapter (embedded, Linux only): the push selection agrees except the recorded known disagreements."""
 
 import re
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import get_args
@@ -11,9 +12,17 @@ from graph_bench.databases import get_database
 from graph_bench.databases.base import NotSupported
 from graph_bench.databases.turingdb import inline, literal
 from graph_bench.datasets import cache
-from graph_bench.runner.supervisor import run_bench
+from graph_bench.results import Results
 from graph_bench.types import Model
-from tests.conftest import warn_if_fixed
+from tests.conftest import (
+    assert_loads_agree,
+    assert_resources_ok,
+    assert_startup_agrees,
+    not_yet_implemented,
+    run_push,
+    warn_if_fixed,
+)
+from tests.startup_hangs import MARKER_ENV, alive, hang_until_killed
 
 # The worker's model gate error, exactly: f"model {case.item.model} not supported".
 MODEL_GATE = re.compile(f"model ({'|'.join(get_args(Model))}) not supported")
@@ -57,17 +66,16 @@ def test_inline_replaces_every_parameter() -> None:
         inline("RETURN $missing", {})
 
 
-@pytest.mark.turingdb
-def test_turingdb_push_agrees(
-    push_data_dir: Path,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    known_disagreements: Callable[[str], set[str]],
-) -> None:
+@pytest.fixture(scope="module")
+def push(push_data_dir: Path, tmp_path_factory: pytest.TempPathFactory) -> Results:
+    """One push run of turingdb, shared by the push, startup and load tests."""
     pytest.importorskip("turingdb")
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("GRAPH_BENCH_DATA_DIR", str(push_data_dir))
-    results = run_bench("push", ["turingdb"], tmp_path / "out", workdir=tmp_path / "work", case_timeout_s=60)
+    return run_push("turingdb", tmp_path_factory.mktemp("push-turingdb"), push_data_dir, 60)
+
+
+@pytest.mark.turingdb
+def test_turingdb_push_agrees(push: Results, known_disagreements: Callable[[str], set[str]]) -> None:
+    results = push
     known = known_disagreements("turingdb")
     entries = [e for e in results.entries if e.database == "turingdb"]
     assert entries
@@ -77,7 +85,7 @@ def test_turingdb_push_agrees(
         # docs/known-disagreements.md.
         lacks_model = entry.status == "not_supported" and MODEL_GATE.fullmatch(entry.error or "") is not None
         warn_if_fixed(entry, known)
-        if entry.benchmark in known or lacks_model:
+        if entry.benchmark in known or lacks_model or not_yet_implemented(entry):
             continue
         good = entry.status == "ok" and entry.answer == "agree"
         if not good:
@@ -85,6 +93,24 @@ def test_turingdb_push_agrees(
             failing.append(f"    detail={entry.detail}")
     print("\n".join(failing))
     assert not failing, "\n".join(failing)
+
+
+@pytest.mark.turingdb
+def test_turingdb_startup_agrees(push: Results) -> None:
+    """The Startup row: every child opens an empty database and answers the probe as expected."""
+    assert_startup_agrees(push, "turingdb")
+
+
+@pytest.mark.turingdb
+def test_turingdb_load_unchanged(push: Results) -> None:
+    """The loads still load the whole dataset (their counts agree) with `open_empty` split out."""
+    assert_loads_agree(push, "turingdb")
+
+
+@pytest.mark.turingdb
+def test_turingdb_resources_ok(push: Results) -> None:
+    """Memory and Disk: one ok, agreeing record per load with ordered readings; on disk."""
+    assert_resources_ok(push, "turingdb", on_disk=True)
 
 
 @pytest.mark.turingdb
@@ -107,3 +133,35 @@ def test_turingdb_info_and_algorithms(push_data_dir: Path, tmp_path: Path, monke
                 db.algorithm(name, {"source": 0})
     finally:
         db.close()
+
+
+@pytest.mark.turingdb
+@pytest.mark.skipif(sys.platform != "linux", reason="the turingdb wheel is Linux only")
+def test_turingdb_startup_timeout_kills_the_engine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A child that hangs with the engine started and its graph created is killed at the timeout: the engine runs
+    in the child's process ("no daemon"), and nothing the child started outlives it."""
+    pytest.importorskip("turingdb")
+    marker = tmp_path / "marker"
+    monkeypatch.setenv("GRAPH_BENCH_EXTRA_DATABASES", "turingdb_hang=tests.startup_hangs:HangingTuring")
+    monkeypatch.setenv(MARKER_ENV, str(marker))
+    child, pids, names = hang_until_killed("turingdb_hang", tmp_path / "child", marker, 20)
+    assert child.status == "timeout", child.error
+    assert pids, "the hanging child never reported its engine up"
+    assert not alive(pids), names
+
+
+@pytest.mark.turingdb
+def test_turingdb_open_empty_creates_a_new_graph(tmp_path: Path) -> None:
+    """`open_empty` makes a new empty graph (`CREATE GRAPH`) and selects it; a second instance gets another."""
+    pytest.importorskip("turingdb")
+    cls = get_database("turingdb")
+    first, second = cls(tmp_path, 1), cls(tmp_path, 1)
+    try:
+        first.open_empty()
+        second.open_empty()
+        assert first.graph != second.graph
+        assert first.query("MATCH (n) RETURN count(n)", {}) == [(0,)]
+        assert {first.graph, second.graph} <= set(first.client.query("LIST GRAPH")["graphName"])
+    finally:
+        first.close()
+        second.close()

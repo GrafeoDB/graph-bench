@@ -22,11 +22,22 @@ line, which the worker writes immediately before the preflight's database call, 
 (the `progress` line right after the call). A worker silent for longer than the budget in that window is killed
 and the case becomes `timeout` ("too slow: cut off at ..."); harness work (reference loading, the answer check)
 is outside the window. At the end `apply_budget_rule` compares every entry with the other databases only, at
-10x on the final timings; that decides the marker, and that final rule does not depend on the run order.
+10x on the final timings; that decides the marker, and that final rule does not depend on the run order. Startup and
+both load rows (`types.BUDGET_EXEMPT`) have no budget, in the run or at the end, and are no yardstick.
+
+Resources (the Memory and Disk records, `Selection.resources`): after a database's worker (or pytest) process for
+one thread setting has finished, in both modes, the supervisor measures each load the database's models reach, one
+fresh child per (dataset, store, scale), sampling the child's process tree from here
+(`graph_bench.runner.resources.run_resource`). The child inherits the worker's environment and may stay silent for
+`case_timeout_s` (at least `STARTUP_TIMEOUT_S` before its first line), each load in its own directory under
+`<workdir>/<db>-<threads>-resources/`. The selection's other loads get ⊘ records, a database that is not
+installed ✗ records, and a harness error in this process a `failed` record ("resources harness: ...").
+These go to results.json `resources`, never to CodSpeed.
 
 Resume rule: when a worker exits non-zero or is killed for silence, the last `start` id without an entry
-becomes `failed` ("worker exited with code <n>") or `timeout`. When that id is a load, every not yet recorded
-case of that dataset becomes `failed` ("load failed: <load id>") too, so a broken load is not retried. A new
+becomes `failed` ("worker exited with code <n>") or `timeout`. When that id is a load (the Load row, not Load
+(query language), whose instances no case uses), every not yet recorded case of that dataset becomes `failed`
+("load failed: <load id>") too, so a broken load is not retried. A new
 worker then starts with `--skip` for every recorded id. Without an open `start` id, every unrecorded id gets
 the failure and the database is done; so every restart records at least one id and the loop ends. With
 `Runner.rerun_passed` (CodSpeed), a killed or crashed process is relaunched even when every id is recorded, as
@@ -54,15 +65,18 @@ import psutil
 from graph_bench.databases import model_support
 from graph_bench.databases.base import DatabaseInfo
 from graph_bench.datasets import cache
-from graph_bench.results import Entry, GrafeoSource, Machine, Reference, Results
+from graph_bench.results import Entry, GrafeoSource, Machine, Reference, Resource, Results
+from graph_bench.runner import message
+from graph_bench.runner.resources import run_resource, unmeasured
+from graph_bench.runner.startup import STARTUP_TIMEOUT_S
 from graph_bench.runner.worker import DEFAULT_CASE_TIMEOUT_S, reference_kind
 from graph_bench.suites import catalog
 from graph_bench.suites.catalog import Selection
-from graph_bench.types import Category, Model, Store, Timing
+from graph_bench.suites.startup import primary_model
+from graph_bench.types import BUDGET_EXEMPT, LOAD_CATEGORIES, Category, Model, Store, Timing
 
 RESULTS_FILE = "results.json"
 GRAFEO_FILE = Path(".graph-bench") / "grafeo.json"
-STARTUP_TIMEOUT_S = 120.0
 # pytest's exit code when its session ended normally with failed tests; pytest-codspeed then kept its measurements.
 PYTEST_TESTS_FAILED = 1
 BUDGET_FACTOR = 10
@@ -96,9 +110,21 @@ def _tag(threads: int | None) -> str:
     return "1" if threads == 1 else "all"
 
 
+def _not_installed_reason(error: str) -> str:
+    """The error of every entry and resource record of a database whose driver does not import."""
+    return f"not installed: {error} (the package is missing or has no build for {_platform_label()})"
+
+
+Kind = Literal["case", "load", "load_ql", "startup"]
+
+
 @dataclass(frozen=True)
 class _Meta:
-    """What an entry carries besides its result, known before the worker runs."""
+    """What an entry carries besides its result, known before the worker runs.
+
+    `kind` says what the id is: a catalog item's case, a Load entry, a Load (query language) entry or the Startup
+    entry (whose `dataset` is empty).
+    """
 
     category: Category
     model: Model
@@ -109,7 +135,7 @@ class _Meta:
     dataset: str
     supported: bool
     reference: Reference | None
-    load: bool = False
+    kind: Kind = "case"
     store: Store = "graph"
 
     def entry(self, bench_id: str, **fields: Any) -> Entry:
@@ -128,9 +154,24 @@ class _Meta:
 
 
 def _expected(sel: Selection, db: str, threads: int | None) -> dict[str, _Meta]:
-    """Every id one worker reports: its cases (as in `catalog.cases`) and its loads (as in `catalog.load_ids`)."""
+    """Every id one worker reports: its cases (as in `catalog.cases`), its loads (`catalog.load_ids`), its
+    query-language loads (`catalog.load_ql_ids`) and its startup (`catalog.startup_ids`)."""
     models = model_support(db)
     meta: dict[str, _Meta] = {}
+    startup_id = catalog.startup_id(db, threads)
+    if startup_id in catalog.startup_ids(sel.name, [db]):
+        meta[startup_id] = _Meta(
+            "startup",
+            primary_model(models),
+            "startup",
+            db,
+            catalog.STARTUP_SCALE,
+            threads,
+            "",
+            supported=True,
+            reference="python",
+            kind="startup",
+        )
     for case in catalog.cases(sel.name, [db]):
         if case.threads == threads:
             item = case.item
@@ -161,17 +202,35 @@ def _expected(sel: Selection, db: str, threads: int | None) -> dict[str, _Meta]:
                     dataset,
                     supported=(dataset, store) in reached,
                     reference=None,
-                    load=True,
+                    kind="load",
                     store=store,
+                )
+    if "load_ql" in sel.categories:
+        reached = set(catalog.load_keys(sel.name, models))
+        for dataset, model in catalog.load_ql_keys(sel.name).items():
+            for scale in sel.scales:
+                load_ql_id = catalog.load_ql_id(dataset, db, scale, threads)
+                meta[load_ql_id] = _Meta(
+                    "load_ql",
+                    model,
+                    catalog.load_ql_benchmark(dataset),
+                    db,
+                    scale,
+                    threads,
+                    dataset,
+                    supported=(dataset, "graph") in reached,
+                    reference=None,
+                    kind="load_ql",
                 )
     return meta
 
 
 def _passed(entry: Entry) -> bool:
-    """A result CodSpeed measures: ok/agree, or for a load ok and not ≠ (a load without `counts` is unchecked)."""
+    """A result CodSpeed measures: ok/agree, or for either load row ok and not ≠ (a load without `counts` is
+    unchecked)."""
     if entry.status != "ok":
         return False
-    return entry.answer == "agree" or (entry.category == "load" and entry.answer == "unchecked")
+    return entry.answer == "agree" or (entry.category in LOAD_CATEGORIES and entry.answer == "unchecked")
 
 
 def _top3_mean(values: Sequence[float]) -> float:
@@ -185,7 +244,7 @@ def _budgets(entries: Sequence[Entry], db: str, meta: dict[str, _Meta]) -> dict[
 
     This in-run cutoff is a runaway guard on first (cold) runs; `apply_budget_rule` at 10x on the final timings
     decides the marker. Only cases with at least 3 such entries get a budget, so the in-run budget never depends
-    on which one or two databases happened to run first.
+    on which one or two databases happened to run first. `BUDGET_EXEMPT` categories get none.
     """
     found: dict[tuple[str, str, int | None], list[int]] = {}
     for e in entries:
@@ -194,7 +253,7 @@ def _budgets(entries: Sequence[Entry], db: str, meta: dict[str, _Meta]) -> dict[
     budgets = {}
     for bench_id, m in meta.items():
         values = found.get((m.benchmark, m.scale, m.threads))
-        if values and len(values) >= 3 and not m.load:
+        if values and len(values) >= 3 and m.category not in BUDGET_EXEMPT:
             budgets[bench_id] = max(IN_RUN_FACTOR * _top3_mean(values) / 1e9, IN_RUN_FLOOR_S)
     return budgets
 
@@ -204,14 +263,14 @@ def apply_budget_rule(results: Results) -> None:
 
     A benchmark is an item at one scale and thread setting, across databases. Each entry's budget is 10x the
     mean of the 3 fastest other databases' ok/agree values for it (of all others if fewer than 3); with no
-    other such database no budget applies. Loads (category "load") are exempt, as entries and as
-    yardsticks. The entry itself never counts, so the outcome does not depend on order. Speed is
+    other such database no budget applies. Startup and both load rows (`BUDGET_EXEMPT`) are exempt, as entries
+    and as yardsticks. The entry itself never counts, so the outcome does not depend on order. Speed is
     `timing.median_ns` in bench mode and `preflight_ns` in codspeed mode. The timing of a marked entry is kept.
     """
     groups: dict[tuple[str, str, int | None], list[tuple[Entry, float]]] = {}
     for e in results.entries:
-        if e.status != "ok" or e.answer != "agree" or e.category == "load":
-            continue  # a load is exempt: it has no budget and is not a yardstick (as in the in-run `m.load` rule)
+        if e.status != "ok" or e.answer != "agree" or e.category in BUDGET_EXEMPT:
+            continue  # exempt: no budget and no yardstick (as in the in-run `_budgets`)
         speed = (e.timing.median_ns if e.timing is not None else None) if results.mode == "bench" else e.preflight_ns
         if speed is not None:
             groups.setdefault((e.benchmark, e.scale, e.threads), []).append((e, float(speed)))
@@ -297,6 +356,7 @@ def machine() -> Machine:
         "cpu": cpu_name(),
         "cores": psutil.cpu_count(logical=True) or 0,
         "os": platform.platform(),
+        "memory_bytes": psutil.virtual_memory().total,
     }
 
 
@@ -444,16 +504,59 @@ class _Run:
             meta = _expected(self.sel, db, threads)
             if "error" in probe:
                 self._not_installed(meta, probe["error"])
+                self._resources(db, threads, None, missing=_not_installed_reason(probe["error"]))
             else:
-                self._worker(db, threads, meta, probe["env"][_tag(threads)])
+                extra_env = probe["env"][_tag(threads)]
+                self._worker(db, threads, meta, extra_env)
+                self._resources(db, threads, extra_env)
 
     def _not_installed(self, meta: dict[str, _Meta], error: str) -> None:
         for bench_id, m in meta.items():
             if m.supported:
-                reason = f"not installed: {error} (the package is missing or has no build for {_platform_label()})"
-                self.record(m.entry(bench_id, status="failed", error=reason))
+                self.record(m.entry(bench_id, status="failed", error=_not_installed_reason(error)))
             else:
                 self.record(m.entry(bench_id, status="not_supported", error=f"model {m.model} not supported"))
+
+    def _resources(
+        self, db: str, threads: int | None, extra_env: dict[str, str] | None, *, missing: str | None = None
+    ) -> None:
+        """The Memory and Disk records of one database and thread setting, after its worker finished.
+
+        Every (dataset, store) of the selection at every scale gets one: measured in a fresh child where the
+        database's models reach the load, ⊘ where they do not, ✗ with `missing` when the database is not installed.
+        """
+        if not self.sel.resources:
+            return
+        reached = set(catalog.load_keys(self.sel.name, model_support(db)))
+        raw = self.out_dir / "raw" / f"{db}-{_tag(threads)}" / "resources"
+        env = {**os.environ, **dict(self.runner.env), **(extra_env or {})}
+        for (dataset, store), model in catalog.all_load_keys(self.sel.name).items():
+            for scale in self.sel.scales:
+                record: Resource
+                if (dataset, store) not in reached:
+                    error = f"model {model} not supported"
+                    record = unmeasured(db, dataset, store, scale, threads, "not_supported", error)
+                elif missing is not None:
+                    record = unmeasured(db, dataset, store, scale, threads, "failed", missing)
+                else:
+                    name = f"{catalog.load_benchmark(dataset, store)}-{scale}"
+                    try:
+                        record = run_resource(
+                            db,
+                            self.sel.name,
+                            dataset,
+                            store,
+                            scale,
+                            threads,
+                            workdir=self.workdir / f"{db}-{_tag(threads)}-resources" / name,
+                            raw=raw,
+                            env=env,
+                            timeout_s=self.case_timeout_s,
+                        )
+                    except Exception as exc:  # a harness error fails this record only; the run goes on
+                        error = f"resources harness: {message(exc)}"
+                        record = unmeasured(db, dataset, store, scale, threads, "failed", error)
+                self.results.resources.append(record)
 
     def _worker(self, db: str, threads: int | None, meta: dict[str, _Meta], extra_env: dict[str, str]) -> None:
         name = self.runner.name
@@ -538,10 +641,10 @@ class _Run:
             return True
         failed = meta[pending]
         self.record(failed.entry(pending, status=status, error=error))
-        if failed.load:
+        if failed.kind == "load":
             for bench_id, m in meta.items():
                 same_data = (m.dataset, m.store, m.scale) == (failed.dataset, failed.store, failed.scale)
-                if not m.load and same_data and bench_id not in self.recorded:
+                if m.kind == "case" and same_data and bench_id not in self.recorded:
                     self.record(m.entry(bench_id, status="failed", error=f"load failed: {pending}"))
         return True
 
@@ -729,6 +832,7 @@ def _run_all(
     for db in dbs:
         run.database(db)
     results.entries.sort(key=lambda e: e.id)
+    results.resources.sort(key=lambda r: r.id)
     apply_budget_rule(results)
     results.write(out_dir / RESULTS_FILE)
     return results

@@ -6,7 +6,7 @@ from typing import Any, ClassVar
 
 import duckdb
 
-from graph_bench.databases.base import Database, DatabaseInfo, NotSupported
+from graph_bench.databases.base import Database, DatabaseInfo, NotSupported, provision_once
 from graph_bench.datasets.schema import Column, Dataset
 from graph_bench.types import Model
 
@@ -50,7 +50,7 @@ class DuckDatabase(Database):
     and are recorded in docs/known-disagreements.md; no union table is built to hide it.
 
     The property graph is named after the dataset (`snb`, `graphalytics`). The extension is installed once per
-    process (`prepare_environment`); each connection loads it and activates its grammar, which DuckDB 2.0 needs
+    process (`provision`); each connection loads it and activates its grammar, which DuckDB 2.0 needs
     per connection (https://github.com/cwida/duckpgq-extension/blob/main/docs/GRAMMAR_EXTENSION.md).
     """
 
@@ -65,11 +65,16 @@ class DuckDatabase(Database):
     edges: tuple[str, ...] = ()
 
     @classmethod
-    def prepare_environment(cls) -> None:
-        """Install DuckPGQ from the community repository (it downloads), so that no load clock includes it.
+    def provision(cls) -> None:
+        """Install DuckPGQ from the community repository (it downloads), once per process, so that no clock includes
+        it (`prepare_environment` is this alone).
 
         https://duckdb.org/community_extensions/extensions/duckpgq.html
         """
+        provision_once(cls.name, cls._install)
+
+    @staticmethod
+    def _install() -> None:
         con = duckdb.connect(":memory:")
         try:
             con.execute("INSTALL duckpgq FROM community")
@@ -80,7 +85,9 @@ class DuckDatabase(Database):
         note = "SET threads=1" if self.threads == 1 else "default threads"
         return DatabaseInfo(self.name, duckdb.__version__, "in-process", True, note, "in-memory")
 
-    def load(self, dataset: Dataset) -> None:
+    def open_empty(self) -> None:
+        """An empty in-memory database with DuckPGQ loaded and its grammar active: what `load` does before its
+        first table. `LOAD` reads the extension `provision` installed; it never installs it."""
         # ":memory:" is the in-memory database (https://duckdb.org/docs/current/clients/python/dbapi).
         self.con = duckdb.connect(":memory:")
         if self.threads == 1:
@@ -89,6 +96,9 @@ class DuckDatabase(Database):
         self.con.execute("LOAD duckpgq")
         # Its own statement, per connection (research: required since DuckDB 2.0).
         self.con.execute("SET active_grammar_extensions=['duckpgq']")
+
+    def load(self, dataset: Dataset) -> None:
+        self.open_empty()
         ids = {t.label: t.columns[0].type for t in dataset.nodes}
         for table in dataset.nodes:
             self.con.execute(f"CREATE TABLE {table.label}({_columns(table.columns)})")

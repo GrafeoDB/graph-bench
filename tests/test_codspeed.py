@@ -17,9 +17,15 @@ from graph_bench.results import Entry, Results
 from graph_bench.runner import supervisor
 from graph_bench.suites import catalog
 from graph_bench.suites.catalog import Case
+from tests.conftest import HANG_TIMEOUT_S, resources_off
 
 ROOT = Path(__file__).resolve().parents[1]
-EXTRA = "fake=tests.fakes:FakeDatabase,fake2=tests.fakes:FakeDatabase2,fake_rdf=tests.fakes:FakeRdfDatabase"
+EXTRA = (
+    "fake=tests.fakes:FakeDatabase,fake2=tests.fakes:FakeDatabase2,fake_rdf=tests.fakes:FakeRdfDatabase,"
+    "fake_nostart=tests.fakes:FakeNoStartup"
+)
+WRITES = {"GRAPH_BENCH_EXTRA_SUITES": "tests.fake_writes"}
+WRITE_ID = "benches/test_batch_writes.py::test_fake_write[fake-small]"
 
 
 def _id(item_id: str, db: str = "fake") -> str:
@@ -28,7 +34,7 @@ def _id(item_id: str, db: str = "fake") -> str:
 
 
 def _expected_ids(db: str) -> set[str]:
-    return {c.bench_id for c in catalog.cases("push", [db])} | set(catalog.load_ids("push", [db]))
+    return set(catalog.all_ids("push", [db]))
 
 
 def _env(data_dir: Path, fake: str = "") -> dict[str, str]:
@@ -81,6 +87,7 @@ def codspeed_run(
     launches: list[tuple[list[str], dict[str, str]]] = []
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(supervisor, "BUDGET_FACTOR", 1e9)
+        resources_off(mp)  # tests/test_resources.py covers resources in codspeed mode
         mp.setenv("GRAPH_BENCH_DATA_DIR", str(push_data_dir))
         mp.setenv("GRAPH_BENCH_FAKE", "")
         mp.setenv("GRAPH_BENCH_FAKE2", "wrong:snb_is5")
@@ -123,8 +130,12 @@ def test_codspeed_writes_results_without_timings(
     entries = {e.id: e for e in results.entries}
     assert set(entries) == _expected_ids("fake") | _expected_ids("fake2")
     for entry in entries.values():
+        if entry.category == "startup":  # the children's in-process times, in both modes
+            assert (entry.status, entry.answer) == ("ok", "agree"), entry
+            assert entry.timing is not None and entry.timing.iterations >= 2, entry
+            continue
         assert entry.timing is None, entry
-        if entry.category == "load":
+        if entry.category in ("load", "load_ql"):
             assert entry.status == "ok", entry
             continue
         if entry.id == _id("snb_is5", "fake2"):
@@ -182,13 +193,72 @@ def test_codspeed_marker_outcomes(push_data_dir: Path, tmp_path: Path) -> None:
     assert all(e["timing"] is None for e in entries.values())
 
 
+PANIC = "PanicException: assertion failed: index <= Self::MAX_CAPACITY"
+
+
+def test_codspeed_database_panic_is_the_tests_failure(push_data_dir: Path, tmp_path: Path) -> None:
+    """A panic from a query, an algorithm, a load and open_empty fails that test with its message; the rest run."""
+    fake = "panic:snb_is2,panic:graphalytics_bfs,panic:load_graphalytics,panic:startup"
+    junit = tmp_path / "junit.xml"
+    out = tmp_path / "gb.jsonl"
+    args = ["--db", "fake", "--selection", "push", f"--junitxml={junit}", "--gb-out", str(out)]
+    args += ["-k", "test_snb_is2 or test_snb_is3 or test_graphalytics_bfs or test_load_graphalytics or test_startup"]
+    proc = _pytest(args, _env(push_data_dir, fake))
+    assert proc.returncode == 1, proc.stdout + proc.stderr  # failures, not an interrupted or crashed session
+    outcomes = _junit_outcomes(junit)
+    assert outcomes["test_snb_is2[fake-small]"] == ("failure", f"error: {PANIC}")
+    assert outcomes["test_snb_is3[fake-small]"] == ("passed", "")
+    assert outcomes["test_graphalytics_bfs[fake-small]"][0] == "failure"
+    assert outcomes["test_graphalytics_bfs[fake-small]"][1] == f"error: load failed: {PANIC}"
+    load = next(name for name in outcomes if name.startswith("test_load_graphalytics"))
+    assert outcomes[load] == ("failure", f"error: {PANIC}")
+    startup = next(name for name in outcomes if name.startswith("test_startup"))
+    assert outcomes[startup][0] == "failure"
+    assert "exited with code" not in outcomes[startup][1]  # the child reported the panic itself, it did not die
+    assert PANIC in outcomes[startup][1]
+
+
+def test_codspeed_database_panic_in_close_does_not_end_the_session(push_data_dir: Path, tmp_path: Path) -> None:
+    args = ["--db", "fake", "--selection", "push", "--gb-out", str(tmp_path / "gb.jsonl")]
+    args += ["-k", "test_snb_is2 or test_snb_is3 or test_graphalytics_bfs"]
+    proc = _pytest(args, _env(push_data_dir, "panic:close"))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_codspeed_database_panic_in_an_algorithm_fails_that_test(push_data_dir: Path, tmp_path: Path) -> None:
+    junit = tmp_path / "junit.xml"
+    args = ["--db", "fake", "--selection", "push", f"--junitxml={junit}", "--gb-out", str(tmp_path / "gb.jsonl")]
+    args += ["-k", "test_graphalytics_bfs or test_graphalytics_wcc"]
+    proc = _pytest(args, _env(push_data_dir, "panic:graphalytics_bfs"))
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    outcomes = _junit_outcomes(junit)
+    assert outcomes["test_graphalytics_bfs[fake-small]"] == ("failure", f"error: {PANIC}")
+    assert outcomes["test_graphalytics_wcc[fake-small]"] == ("passed", "")
+
+
+def test_codspeed_keyboard_interrupt_from_the_database_stops_the_session(push_data_dir: Path, tmp_path: Path) -> None:
+    args = ["--db", "fake", "--selection", "push", "--gb-out", str(tmp_path / "gb.jsonl")]
+    args += ["-k", "test_snb_is2 or test_snb_is3"]
+    proc = _pytest(args, _env(push_data_dir, "interrupt:snb_is2"))
+    assert proc.returncode == 2, proc.stdout + proc.stderr  # pytest: interrupted
+
+
 def test_codspeed_prepares_environment_once_before_loads(push_data_dir: Path, tmp_path: Path) -> None:
     trace = tmp_path / "trace.txt"
     env = {**_env(push_data_dir), "GRAPH_BENCH_FAKE_TRACE": str(trace)}
     proc = _pytest(["--db", "fake", "--selection", "push", "--gb-out", str(tmp_path / "gb.jsonl")], env)
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    loads = catalog.selection("push").load_iterations * len(catalog.load_ids("push", ["fake"]))
-    assert trace.read_text(encoding="utf-8").split() == ["environment"] + ["load"] * loads
+    sel = catalog.selection("push")
+    loads = sel.load_iterations * len(catalog.load_ids("push", ["fake"]))
+    loads_ql = sel.load_iterations * len(catalog.load_ql_ids("push", ["fake"]))
+    calls = [line.split() for line in trace.read_text(encoding="utf-8").splitlines()]
+    names = [call for call, *_ in calls if call != "open_empty"]
+    assert names[:3] == ["provision", "provision", "environment"]
+    assert sorted(names[3:]) == sorted(["load"] * loads + ["load_ql"] * loads_ql)
+    # The startup test's children (a preflight child, then one round without --codspeed) ran before any load.
+    opens = [i for i, (call, *_) in enumerate(calls) if call == "open_empty"]
+    assert len(opens) == 2
+    assert max(opens) < [call for call, *_ in calls].index("load")
 
 
 def test_codspeed_environment_failure_fails_the_loads(push_data_dir: Path, tmp_path: Path) -> None:
@@ -288,8 +358,9 @@ def test_codspeed_rerun_remeasures_passed_cases(
     monkeypatch.setenv("GRAPH_BENCH_FAKE", "wrong:snb_is3,hang:snb_is4")
     launches: list[tuple[list[str], dict[str, str]]] = []
     monkeypatch.setattr(supervisor, "_launch", _without_codspeed(launches))
+    resources_off(monkeypatch)
     out = tmp_path / "out"
-    results = supervisor.run_codspeed("push", ["fake"], out, workdir=tmp_path / "work", case_timeout_s=5)
+    results = supervisor.run_codspeed("push", ["fake"], out, workdir=tmp_path / "work", case_timeout_s=HANG_TIMEOUT_S)
 
     ids = [e.id for e in results.entries]
     assert len(ids) == len(set(ids))
@@ -297,7 +368,7 @@ def test_codspeed_rerun_remeasures_passed_cases(
     assert set(entries) == _expected_ids("fake")
     hung = entries.pop(_id("snb_is4"))
     assert hung.status == "timeout"
-    assert "no output for 5 s" in (hung.error or "")
+    assert f"no output for {HANG_TIMEOUT_S:g} s" in (hung.error or "")
     wrong = entries.pop(_id("snb_is3"))
     assert (wrong.status, wrong.answer) == ("ok", "disagree")
     assert all(e.status == "ok" for e in entries.values()), [e for e in entries.values() if e.status != "ok"]
@@ -323,14 +394,16 @@ def test_codspeed_rerun_when_the_last_case_hangs(
     """The last case hangs, so nothing is left unrecorded; the passed cases still get a relaunch to be measured."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("GRAPH_BENCH_DATA_DIR", str(push_data_dir))
-    monkeypatch.setenv("GRAPH_BENCH_FAKE", "hang:snb_rdf_is6")
+    monkeypatch.setenv("GRAPH_BENCH_FAKE", "hang:scan_filter_avg_rdf")
     launches: list[tuple[list[str], dict[str, str]]] = []
     monkeypatch.setattr(supervisor, "_launch", _without_codspeed(launches))
+    resources_off(monkeypatch)
     out = tmp_path / "out"
-    results = supervisor.run_codspeed("push", ["fake"], out, workdir=tmp_path / "work", case_timeout_s=3)
+    results = supervisor.run_codspeed("push", ["fake"], out, workdir=tmp_path / "work", case_timeout_s=HANG_TIMEOUT_S)
 
     lines = [json.loads(line) for line in (out / "raw" / "fake-1" / "pytest.jsonl").read_text("utf-8").splitlines()]
-    hung = _id("snb_rdf_is6")  # the last case: the RDF store is loaded and run last
+    # The last case: the RDF store is loaded and run last, and benches/test_scans.py is its last module.
+    hung = _id("scan_filter_avg_rdf")
     second = next(i for i, line in enumerate(lines) if i > 0 and line["kind"] == "database")
     first_starts = [line["id"] for line in lines[:second] if line["kind"] == "start"]
     assert first_starts[-1] == hung  # the last case of the first process
@@ -427,9 +500,188 @@ def test_codspeed_reports_unreached_loads_as_not_available(push_data_dir: Path, 
     for dataset in ("snb", "graphalytics"):
         load = entries[catalog.load_id(dataset, "fake_rdf", "small", 1)]
         assert (load["status"], load["error"]) == ("not_supported", "model property_graph not supported")
+        load_ql = entries[catalog.load_ql_id(dataset, "fake_rdf", "small", 1)]
+        assert (load_ql["status"], load_ql["error"]) == ("not_supported", "model property_graph not supported")
+    startup = entries[catalog.startup_id("fake_rdf", 1)]
+    assert (startup["status"], startup["answer"]) == ("ok", "agree")  # an RDF probe on an empty store
     assert "not available: model property_graph not supported" in proc.stdout
     rdf_load = entries[catalog.load_id("snb", "fake_rdf", "small", 1, "rdf")]
     assert (rdf_load["status"], rdf_load["answer"]) == ("ok", "agree")
     for case in catalog.cases("push", ["fake_rdf"]):
         if case.item.model == "rdf":
             assert (entries[case.bench_id]["status"], entries[case.bench_id]["answer"]) == ("ok", "agree")
+
+
+# Startup, Load (query language) and write cases ---------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def writes_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A data directory for the push selection with the fake write suite (its own cache key)."""
+    return tmp_path_factory.mktemp("codspeed-writes")
+
+
+def test_codspeed_order_startup_first_writes_after_reads(writes_dir: Path) -> None:
+    """With a write case in the catalog, the collected order is the startup, then per dataset its load, its reads,
+    its writes and its query-language load; the ids still equal `graph-bench list`."""
+    env = {**_env(writes_dir), **WRITES}
+    proc = _pytest(["--collect-only", "-q", "--db", "fake", "--selection", "push"], env)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    collected = [line for line in proc.stdout.splitlines() if "::" in line]
+    code = "from graph_bench.suites import catalog; print(chr(10).join(catalog.all_ids('push', ['fake'])))"
+    listed = subprocess.run(
+        [sys.executable, "-c", code], cwd=ROOT, env=env, capture_output=True, text=True, check=True
+    ).stdout.split()
+    assert sorted(collected) == listed
+    assert WRITE_ID in collected
+    assert collected[0] == catalog.startup_id("fake", 1)
+    snb = [i for i, bench_id in enumerate(collected) if "test_snb_is" in bench_id or "test_snb_ic" in bench_id]
+    write = collected.index(WRITE_ID)
+    assert collected.index(catalog.load_id("snb", "fake", "small", 1)) < min(snb)
+    assert max(snb) < write < collected.index(catalog.load_ql_id("snb", "fake", "small", 1))
+    assert collected.index(catalog.load_ql_id("snb", "fake", "small", 1)) < collected.index(
+        catalog.load_id("snb", "fake", "small", 1, "rdf")
+    )
+
+
+def _write_session(
+    writes_dir: Path, tmp_path: Path, fake: str = "", item: str = "fake_write"
+) -> tuple[dict[str, Any], list[str], list[str]]:
+    """`pytest benches` on the snb load, IS4 and one fake write case: the entries, the spy's calls and the traced
+    phases."""
+    trace, calls = tmp_path / "trace.txt", tmp_path / "calls.txt"
+    env = {
+        **_env(writes_dir, fake),
+        **WRITES,
+        "GRAPH_BENCH_SPY": str(tmp_path / "spy.txt"),
+        "GRAPH_BENCH_SPY_CALLS": str(calls),
+        "GRAPH_BENCH_FAKE_TRACE": str(trace),
+    }
+    out = tmp_path / "gb.jsonl"
+    args = ["--db", "fake", "--selection", "push", "-p", "tests.benchmark_spy", "--gb-out", str(out)]
+    args += ["-k", f"test_load_snb or test_snb_is4 or test_{item}["]
+    proc = _pytest(args, env)
+    lines = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
+    entries = {line["id"]: line for line in lines if line["kind"] == "entry"}
+    phases = [line.split()[0] for line in trace.read_text(encoding="utf-8").splitlines()]
+    phases = [p for p in phases if p in ("setup", "run", "check", "teardown")]
+    collapsed = [p for i, p in enumerate(phases) if i == 0 or phases[i - 1] != p]
+    entries["returncode"] = proc.returncode  # type: ignore[assignment]
+    return entries, calls.read_text(encoding="utf-8").splitlines(), collapsed
+
+
+def test_codspeed_write_case_uses_pedantic_setup(writes_dir: Path, tmp_path: Path) -> None:
+    """A write case reaches CodSpeed through `pedantic` with a setup; its read-back and teardown run outside the
+    timed target (one round without --codspeed: setup, run, then the read-back after `pedantic` returns)."""
+    entries, calls, phases = _write_session(writes_dir, tmp_path)
+    assert entries.pop("returncode") == 0
+    entry = entries[WRITE_ID]
+    assert (entry["status"], entry["answer"], entry["error"]) == ("ok", "agree", None), entry
+    rounds = catalog.selection("push").iterations
+    assert f"{WRITE_ID} pedantic setup=True rounds={rounds}" in calls
+    assert f"{_id('snb_is4')} call" in calls
+    assert phases == ["check"] + ["setup", "run", "check", "teardown", "check"] * 2  # preflight, one round
+
+
+@pytest.mark.parametrize(
+    ("fake", "status", "answer", "start"),
+    [
+        ("wrong_later:fake_write", "ok", "disagree", "read-back after timed run 1 differs: after the run: "),
+        ("leak:fake_write", "failed", "agree", "the case left the graph changed: "),
+        ("wrong:fake_write", "ok", "disagree", "binding 0: 2 rows != 1 rows"),
+    ],
+)
+def test_codspeed_write_case_markers(
+    writes_dir: Path, tmp_path: Path, fake: str, status: str, answer: str, start: str
+) -> None:
+    entries, calls, _ = _write_session(writes_dir, tmp_path, fake)
+    assert entries.pop("returncode") == 1
+    entry = entries[WRITE_ID]
+    assert (entry["status"], entry["answer"]) == (status, answer), entry
+    assert (entry["detail"] if answer == "disagree" else entry["error"]).startswith(start)
+    assert entries[_id("snb_is4")]["answer"] == "agree"
+    pedantic = [call for call in calls if call.startswith(WRITE_ID)]
+    assert len(pedantic) == (0 if fake.startswith("wrong:") else 1)  # a wrong preflight never reaches CodSpeed
+
+
+def test_codspeed_startup_and_load_ql_outcomes(push_data_dir: Path, tmp_path: Path) -> None:
+    """A database without `open_empty` skips its startup as not available; a failing query-language load fails
+    its own test only; a wrong probe answer is a wrong answer, never benchmarked."""
+    junit = tmp_path / "junit.xml"
+    out = tmp_path / "gb.jsonl"
+    env = {**_env(push_data_dir), "GRAPH_BENCH_FAKE_NOSTART": "crash_soft:load_ql_snb"}
+    env["GRAPH_BENCH_SPY"] = str(tmp_path / "spy.txt")
+    args = ["--db", "fake_nostart", "--selection", "push", "--gb-out", str(out), f"--junitxml={junit}"]
+    args += ["-p", "tests.benchmark_spy", "-k", "test_startup or test_load_ql or test_snb_is1"]
+    proc = _pytest(args, env)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    outcomes = _junit_outcomes(junit)
+    assert outcomes["test_startup[fake_nostart-empty]"] == ("skipped", "not available: startup")
+    assert outcomes["test_load_ql_snb[fake_nostart-small]"] == ("failure", "error: RuntimeError: soft crash")
+    assert outcomes["test_load_ql_graphalytics[fake_nostart-small]"] == ("passed", "")
+    assert outcomes["test_snb_is1[fake_nostart-small]"] == ("passed", "")
+    lines = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
+    entries = {line["id"]: line for line in lines if line["kind"] == "entry"}
+    ql = entries[catalog.load_ql_id("graphalytics", "fake_nostart", "small", 1)]
+    assert (ql["status"], ql["answer"]) == ("ok", "agree") and ql["load_ns"] > 0
+    spied = (tmp_path / "spy.txt").read_text(encoding="utf-8").split()
+    assert catalog.startup_id("fake_nostart", 1) not in spied
+
+    wrong = tmp_path / "wrong"
+    wrong.mkdir()
+    env = {**_env(push_data_dir, "wrong:startup"), "GRAPH_BENCH_SPY": str(wrong / "spy.txt")}
+    args = ["--db", "fake", "--selection", "push", "--gb-out", str(wrong / "gb.jsonl"), f"--junitxml={wrong / 'j.xml'}"]
+    args += ["-p", "tests.benchmark_spy", "-k", "test_startup"]
+    assert _pytest(args, env).returncode == 1
+    kind, reason = _junit_outcomes(wrong / "j.xml")["test_startup[fake-empty]"]
+    assert (kind, reason) == ("failure", "wrong answer: child 1: probe returned [[1]], expected [[0]]")
+    assert not (wrong / "spy.txt").exists()
+
+
+def test_codspeed_write_case_checks_the_setup_state(writes_dir: Path, tmp_path: Path) -> None:
+    """CodSpeed's pedantic setup checks the `ready` reference too: a setup that misses it after the preflight
+    fails the case."""
+    write_id = "benches/test_batch_writes.py::test_fake_setup_write[fake-small]"
+    entries, calls, _ = _write_session(writes_dir, tmp_path, item="fake_setup_write")
+    assert entries.pop("returncode") == 0
+    assert (entries[write_id]["status"], entries[write_id]["answer"]) == ("ok", "agree")
+    later = tmp_path / "later"
+    later.mkdir()
+    entries, calls, _ = _write_session(writes_dir, later, "nosetup_later:fake_setup_write", item="fake_setup_write")
+    assert entries.pop("returncode") == 1
+    entry = entries[write_id]
+    assert entry["status"] == "failed"
+    assert entry["error"] == "setup did not reach its state: binding 0, row 0, col 1: 'loaded' != 'ready'"
+    assert any(call.startswith(write_id + " pedantic setup=True") for call in calls)
+
+
+class _Rounds:
+    """A stand-in for the benchmark fixture whose `pedantic` runs every round, as CodSpeed does."""
+
+    def __init__(self) -> None:
+        self.targets = 0
+
+    def pedantic(self, target: Any, setup: Any = None, rounds: int = 1, **_: Any) -> None:
+        for _ in range(rounds):
+            args, kwargs = setup() if setup is not None else ((), {})
+            self.targets += 1
+            target(*args, **kwargs)
+
+
+def test_codspeed_startup_series_stops_at_the_first_failing_child(
+    push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With CodSpeed's rounds, a failing child after the preflight ends the series, as in bench mode."""
+    from benches._cases import Bench, StartupCase, run_startup
+
+    monkeypatch.setenv("GRAPH_BENCH_FAKE", "crash_soft:startup_later")
+    out = tmp_path / "gb.jsonl"
+    bench = Bench("fake", catalog.selection("push"), (1,), out, tmp_path / "work", {}, 60.0)
+    benchmark = _Rounds()
+    with pytest.raises(pytest.fail.Exception, match="error: RuntimeError: soft crash"):
+        run_startup(benchmark, bench, StartupCase("fake", 1))
+    bench.close()
+    assert benchmark.targets == 1  # the second round never starts
+    entry = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()][-1]
+    assert (entry["status"], entry["error"], entry["timing"]) == ("failed", "RuntimeError: soft crash", None)
+    assert entry["preflight_ns"] > 0
