@@ -14,8 +14,14 @@ Edge properties (`KNOWS.creationDate`, `HAS_MEMBER.joinDate`, `STUDY_AT.classYea
 mapped yet: a plain triple cannot carry them, and the queries that run on RDF (SNB IS1, IS4, IS6) do not read
 them. Mapping them (RDF 1.2 triple terms or an edge node) is decided when a query needs them.
 
-The mapping yields neutral `Triple`s; `ntriples` writes one as an N-Triples line (Grafeo's `INSERT DATA` chunks),
-and an adapter with its own term types (pyoxigraph) converts `Iri` and `Literal` itself. `bind` inlines a query's
+The RDF form of a dataset is an N-Triples file, `ntriples_path(dataset)` (`<dataset root>/rdf/<name>.nt`), written
+by `write_ntriples` when the data is prepared (`graph-bench data prepare`, `datasets.cache.prepare`): untimed and
+cached with the CSVs, under the same cache key (this module is part of it). Every RDF loader times only its own
+documented file loader on that file, so the serialization is never inside a load clock: Grafeo
+`db.load_rdf(path, format="ntriples")` (an `INSERT DATA` fallback until a Grafeo 0.6.1 build is installed),
+Oxigraph `Store.bulk_load(path=str(ntriples_path(dataset)), format=RdfFormat.N_TRIPLES)`.
+
+The mapping yields neutral `Triple`s; `ntriples` writes one as an N-Triples line. `bind` inlines a query's
 parameters as literals, `python_value` converts a result literal back to the Python type the references use, and
 `COUNT_NODES` / `COUNT_EDGES` are the SPARQL load check.
 """
@@ -24,6 +30,7 @@ import math
 import re
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
@@ -124,6 +131,21 @@ def ntriples(triple: Triple) -> str:
     """One triple as an N-Triples line (without the newline); also valid inside a SPARQL `INSERT DATA` block."""
     subject, predicate, obj = triple
     return f"<{subject}> <{predicate}> {_term_text(obj)} ."
+
+
+def ntriples_path(dataset: Dataset) -> Path:
+    """The dataset's N-Triples file, `<root>/rdf/<name>.nt`, written by `write_ntriples` at prepare time."""
+    return dataset.root / "rdf" / f"{dataset.name}.nt"
+
+
+def write_ntriples(dataset: Dataset) -> Path:
+    """Write every triple of the dataset to `ntriples_path(dataset)` (UTF-8, one line each); return the path."""
+    path = ntriples_path(dataset)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="\n") as fh:
+        for triple in triples(dataset):
+            fh.write(ntriples(triple) + "\n")
+    return path
 
 
 def _param_literal(param: object) -> Literal:

@@ -3,7 +3,7 @@
 FakeDatabase (and FakeDatabase2 to FakeDatabase4) serve all three models, one dialect each (the standard ones), in
 two stores, like Grafeo: `load_store` remembers the store, and `query_model` fails unless the instance holds the
 store the model reads and the text is the model's dialect text, so a wrong route shows up as ✗. FakeRdfDatabase
-serves RDF only, through the single-model defaults (`load` and `query`).
+serves RDF only and FakeSqlDatabase SQL/PGQ only, through the single-model defaults (`load` and `query`).
 
 Behaviour flags, a comma list in `GRAPH_BENCH_FAKE` (FakeDatabase), or `GRAPH_BENCH_FAKE2` to `GRAPH_BENCH_FAKE4`
 (FakeDatabase2 to FakeDatabase4):
@@ -161,6 +161,21 @@ class FakeRdfDatabase(FakeDatabase):
     dialects: ClassVar[Mapping[Model, str]] = {}
     store: Store = "rdf"
     env_var: ClassVar[str] = "GRAPH_BENCH_FAKE_RDF"
+
+    load_store = _Base.load_store
+    query_model = _Base.query_model
+
+
+class FakeSqlDatabase(FakeDatabase):
+    """Supports only SQL/PGQ (dialect "duckpgq", falling back to the standard texts) through the single-model
+    defaults, like DuckDB: its algorithms run too, since an SQL/PGQ database reads a property graph."""
+
+    name: ClassVar[str] = "fake_sql"
+    display_name: ClassVar[str] = "Fake SQL"
+    models: ClassVar[frozenset[Model]] = frozenset({"sql_pgq"})
+    dialect: ClassVar[str] = "duckpgq"
+    dialects: ClassVar[Mapping[Model, str]] = {}
+    env_var: ClassVar[str] = "GRAPH_BENCH_FAKE_SQL"
 
     load_store = _Base.load_store
     query_model = _Base.query_model

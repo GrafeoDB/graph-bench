@@ -95,3 +95,31 @@ def test_snb_mapping_counts_match_the_dataset(push_data_dir: Path, monkeypatch: 
     edges = [t for t in triples if isinstance(t[2], rdf.Iri) and t[1] != rdf.RDF_TYPE]
     assert len({t[0] for t in types}) == len(types) == ds.node_count
     assert len(set(edges)) == len(edges) == ds.edge_count
+
+
+def test_write_ntriples_writes_the_mapping(tmp_path: Path) -> None:
+    ds = _tiny(tmp_path)
+    path = rdf.write_ntriples(ds)
+    assert path == rdf.ntriples_path(ds) == tmp_path / "rdf" / "tiny.nt"
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert lines == [rdf.ntriples(t) for t in rdf.triples(ds)]
+
+
+def test_prepare_writes_the_snb_ntriples_file(push_data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The RDF form is written at prepare time (untimed), for the datasets RDF items read: SNB, not Graphalytics."""
+    monkeypatch.setenv("GRAPH_BENCH_DATA_DIR", str(push_data_dir))
+    datasets = cache.prepare("push")
+    snb = datasets[("snb", "small")]
+    lines = rdf.ntriples_path(snb).read_text(encoding="utf-8").splitlines()
+    assert lines == [rdf.ntriples(t) for t in rdf.triples(snb)]
+    assert not rdf.ntriples_path(datasets[("graphalytics", "small")]).exists()
+
+
+def test_every_comment_replies_to_exactly_one_message(push_data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The premise of the IS6 equivalences (SQL/PGQ ANY SHORTEST, the reference's `_root_post`): reply chains are
+    tree paths, every Comment has exactly one REPLY_OF out-edge and no Post has one."""
+    monkeypatch.setenv("GRAPH_BENCH_DATA_DIR", str(push_data_dir))
+    ds = cache.prepare("push")[("snb", "small")]
+    comments = {row["id"] for table in ds.nodes if table.label == "Comment" for row in ds.rows(table)}
+    sources = [row["src"] for table in ds.edges if table.type == "REPLY_OF" for row in ds.rows(table)]
+    assert sorted(sources) == sorted(comments)

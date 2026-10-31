@@ -5,7 +5,9 @@ bindings and reference answers (`same_as`) and return the same columns in the sa
 
 SPARQL has no standard query parameters, so a parameter is an inline `VALUES` block, first in the group:
 `VALUES ?personId { $personId }`, where an RDF adapter replaces `$personId` with the binding's literal through
-`rdf.bind` (the same text runs on every RDF store). Results are read by variable name.
+`rdf.bind` (the same text runs on every RDF store). Results are read by variable name. SPARQL also allows `$x` as a
+variable; these texts write variables as `?x` only, since `rdf.bind` reads every `$word` as a parameter (a `$x`
+without a parameter fails with KeyError, never silently).
 
 - IS4's "Message" is `?m a ?type` over `VALUES ?type { v:Post v:Comment }`; the image file stands in for empty
   content with `OPTIONAL` and `IF(!BOUND(...) ...)`, as the openCypher `CASE` does.

@@ -42,7 +42,7 @@ from graph_bench.runner.timing import measure
 from graph_bench.suites import Algorithm, Query, catalog
 from graph_bench.suites.catalog import Case, Selection
 from graph_bench.suites.graphalytics import min_member
-from graph_bench.types import MODEL_STORE, AnswerVerdict, Status, Store
+from graph_bench.types import AnswerVerdict, Status, Store
 
 DEFAULT_CASE_TIMEOUT_S = 600.0
 
@@ -215,6 +215,11 @@ class LoadCheck:
             self.answer, self.detail = count_check(db, dataset)
         except Exception as exc:
             self.error = f"counting the loaded data: {message(exc)}"
+
+
+def unsupported_load_entry(load_id: str, model: str) -> dict[str, Any]:
+    """The entry of a load the database's models do not reach: ⊘, with the error of the cases' model gate."""
+    return {"kind": "entry", "id": load_id, "status": "not_supported", "error": f"model {model} not supported"}
 
 
 def load_entry(load_id: str, load_ns: int, check: LoadCheck) -> dict[str, Any]:
@@ -390,7 +395,8 @@ def run(
         emit = emitter(fh)
         emit(database_line(db_cls, workdir, threads))
 
-        # Every (dataset, store, scale) with a supported item gets a load, as in `catalog.load_ids`.
+        # Every (dataset, store, scale) with a supported item gets a load; the selection's other loads are ⊘, as
+        # in `catalog.load_ids`.
         groups: dict[tuple[str, Store, str], list[Case]] = {}
         if threads in sel.threads:
             for dataset, store in catalog.load_keys(sel.name, db_cls.models):
@@ -399,15 +405,22 @@ def run(
         for case in catalog.cases(sel.name, [db_name]):
             if case.threads != threads or case.bench_id in skip:
                 continue
-            model = case.item.model
-            if model in db_cls.models:
-                groups[(case.item.dataset, MODEL_STORE[model], case.scale)].append(case)
+            item = case.item
+            if item.supported_by(db_cls.models):
+                groups[(item.dataset, item.store, case.scale)].append(case)
             else:
-                emit(case_entry(case, status="not_supported", error=f"model {model} not supported"))
+                emit(case_entry(case, status="not_supported", error=f"model {item.model} not supported"))
 
         load_ids: dict[tuple[str, Store, str], str] = {}
-        if "load" in sel.categories:
-            load_ids = {key: catalog.load_id(key[0], db_name, key[2], threads, key[1]) for key in groups}
+        if "load" in sel.categories and threads in sel.threads:
+            for (dataset, store), model in catalog.all_load_keys(sel.name).items():
+                for scale in sel.scales:
+                    key = (dataset, store, scale)
+                    load_id = catalog.load_id(dataset, db_name, scale, threads, store)
+                    if key in groups:
+                        load_ids[key] = load_id
+                    elif load_id not in skip:
+                        emit(unsupported_load_entry(load_id, model))
         reported = {key: load_id for key, load_id in load_ids.items() if load_id not in skip}
         needed = [key for key in sorted(groups) if groups[key] or key in reported]
         if not needed:
@@ -449,9 +462,11 @@ def _run_dataset(
             progress = {"kind": "progress", "id": load_id}
             iterations = settings.selection.load_iterations
             check = load_id is not None
-            loaded = load(
-                db_cls, dataset, workdir, threads, iterations, lambda: emit(progress), check=check, store=store
-            )
+
+            def on_load() -> None:
+                emit(progress)
+
+            loaded = load(db_cls, dataset, workdir, threads, iterations, on_load, check=check, store=store)
         except Exception as exc:
             text = message(exc)
     if loaded is None:  # `text` holds the setup or load error

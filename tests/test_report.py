@@ -344,3 +344,20 @@ def test_load_rows_name_the_rdf_store_and_follow_the_graph_loads() -> None:
     assert ranking.title("load_snb_rdf") == "LDBC SNB (RDF)"
     order = sorted(["load_snb_rdf", "load_graphalytics", "load_snb"], key=ranking._benchmark_key)
     assert order == ["load_snb", "load_graphalytics", "load_snb_rdf"]
+
+
+def test_a_database_without_an_rdf_store_shows_not_available_in_the_load_row(results: Results) -> None:
+    """The worker reports a load a database's models do not reach as `not_supported`, so the Load table shows ⊘
+    for it and the overview counts it as ⊘, not as a missing correct load."""
+    load: Category = "load"
+    results.entries += [
+        _entry(load, "load_snb", "grafeo", "ok", "agree", load_s=0.137),
+        _entry(load, "load_snb", "ladybug", "ok", "agree", load_s=0.136),
+        _entry(load, "load_snb_rdf", "grafeo", "ok", "agree", load_s=0.621),
+        _entry(load, "load_snb_rdf", "ladybug", "not_supported", "unchecked"),
+    ]
+    text = render_readme(results)
+    assert _row(text, "Category")[:3] == ["Grafeo", "fake", "LadybugDB"]
+    assert _row(text, "LDBC SNB (RDF)") == ["**0.621**", "", "⊘"]
+    assert _row(text, "LDBC SNB") == ["0.137", "", "**0.136**"]
+    assert _row(text, "Load") == ["✓ 2/2", "", "✓ 1/2 ⊘1"]

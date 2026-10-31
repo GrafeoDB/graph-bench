@@ -39,10 +39,11 @@ from graph_bench.runner.worker import (
     prepare_environment,
     remove,
     start_case,
+    unsupported_load_entry,
 )
 from graph_bench.suites import Algorithm, Query, catalog
 from graph_bench.suites.catalog import Case, Selection
-from graph_bench.types import MODEL_STORE, Store
+from graph_bench.types import Store
 
 # (dataset, store, scale, threads)
 DataKey = tuple[str, Store, str, int | None]
@@ -69,7 +70,7 @@ class LoadCase:
 
 def case_key(case: Case) -> DataKey:
     """The loaded instance a case runs on: its dataset in the store its model reads."""
-    return (case.item.dataset, MODEL_STORE[case.item.model], case.scale, case.threads)
+    return (case.item.dataset, case.item.store, case.scale, case.threads)
 
 
 class LoadFailed(Exception):
@@ -195,7 +196,10 @@ class Bench:
         progress = {"kind": "progress", "id": None}
         try:
             self.prepare()
-            on_load = lambda: self.emit(progress)  # noqa: E731
+
+            def on_load() -> None:
+                self.emit(progress)
+
             loaded = load(self.db_cls, self.dataset(key), self.workdir, key[3], 1, on_load, store=key[1])
         except Exception as exc:
             self._failed[key] = _load_error(exc)
@@ -246,9 +250,8 @@ def _outcome(pf: Preflight) -> NoReturn:
 
 def run_case(benchmark: Any, bench: Bench, case: Case) -> None:
     """Preflight the case; benchmark it only when it completed in budget with a correct answer."""
-    model = case.item.model
-    if model not in bench.db_cls.models:
-        error = f"model {model} not supported"
+    if not case.item.supported_by(bench.db_cls.models):
+        error = f"model {case.item.model} not supported"
         bench.emit(case_entry(case, status="not_supported", error=error))
         pytest.skip(f"not available: {error}")
     try:
@@ -277,6 +280,11 @@ def run_load(benchmark: Any, bench: Bench, lc: LoadCase) -> None:
     instance's node and edge counts are checked outside the timed target (in the next round's setup, and after the
     last round), so a ≠ or a counting error is known only after CodSpeed measured the load.
     """
+    if (lc.dataset, lc.store) not in catalog.load_keys(bench.selection.name, bench.db_cls.models):
+        model = catalog.all_load_keys(bench.selection.name)[(lc.dataset, lc.store)]
+        entry = unsupported_load_entry(lc.bench_id, model)
+        bench.emit(entry)
+        pytest.skip(f"not available: {entry['error']}")
     key = lc.key
     bench.emit({"kind": "start", "id": lc.bench_id})
     bench.release()
@@ -340,7 +348,7 @@ def make_test(item: Query | Algorithm) -> Callable[..., None]:
 
 def load_keys() -> list[tuple[str, Store]]:
     """Every (dataset, store) a catalog item reads: one load test each."""
-    return sorted({(item.dataset, MODEL_STORE[item.model]) for item in catalog.ITEMS})
+    return sorted({(item.dataset, item.store) for item in catalog.ITEMS})
 
 
 def make_load_test(dataset: str, store: Store = "graph") -> Callable[..., None]:

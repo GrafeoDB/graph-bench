@@ -9,15 +9,15 @@ from typing import Any
 
 import networkx
 
-from graph_bench.datasets import graphalytics, snb
+from graph_bench.datasets import graphalytics, rdf, snb
 from graph_bench.datasets.schema import Dataset
 from graph_bench.suites import catalog
 from graph_bench.suites import graphalytics as ga_suite
 from graph_bench.suites import snb as snb_suite
 
 SEED = 42
-# Dataset-to-adapter loading contract; bump when the CSV layout the adapters consume changes.
-BINDINGS = "csv-v1"
+# Dataset-to-adapter loading contract; bump when the CSV layout or the N-Triples file the adapters consume changes.
+BINDINGS = "csv-v1,nt-v1"
 
 _PKG = Path(__file__).resolve().parent.parent
 
@@ -69,6 +69,14 @@ def _write_references(selection: str, snb_ds: Dataset, ga_ds: Dataset) -> None:
         path.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8", newline="\n")
 
 
+def _write_rdf(selection: str, datasets: tuple[Dataset, ...]) -> None:
+    """Write the N-Triples file (`rdf.write_ntriples`) of every dataset an RDF item of the selection reads."""
+    wanted = {item.dataset for item in catalog.items(selection) if item.store == "rdf"}
+    for ds in datasets:
+        if ds.name in wanted:
+            rdf.write_ntriples(ds)
+
+
 def prepare(selection: str) -> dict[tuple[str, str], Dataset]:
     """Generate (or reuse) the datasets and reference answers for a selection, keyed by (dataset name, scale)."""
     base = data_dir() / dataset_key(selection)
@@ -85,6 +93,7 @@ def prepare(selection: str) -> dict[tuple[str, str], Dataset]:
                     shutil.rmtree(root)
             snb_ds = snb.generate(scale, snb_root, SEED)
             ga_ds = graphalytics.generate(snb_ds, ga_root)
+            _write_rdf(selection, (snb_ds, ga_ds))
             _write_references(selection, snb_ds, ga_ds)
             snb_ds.root.joinpath(".complete").write_text("ok", encoding="utf-8")
             ga_ds.root.joinpath(".complete").write_text("ok", encoding="utf-8")

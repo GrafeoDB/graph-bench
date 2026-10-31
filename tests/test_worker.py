@@ -15,7 +15,10 @@ from graph_bench.suites import catalog
 from graph_bench.suites.catalog import Case
 
 ROOT = Path(__file__).resolve().parent.parent
-EXTRA = "fake=tests.fakes:FakeDatabase,fake2=tests.fakes:FakeDatabase2,fake_rdf=tests.fakes:FakeRdfDatabase"
+EXTRA = (
+    "fake=tests.fakes:FakeDatabase,fake2=tests.fakes:FakeDatabase2,fake_rdf=tests.fakes:FakeRdfDatabase,"
+    "fake_sql=tests.fakes:FakeSqlDatabase"
+)
 
 Lines = list[dict[str, Any]]
 
@@ -130,9 +133,13 @@ def test_worker_marks_unsupported_model(push_data_dir: Path, tmp_path: Path) -> 
     assert lines[0]["kind"] == "database"
     entries = _entries(lines)
     rdf_load = catalog.load_id("snb", "fake_rdf", "small", 1, "rdf")
-    assert catalog.load_ids("push", ["fake_rdf"]) == [rdf_load]
-    assert set(entries) == {c.bench_id for c in catalog.cases("push", ["fake_rdf"])} | {rdf_load}
+    assert set(entries) == {c.bench_id for c in catalog.cases("push", ["fake_rdf"])} | set(
+        catalog.load_ids("push", ["fake_rdf"])
+    )
     models = {c.bench_id: c.item.model for c in catalog.cases("push", ["fake_rdf"])}
+    # The graph loads its models do not reach are ⊘ like the cases, with the model gate's error.
+    for dataset in ("snb", "graphalytics"):
+        models[catalog.load_id(dataset, "fake_rdf", "small", 1)] = "property_graph"
     started = {line["id"] for line in lines if line["kind"] == "start"}
     assert started == {i for i, model in models.items() if model == "rdf"} | {rdf_load}
     for bench_id, entry in entries.items():
@@ -284,3 +291,25 @@ def test_worker_environment_failure_fails_the_loads(push_data_dir: Path, tmp_pat
         assert (entries[load_id]["status"], entries[load_id]["error"]) == ("failed", error)
     cases = [c.bench_id for c in catalog.cases("push", ["fake"])]
     assert all((entries[i]["status"], entries[i]["error"]) == ("failed", f"load failed: {error}") for i in cases)
+
+
+def test_worker_runs_algorithms_on_an_sql_pgq_database(push_data_dir: Path, tmp_path: Path) -> None:
+    """An SQL/PGQ-only database (DuckDB's shape) loads the graph store of both datasets and runs the algorithms;
+    property graph and RDF cases and the RDF load are ⊘."""
+    lines, proc = run_worker(tmp_path / "sql.jsonl", push_data_dir, db="fake_sql")
+    assert proc.returncode == 0, proc.stderr
+    entries = _entries(lines)
+    assert set(entries) == {c.bench_id for c in catalog.cases("push", ["fake_sql"])} | set(
+        catalog.load_ids("push", ["fake_sql"])
+    )
+    for case in catalog.cases("push", ["fake_sql"]):
+        entry = entries[case.bench_id]
+        if case.item.category in ("sql_pgq", "algorithms"):
+            assert (entry["status"], entry["answer"]) == ("ok", "agree"), entry
+        else:
+            assert (entry["status"], entry["error"]) == ("not_supported", f"model {case.item.model} not supported")
+    for dataset in ("snb", "graphalytics"):
+        load = entries[catalog.load_id(dataset, "fake_sql", "small", 1)]
+        assert (load["status"], load["answer"]) == ("ok", "agree")
+    rdf_load = entries[catalog.load_id("snb", "fake_sql", "small", 1, "rdf")]
+    assert (rdf_load["status"], rdf_load["error"]) == ("not_supported", "model rdf not supported")

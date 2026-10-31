@@ -58,7 +58,7 @@ from graph_bench.results import Entry, GrafeoSource, Machine, Reference, Results
 from graph_bench.runner.worker import DEFAULT_CASE_TIMEOUT_S, reference_kind
 from graph_bench.suites import catalog
 from graph_bench.suites.catalog import Selection
-from graph_bench.types import MODEL_STORE, Category, Model, Store, Timing
+from graph_bench.types import Category, Model, Store, Timing
 
 RESULTS_FILE = "results.json"
 GRAFEO_FILE = Path(".graph-bench") / "grafeo.json"
@@ -133,30 +133,28 @@ def _expected(sel: Selection, db: str, threads: int | None) -> dict[str, _Meta]:
                 case.scale,
                 threads,
                 item.dataset,
-                supported=item.model in models,
+                supported=item.supported_by(models),
                 reference=reference_kind(item),
-                store=MODEL_STORE[item.model],
+                store=item.store,
             )
     if "load" in sel.categories:
-        for item in catalog.items(sel.name):
-            if item.model in models:
-                store = MODEL_STORE[item.model]
-                for scale in sel.scales:
-                    load_id = catalog.load_id(item.dataset, db, scale, threads, store)
-                    load = _Meta(
-                        "load",
-                        item.model,
-                        catalog.load_benchmark(item.dataset, store),
-                        db,
-                        scale,
-                        threads,
-                        item.dataset,
-                        supported=True,
-                        reference=None,
-                        load=True,
-                        store=store,
-                    )
-                    meta.setdefault(load_id, load)
+        reached = set(catalog.load_keys(sel.name, models))
+        for (dataset, store), model in catalog.all_load_keys(sel.name).items():
+            for scale in sel.scales:
+                load_id = catalog.load_id(dataset, db, scale, threads, store)
+                meta[load_id] = _Meta(
+                    "load",
+                    model,
+                    catalog.load_benchmark(dataset, store),
+                    db,
+                    scale,
+                    threads,
+                    dataset,
+                    supported=(dataset, store) in reached,
+                    reference=None,
+                    load=True,
+                    store=store,
+                )
     return meta
 
 

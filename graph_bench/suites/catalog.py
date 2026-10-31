@@ -8,7 +8,7 @@ from typing import Any
 
 from graph_bench.databases import model_support
 from graph_bench.suites import Algorithm, Query, graphalytics, snb, snb_rdf, snb_sql
-from graph_bench.types import CATEGORY_ORDER, MODEL_STORE, Category, Model, Store
+from graph_bench.types import CATEGORY_ORDER, Category, Model, Store
 
 __all__ = [
     "ITEMS",
@@ -17,6 +17,7 @@ __all__ = [
     "Case",
     "Query",
     "Selection",
+    "all_load_keys",
     "cases",
     "load_benchmark",
     "load_id",
@@ -116,7 +117,8 @@ def items(selection_name: str) -> list[Query | Algorithm]:
 def cases(selection_name: str, dbs: Sequence[str]) -> list[Case]:
     """Every item of the selection for every database, scale and thread setting, sorted by `bench_id`.
 
-    Items whose model a database does not support are included; they become not-available entries.
+    Items a database's models do not support (`item.supported_by`) are included; they become not-available
+    entries.
     """
     sel = selection(selection_name)
     for db in dbs:
@@ -131,26 +133,37 @@ def cases(selection_name: str, dbs: Sequence[str]) -> list[Case]:
     return sorted(result, key=lambda c: c.bench_id)
 
 
-def load_keys(selection_name: str, models: frozenset[Model]) -> list[tuple[str, Store]]:
-    """The (dataset, store) loads of a database serving `models`, sorted: one per store its items read.
+def all_load_keys(selection_name: str) -> dict[tuple[str, Store], Model]:
+    """Every (dataset, store) the selection's items read, sorted, with the model its load entry carries.
 
-    An item of model M reads the store `MODEL_STORE[M]` of its dataset: property graph and SQL/PGQ items share
-    the graph store, RDF items read the RDF store, a separate load.
+    An item reads `item.store` of its dataset: property graph and SQL/PGQ items and the algorithms share the graph
+    store, RDF items read the RDF store, a separate load. The model is the first reading item's (catalog order):
+    `property_graph` for a graph load, `rdf` for an RDF load.
     """
-    return sorted({(item.dataset, MODEL_STORE[item.model]) for item in items(selection_name) if item.model in models})
+    found: dict[tuple[str, Store], Model] = {}
+    for item in items(selection_name):
+        found.setdefault((item.dataset, item.store), item.model)
+    return dict(sorted(found.items()))
+
+
+def load_keys(selection_name: str, models: frozenset[Model]) -> list[tuple[str, Store]]:
+    """The (dataset, store) loads of a database serving `models`, sorted: one per store its supported items read."""
+    return sorted({(item.dataset, item.store) for item in items(selection_name) if item.supported_by(models)})
 
 
 def load_ids(selection_name: str, dbs: Sequence[str]) -> list[str]:
     """The load benchmark ids, `benches/test_load.py::test_load_<dataset>[...]` (`..._<dataset>_rdf` for RDF), sorted.
 
-    A database gets a load id for each (dataset, store) that at least one of its supported items reads.
+    Every database gets every load of the selection (`all_load_keys`), as it gets every case: a load its models do
+    not reach (`load_keys`) is reported `not_supported` (⊘, "model <m> not supported").
     """
     sel = selection(selection_name)
     if "load" not in sel.categories:
         return []
     result = []
     for db in dbs:
-        for dataset, store in load_keys(selection_name, model_support(db)):
+        model_support(db)  # unknown names fail here, with a clear message
+        for dataset, store in all_load_keys(selection_name):
             for scale in sel.scales:
                 for threads in sel.threads:
                     result.append(load_id(dataset, db, scale, threads, store))

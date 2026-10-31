@@ -93,43 +93,39 @@ queries agree afterwards), but slower than the batch API. A load entry has no an
   (about 2 us per index probe), compared with `batch_create_edges` on internal ids. Grafeo has no documented
   bulk path for edges keyed by an external id that avoids the per-row probe.
 
-## Grafeo: SQL/PGQ forms the parser does not accept yet (IS1, IS4, IS6, IC13)
+## Grafeo: SQL/PGQ label disjunction and ANY SHORTEST do not parse yet (IS4, IS6, IC13)
 
-- id: grafeo/snb_sql_is1
 - id: grafeo/snb_sql_is4
 - id: grafeo/snb_sql_is6
 - id: grafeo/snb_sql_ic13
-- Queries: the four SQL/PGQ texts in `graph_bench/suites/snb_sql.py`, standard SQL/PGQ (ISO/IEC 9075-16), one
-  text for every engine, no Grafeo override (a weaker Grafeo-only text is not allowed).
+- Queries: the SQL/PGQ texts in `graph_bench/suites/snb_sql.py`, standard SQL/PGQ (ISO/IEC 9075-16), one text for
+  every engine, no Grafeo override (a weaker Grafeo-only text is not allowed). Filters are the graph pattern WHERE
+  after the pattern (ruling R6), which Grafeo accepts: `snb_sql_is1` agrees (median 0.226 ms for 10 bindings).
 - Dataset: `snb-small`, loaded as the property graph `snb` (Grafeo: a named graph, `create_graph("snb")` and
   `set_graph("snb")`, so `GRAPH_TABLE (snb MATCH ...)` resolves it).
-- Grafeo 0.6.0 (local build of release/0.6.1, `D:\gb-grafeo-0.6.1` at 5048055b) outcome: every case fails at
-  parse time (✗), on the first binding:
-  - `snb_sql_is1`: `GRAFEO-Q001: syntax error: [SQL/PGQ] Expected RParen, found Where` at
-    `MATCH (n:Person WHERE n.id = $personId)` (element pattern WHERE clause).
-  - `snb_sql_is4`: `Expected RParen, found Pipe` at `MATCH (m:Post|Comment WHERE m.id = $messageId)` (label
-    disjunction; the element pattern WHERE follows it).
-  - `snb_sql_is6`: `Expected LParen, found Identifier` at `MATCH ANY SHORTEST (m:Post|Comment ...)` (path search
-    prefix; the quantified edge `-[r:REPLY_OF]->*` follows it).
-  - `snb_sql_ic13`: `Expected LParen, found Identifier` at `MATCH path = ANY SHORTEST (p1:Person ...)` (path search
-    prefix, then `-[k:KNOWS]-+` and `PATH_LENGTH(path)`).
-- Reference answers: the openCypher SNB references (`snb_is1`, `snb_is4`, `snb_is6`, `snb_ic13`), the same
-  bindings and rows.
-- Cause: Grafeo engine (SQL/PGQ parser), gaps confirmed by grafeo-31 on release/0.6.1: element pattern WHERE,
-  label disjunction, quantifiers (`*`, `+`, `{m,n}`) and `ANY SHORTEST` inside `GRAPH_TABLE`. What the parser does
-  accept today: a graph pattern WHERE after the pattern (`MATCH (n:Person)-[l:LIVES_IN]->(c:City) WHERE n.id = ...`),
-  label-less nodes and the Cypher form `-[:REPLY_OF*0..]->`. The decision on the target release is the user's
-  (decisions.md, 6).
+- Grafeo 0.6.0 (local build of release/0.6.1, `D:\gb-grafeo-0.6.1` at 5048055b) outcome: these three fail at parse
+  time (✗), on the first binding:
+  - `snb_sql_is4`: `GRAFEO-Q001: syntax error: [SQL/PGQ] Expected RParen, found Pipe` at `MATCH (m:Post|Comment)`.
+  - `snb_sql_is6`: `Expected LParen, found Identifier` at `MATCH ANY SHORTEST (m:Post|Comment)-[r:REPLY_OF]->*(p:Post)`.
+  - `snb_sql_ic13`: `Expected LParen, found Identifier` at `MATCH path = ANY SHORTEST (p1:Person)-[k:KNOWS]-+(p2:Person)`.
+- Reference answers: the openCypher SNB references (`snb_is4`, `snb_is6`, `snb_ic13`), the same bindings and rows.
+- Cause: Grafeo engine (SQL/PGQ parser), confirmed by grafeo-31 on release/0.6.1. IS4: the label disjunction
+  `Post|Comment` (grafeo-31: "SQL/PGQ node pattern reads only :A:B"). IS6 and IC13: the `ANY SHORTEST` path
+  search prefix (with it, quantified edges inside `GRAPH_TABLE`). The decision on the target release is the
+  user's (decisions.md, 6).
 
 ## Grafeo: SPARQL IS6 property path is slow (not allowlisted)
 
-- `snb_rdf_is6` on `snb-small` agrees (10/10) with a median of 501 ms for 10 bindings (about 50 ms each), against
-  31 to 47 ms for `snb_rdf_is1` and `snb_rdf_is4`. The text starts the group with `VALUES ?messageId { ... }`, then
+- `snb_rdf_is6` on `snb-small` agrees (10/10) with a median of 451 ms for 10 bindings (about 45 ms each), against
+  32 to 50 ms for `snb_rdf_is1` and `snb_rdf_is4`. The text starts the group with `VALUES ?messageId { ... }`, then
   `?m v:id ?messageId ; v:REPLY_OF* ?p`. research-b measured the same text at 0.6 ms per binding on Oxigraph and
   found Grafeo's `(v:KNOWS|^v:KNOWS)+` reachability 6.2 s against 12 ms. Cause: Grafeo engine (SPARQL property
   path evaluation). It carries no `- id:` line: the case agrees.
-- Load (`load_snb_rdf`): 621 ms for 62,521 triples sent as `INSERT DATA` statements of 10,000 N-Triples lines,
-  the documented path for the bindings until grafeo's Python RDF loader ships.
+- Load (`load_snb_rdf`): 507 ms for the 62,521 triples of the N-Triples file written at prepare time, sent as
+  `INSERT DATA` statements of 10,000 lines: the documented path for bindings without an RDF file loader. This is
+  transitional: the adapter calls `db.load_rdf(path, format="ntriples")` (grafeo release/0.6.1, commit 61c4388d)
+  as soon as the installed grafeo has it, so the RDF load switches to the file loader with a Grafeo 0.6.1 build,
+  and the fallback is then removed.
 
 ## LadybugDB: the ALGO extension does not load (PageRank, WCC)
 

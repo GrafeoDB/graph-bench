@@ -4,7 +4,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from graph_bench.cli import app
-from graph_bench.suites import catalog, snb_rdf, snb_sql
+from graph_bench.suites import GRAPH_MODELS, catalog, snb_rdf, snb_sql
 from graph_bench.suites.catalog import Case, cases
 from graph_bench.suites.snb import QUERIES
 from graph_bench.types import STANDARD_DIALECT
@@ -51,9 +51,9 @@ def test_list_output_is_stable() -> None:
     assert lines == expected
     assert "benches/test_load.py::test_load_snb[grafeo-small]" in lines
     assert "benches/test_load.py::test_load_graphalytics[ladybug-small]" in lines
-    # Grafeo's RDF store is a load of its own; LadybugDB serves no RDF, so it has none.
+    # Grafeo's RDF store is a load of its own. LadybugDB serves no RDF: its RDF load is planned too, and reported ⊘.
     assert "benches/test_load.py::test_load_snb_rdf[grafeo-small]" in lines
-    assert "benches/test_load.py::test_load_snb_rdf[ladybug-small]" not in lines
+    assert "benches/test_load.py::test_load_snb_rdf[ladybug-small]" in lines
     assert "benches/test_sql_pgq.py::test_snb_sql_is1[ladybug-small]" in lines
     assert "benches/test_rdf.py::test_snb_rdf_is6[grafeo-small]" in lines
 
@@ -117,11 +117,15 @@ def test_model_queries_share_the_snb_references() -> None:
     ]
 
 
-def test_sql_pgq_texts_name_the_graph_and_use_element_where() -> None:
+def test_sql_pgq_texts_name_the_graph_and_filter_in_the_graph_pattern_where() -> None:
+    """Ruling R6: the filter is the graph pattern WHERE after the pattern, never inside an element pattern."""
     for q in snb_sql.QUERIES:
         text = q.text["sql_pgq"]
         assert "GRAPH_TABLE (snb\n" in text, q.id
-        assert "WHERE" in text.split("MATCH", 1)[1].split("COLUMNS", 1)[0], q.id
+        pattern, rest = text.split("MATCH", 1)[1].split("COLUMNS", 1)[0].split("WHERE", 1)
+        assert re.match(r"\s+\w+\.id = \$\w+", rest), q.id  # one graph pattern WHERE, right after the pattern
+        assert not re.search(r"\([^()]*\bWHERE\b[^()]*\)", text.split("COLUMNS", 1)[0]), q.id
+        assert pattern.rstrip().endswith(")"), q.id  # the WHERE follows the last element pattern
         assert "{id:" not in text, q.id
 
 
@@ -146,9 +150,31 @@ def test_load_ids_per_store() -> None:
     assert catalog.load_benchmark("snb") == "load_snb"
     assert catalog.load_benchmark("snb", "rdf") == "load_snb_rdf"
     assert catalog.load_keys("push", frozenset({"rdf"})) == [("snb", "rdf")]
-    assert catalog.load_keys("push", frozenset({"sql_pgq"})) == [("snb", "graph")]
+    # An SQL/PGQ-only database reads the graph store, so it gets the Graphalytics load for the algorithms too.
+    assert catalog.load_keys("push", frozenset({"sql_pgq"})) == [("graphalytics", "graph"), ("snb", "graph")]
+    assert catalog.all_load_keys("push") == {
+        ("graphalytics", "graph"): "property_graph",
+        ("snb", "graph"): "property_graph",
+        ("snb", "rdf"): "rdf",
+    }
     assert catalog.load_keys("push", frozenset({"property_graph", "sql_pgq", "rdf"})) == [
         ("graphalytics", "graph"),
         ("snb", "graph"),
         ("snb", "rdf"),
     ]
+
+
+def test_algorithms_run_on_any_graph_model() -> None:
+    """Graphalytics items need a model that reads a property graph: property graph or SQL/PGQ, not RDF."""
+    algorithms = [i for i in catalog.ITEMS if isinstance(i, catalog.Algorithm)]
+    assert algorithms
+    for algo in algorithms:
+        assert algo.models == GRAPH_MODELS == frozenset({"property_graph", "sql_pgq"})
+        assert algo.store == "graph"
+        assert algo.supported_by(frozenset({"sql_pgq"}))
+        assert algo.supported_by(frozenset({"property_graph"}))
+        assert not algo.supported_by(frozenset({"rdf"}))
+    for q in [*QUERIES, *snb_sql.QUERIES, *snb_rdf.QUERIES]:
+        assert q.models == frozenset({q.model})
+        assert q.supported_by(frozenset({q.model}))
+        assert not q.supported_by(frozenset({"property_graph", "sql_pgq", "rdf"} - {q.model}))

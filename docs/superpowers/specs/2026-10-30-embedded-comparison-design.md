@@ -45,7 +45,7 @@ Each benchmark belongs to one category and one data model (property graph, SQL/P
 | Hops | 1, 2, 3 hop expansion, variable-length paths, shortest path [IC13] | property graph DBs |
 | Pattern matching | triangles, cycles, multi-pattern joins | property graph DBs |
 | Complex queries | LDBC SNB Interactive short reads IS1-7 and complex reads [IS1-7, IC2, IC6] | property graph DBs |
-| Algorithms | Graphalytics BFS, WCC, PR [these three], then CDLP, LCC, SSSP, Louvain, betweenness | DBs with native algorithms |
+| Algorithms | Graphalytics BFS, WCC, PR [these three], then CDLP, LCC, SSSP, Louvain, betweenness | DBs with native algorithms and a model that reads a property graph (property graph or SQL/PGQ); RDF-only DBs get ⊘ |
 | Vector search | kNN, batch kNN, recall@k, filtered kNN | DBs with vector indexes |
 | Hybrid | graph then vector, vector then graph | DBs with both |
 | RDF/SPARQL | Berlin SPARQL Benchmark (BSBM) | Grafeo, Oxigraph |

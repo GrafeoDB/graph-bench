@@ -3,7 +3,7 @@
 import re
 from collections.abc import Callable
 from pathlib import Path
-from typing import get_args
+from typing import Any, get_args
 
 import pytest
 
@@ -59,8 +59,8 @@ def test_grafeo_graph_store_is_the_named_graph_sql_pgq_reads(
 ) -> None:
     """The graph load names its graph after the dataset, so `GRAPH_TABLE (snb ...)` reads the loaded data.
 
-    The query uses a graph pattern WHERE, a form Grafeo's SQL/PGQ parser accepts today, only to check the routing;
-    the benchmark texts use the element pattern WHERE (see docs/known-disagreements.md).
+    The query is a minimal one (a single node, a graph pattern WHERE as in the benchmark texts) so that it checks
+    the routing and the graph name alone, whatever SQL/PGQ forms Grafeo lacks (see docs/known-disagreements.md).
     """
     monkeypatch.setenv("GRAPH_BENCH_DATA_DIR", str(push_data_dir))
     db = get_database("grafeo")(tmp_path, 1)
@@ -87,5 +87,52 @@ def test_grafeo_rdf_store_is_separate(push_data_dir: Path, tmp_path: Path, monke
         [(birthday,)] = db.query_model("rdf", text, {"id": "person_0"})
         assert isinstance(birthday, int)
         assert db.query("MATCH (n) RETURN count(n)", {}) == [(0,)]  # the property graph stays empty
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("has_load_rdf", [True, False], ids=["load_rdf", "insert-data-fallback"])
+def test_grafeo_rdf_load_reads_the_prepared_file(
+    has_load_rdf: bool, push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The RDF load reads the N-Triples file written at prepare time: `load_rdf(path, format="ntriples")` when the
+    installed grafeo has it (0.6.1), else the transitional `INSERT DATA` chunks of the same file's lines."""
+    from graph_bench.databases import grafeo as adapter
+
+    monkeypatch.setenv("GRAPH_BENCH_DATA_DIR", str(push_data_dir))
+    ds = cache.prepare("push")[("snb", "small")]
+    real_db, real_insert = adapter.grafeo.GrafeoDB, adapter._insert_data
+    calls: list[tuple[str, ...]] = []
+
+    def insert(db: Any, path: Path) -> None:
+        calls.append(("insert", str(path)))
+        real_insert(db, path)
+
+    class Db:
+        """A real GrafeoDB, with or without `load_rdf` whatever the installed version has."""
+
+        def __init__(self) -> None:
+            self._db = real_db()
+
+        def __getattr__(self, name: str) -> Any:
+            if name == "load_rdf":
+                if not has_load_rdf:
+                    raise AttributeError(name)
+                return self._load_rdf
+            return getattr(self._db, name)
+
+        def _load_rdf(self, path: str, format: str | None = None) -> None:
+            calls.append(("load_rdf", path, str(format)))
+            real_insert(self._db, Path(path))
+
+    monkeypatch.setattr(adapter.grafeo, "GrafeoDB", Db)
+    monkeypatch.setattr(adapter, "_insert_data", insert)
+    db = adapter.GrafeoDatabase(tmp_path, 1)
+    try:
+        db.load_store("rdf", ds)
+        path = str(rdf.ntriples_path(ds))
+        expected = ("load_rdf", path, "ntriples") if has_load_rdf else ("insert", path)
+        assert calls == [expected]
+        assert db.counts() == (ds.node_count, ds.edge_count)
     finally:
         db.close()

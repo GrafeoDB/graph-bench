@@ -37,7 +37,7 @@ one row per category, and one detail table per category with one row per benchma
 score across categories. Each benchmark belongs to one data model (property graph, SQL/PGQ or RDF), which
 decides the databases that take part; the others get ⊘. Property graph and SQL/PGQ queries read the same loaded
 property graph; RDF queries read the dataset's RDF triples (`graph_bench/datasets/rdf.py`), a load of its own, so
-the Load table has a separate row for it.
+the Load table has a separate row for it (⊘ for a database without RDF, as a load its models do not reach).
 
 | Category | Benchmarks | Databases | Status |
 | --- | --- | --- | --- |
@@ -48,7 +48,7 @@ the Load table has a separate row for it.
 | Hops | 1, 2 and 3 hop expansion, variable-length paths, shortest path | property graph | IC13 implemented, the rest planned |
 | Pattern matching | triangles, cycles, multi-pattern joins | property graph | planned |
 | Complex queries | LDBC SNB Interactive short reads IS1 to IS7 and complex reads | property graph | IS1 to IS7, IC2, IC6 implemented |
-| Algorithms | Graphalytics BFS, WCC, PageRank, then CDLP, LCC, SSSP, Louvain, betweenness | databases with native algorithms | BFS, WCC, PR implemented |
+| Algorithms | Graphalytics BFS, WCC, PageRank, then CDLP, LCC, SSSP, Louvain, betweenness | databases with native algorithms and a property graph or SQL/PGQ model | BFS, WCC, PR implemented |
 | Vector search | kNN, batch kNN, recall@k, filtered kNN | databases with vector indexes | planned |
 | Hybrid | graph then vector, vector then graph | databases with both | planned |
 | RDF/SPARQL | SNB IS1, IS4, IS6 in SPARQL, then the Berlin SPARQL Benchmark (BSBM) | Grafeo, Oxigraph | SNB implemented, BSBM planned |

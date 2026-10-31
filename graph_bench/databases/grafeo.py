@@ -2,6 +2,7 @@
 
 from collections.abc import Iterator, Mapping
 from itertools import islice
+from pathlib import Path
 from typing import Any, ClassVar
 
 import grafeo
@@ -14,8 +15,9 @@ from graph_bench.types import Model, Store
 
 CHUNK = 10_000
 
-# Triples per `INSERT DATA` statement of the RDF load. Grafeo's loading guide calls 10,000 triples per batch "a good
-# default" for its streaming loaders (docs/user-guide/sparql/loading.md, "Turtle streaming load").
+# Triples per `INSERT DATA` statement of the transitional RDF load (`_insert_data`). Grafeo's loading guide calls
+# 10,000 triples per batch "a good default" for its streaming loaders (docs/user-guide/sparql/loading.md, "Turtle
+# streaming load").
 RDF_CHUNK = 10_000
 
 # The load check (`counts`): every node and every relationship, counted with Cypher.
@@ -46,6 +48,14 @@ def _term(value: Any) -> Any:
     return str(value)
 
 
+def _insert_data(db: Any, path: Path) -> None:
+    """The transitional RDF load for a grafeo without `load_rdf` (0.6.0): the file's N-Triples lines in SPARQL
+    `INSERT DATA` statements of `RDF_CHUNK` lines. Removed once a Grafeo 0.6.1 build is installed."""
+    with path.open(encoding="utf-8") as fh:
+        for lines in _chunks((line.rstrip("\n") for line in fh if line.strip()), RDF_CHUNK):
+            db.execute_sparql("INSERT DATA {\n" + "\n".join(lines) + "\n}")
+
+
 class GrafeoDatabase(Database):
     """An in-memory `grafeo.GrafeoDB` in one of two stores, queried in three models.
 
@@ -58,11 +68,15 @@ class GrafeoDatabase(Database):
     ids, mapped through the ids the batch call returns. Property graph queries run with `execute_cypher`, SQL/PGQ
     with `execute_sql` (docs/user-guide/sql-pgq/index.md).
 
-    RDF store: the RDF mapping of the dataset (`graph_bench.datasets.rdf`), sent as N-Triples lines in SPARQL
-    `INSERT DATA` statements of `RDF_CHUNK` triples, the loading path Grafeo documents for the language bindings,
-    which have no RDF file loader yet (docs/user-guide/sparql/loading.md, "Loading via SPARQL"); this load switches
-    to grafeo's Python RDF loader when it ships. SPARQL queries run with `execute_sparql`, their parameters inlined
-    as literals (`rdf.bind`). The RDF store lives in the same `GrafeoDB` type but apart from the property graph, so
+    RDF store: the dataset's N-Triples file (`rdf.ntriples_path`, written untimed at prepare time by the shared
+    mapping) loaded with `db.load_rdf(path, format="ntriples")`, Grafeo's RDF file loader: one bulk write into the
+    default graph (new in 0.6.1, grafeo release/0.6.1 commit 61c4388d; its docstring in
+    crates/bindings/python/src/database.rs, experimental per docs/stability.md). A grafeo build without `load_rdf`
+    (0.6.0) gets the file's lines as SPARQL `INSERT DATA` statements of `RDF_CHUNK` triples, the path grafeo
+    documents for bindings without a file loader (docs/user-guide/sparql/loading.md, "Loading via SPARQL"). That
+    fallback is transitional: the load switches to `load_rdf` by itself once a Grafeo 0.6.1 build is installed, and
+    is then removed. SPARQL queries run with `execute_sparql`, their parameters inlined as literals
+    (`rdf.bind`). The RDF store lives in the same `GrafeoDB` type but apart from the property graph, so
     it gets its own instance and its own load (`load_snb_rdf`).
     """
 
@@ -113,12 +127,16 @@ class GrafeoDatabase(Database):
 
     def load_store(self, store: Store, dataset: Dataset) -> None:
         self.store = store
-        if store == "rdf":
-            db = self.db = grafeo.GrafeoDB()
-            for lines in _chunks(map(rdf.ntriples, rdf.triples(dataset)), RDF_CHUNK):
-                db.execute_sparql("INSERT DATA {\n" + "\n".join(lines) + "\n}")
-        else:
+        if store != "rdf":
             self.load(dataset)
+            return
+        path = rdf.ntriples_path(dataset)
+        db = self.db = grafeo.GrafeoDB()
+        load_rdf = getattr(db, "load_rdf", None)
+        if load_rdf is not None:
+            load_rdf(str(path), format="ntriples")
+        else:
+            _insert_data(db, path)
 
     def query(self, text: str, params: Mapping[str, Any]) -> list[tuple[Any, ...]]:
         result = self.db.execute_cypher(text, dict(params))

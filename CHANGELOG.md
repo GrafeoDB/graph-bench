@@ -14,8 +14,9 @@ benchmark moves to `legacy/` untouched and is deleted once the new comparison re
 - **Data models**: a database declares one dialect per model it serves, and the harness routes each query by
   its model (`Database.dialects`, `query_model`). SQL/PGQ (SNB IS1, IS4, IS6, IC13 in standard SQL/PGQ) and
   RDF/SPARQL (SNB IS1, IS4, IS6 in SPARQL over a shared RDF mapping of the CSVs) reuse the SNB references.
-  Property graph and SQL/PGQ read one loaded graph; RDF has its own load and Load row (`load_snb_rdf`). Grafeo
-  runs all three models.
+  Property graph and SQL/PGQ read one loaded graph; RDF has its own load and Load row (`load_snb_rdf`), from an
+  N-Triples file written when the data is prepared. Algorithms run on any database with a property graph or
+  SQL/PGQ model; a load a database's models do not reach is ⊘. Grafeo runs all three models.
 - **One process per database**: `graph-bench bench` runs one worker process per database, one after another, and
   writes `results.json` (schema in the design spec) with the machine, the Grafeo build and each database's
   version, process kind, storage and thread setting.

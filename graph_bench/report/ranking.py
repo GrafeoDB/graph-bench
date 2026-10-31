@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from graph_bench.databases import display_name
 from graph_bench.results import Entry, Results
 from graph_bench.suites.catalog import ITEMS, load_benchmark
-from graph_bench.types import CATEGORY_ORDER, MODEL_STORE, Category
+from graph_bench.types import CATEGORY_ORDER, Category
 
 SCALE_ORDER: tuple[str, ...] = ("small", "medium", "large")
 
@@ -28,7 +28,7 @@ _TITLES = {item.id: item.title for item in ITEMS}
 _LOADS = {
     load_benchmark(dataset, store): (dataset, store)
     for dataset, store in sorted(
-        dict.fromkeys((item.dataset, MODEL_STORE[item.model]) for item in ITEMS),
+        dict.fromkeys((item.dataset, item.store) for item in ITEMS),
         key=lambda key: key[1] != "graph",
     )
 }

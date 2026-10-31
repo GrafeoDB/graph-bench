@@ -19,7 +19,7 @@ from graph_bench.suites import catalog
 from graph_bench.suites.catalog import Case
 
 ROOT = Path(__file__).resolve().parents[1]
-EXTRA = "fake=tests.fakes:FakeDatabase,fake2=tests.fakes:FakeDatabase2"
+EXTRA = "fake=tests.fakes:FakeDatabase,fake2=tests.fakes:FakeDatabase2,fake_rdf=tests.fakes:FakeRdfDatabase"
 
 
 def _id(item_id: str, db: str = "fake") -> str:
@@ -413,3 +413,23 @@ def test_codspeed_rejects_unknown_db_before_install(monkeypatch: pytest.MonkeyPa
     )
     assert result.exit_code == 2
     assert "nope" in result.output
+
+
+def test_codspeed_reports_unreached_loads_as_not_available(push_data_dir: Path, tmp_path: Path) -> None:
+    """An RDF-only database: the graph loads are skipped as ⊘ with the model gate's error, its RDF load and RDF
+    cases pass, and the ids equal `graph-bench list`."""
+    out = tmp_path / "rdf.jsonl"
+    proc = _pytest(["--db", "fake_rdf", "--selection", "push", "--gb-out", str(out), "-rs"], _env(push_data_dir))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    lines = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
+    entries = {line["id"]: line for line in lines if line["kind"] == "entry"}
+    assert set(entries) == _expected_ids("fake_rdf")
+    for dataset in ("snb", "graphalytics"):
+        load = entries[catalog.load_id(dataset, "fake_rdf", "small", 1)]
+        assert (load["status"], load["error"]) == ("not_supported", "model property_graph not supported")
+    assert "not available: model property_graph not supported" in proc.stdout
+    rdf_load = entries[catalog.load_id("snb", "fake_rdf", "small", 1, "rdf")]
+    assert (rdf_load["status"], rdf_load["answer"]) == ("ok", "agree")
+    for case in catalog.cases("push", ["fake_rdf"]):
+        if case.item.model == "rdf":
+            assert (entries[case.bench_id]["status"], entries[case.bench_id]["answer"]) == ("ok", "agree")

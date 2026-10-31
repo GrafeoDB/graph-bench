@@ -110,9 +110,15 @@ class MyDatabase(Database):
   queries the RDF store (`types.MODEL_STORE`); the worker loads each store into its own instance with
   `load_store(store, dataset)`, which a database with an RDF store besides its graph overrides. A single-model
   database implements only `load` and `query`.
-- An RDF database loads the triples of `graph_bench.datasets.rdf.triples(dataset)` (the shared mapping), binds
-  query parameters with `rdf.bind`, converts result literals with `rdf.python_value` and counts with
-  `rdf.COUNT_NODES` and `rdf.COUNT_EDGES`.
+- An RDF database loads the dataset's N-Triples file, `graph_bench.datasets.rdf.ntriples_path(dataset)`, with
+  its own documented file loader (e.g. Oxigraph `Store.bulk_load(path=..., format=RdfFormat.N_TRIPLES)`). The file
+  holds the shared mapping and is written untimed when the data is prepared, so only the loader is in the load
+  clock. It binds query parameters with `rdf.bind`, converts result literals with `rdf.python_value` and counts
+  with `rdf.COUNT_NODES` and `rdf.COUNT_EDGES`.
+- Which items a database runs follows from its `models` (`item.supported_by(models)` in
+  `graph_bench/suites/__init__.py`): a query needs its own model; a Graphalytics algorithm needs a property graph
+  or SQL/PGQ model, so an SQL/PGQ-only database gets the Graphalytics load and its `algorithm()` is called. A case
+  or a load its models do not reach is ⊘ ("model <m> not supported").
 - `counts()` checks the load: the worker calls it right after each timed load, outside the clock, and a
   mismatch with the dataset's node and edge counts makes the load ≠. Count with a documented query (e.g. Cypher
   `MATCH (n) RETURN count(n)` and `MATCH ()-[r]->() RETURN count(r)`). Without it (the default raises
