@@ -32,7 +32,7 @@ from graph_bench.databases import get_database
 from graph_bench.databases.base import Database, NotSupported
 from graph_bench.datasets import cache
 from graph_bench.datasets.schema import Dataset
-from graph_bench.runner import reraise_control
+from graph_bench.runner import close_quietly, reraise_control
 from graph_bench.runner.startup import Child, fresh_dir, passed, run_child, spawn_child, startup_entry, summarize
 from graph_bench.runner.worker import (
     Emit,
@@ -285,7 +285,7 @@ class Bench:
         if self._loaded is not None:
             _, loaded = self._loaded
             self._loaded = None
-            loaded.db.close()
+            close_quietly(loaded.db)
             remove(loaded.workdir)
 
     def close(self) -> None:
@@ -408,7 +408,7 @@ def run_load(benchmark: Any, bench: Bench, lc: LoadCase) -> None:
     def drop() -> None:
         while instances:
             db, db_dir = instances.pop()
-            db.close()
+            close_quietly(db)
             remove(db_dir)
 
     def setup() -> tuple[tuple[Database], dict[str, Any]]:
@@ -475,7 +475,7 @@ def run_load_ql(benchmark: Any, bench: Bench, lq: LoadQlCase) -> None:
                 for case, reference_file in probes:
                     check.probe(case, db, reference_file)
             finally:
-                db.close()
+                close_quietly(db)
                 remove(db_dir)
             bench.emit(progress)
 
@@ -500,7 +500,7 @@ def run_load_ql(benchmark: Any, bench: Bench, lq: LoadQlCase) -> None:
     except BaseException as exc:
         reraise_control(exc)
         for db, db_dir in instances:
-            db.close()
+            close_quietly(db)
             remove(db_dir)
         status = "not_supported" if isinstance(exc, NotSupported) else "failed"
         entry = {"kind": "entry", "id": lq.bench_id, "status": status, "error": _load_error(exc)}

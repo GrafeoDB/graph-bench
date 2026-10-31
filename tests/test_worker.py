@@ -667,6 +667,7 @@ def test_worker_database_panic_in_open_empty_fails_the_startup(push_data_dir: Pa
     assert proc.returncode == 0, proc.stderr
     entry = _entries(lines)[catalog.startup_id("fake", 1)]
     assert entry["status"] == "failed"
+    assert "exited with code" not in entry["error"]  # the child reported the panic itself, it did not die
     assert PANIC in entry["error"]
     assert _entries(lines)[_id("snb_is4")]["status"] == "ok"
 
@@ -675,3 +676,15 @@ def test_worker_keyboard_interrupt_from_the_database_stops_the_worker(push_data_
     lines, proc = run_worker(tmp_path / "fake.jsonl", push_data_dir, fake="interrupt:snb_is4")
     assert proc.returncode != 0
     assert _id("snb_is4") not in _entries(lines)
+
+
+def test_worker_database_panic_in_close_does_not_kill_the_worker(push_data_dir: Path, tmp_path: Path) -> None:
+    """Every close panics (after the cases, between loads, on the info probe): the worker still finishes all."""
+    lines, proc = run_worker(tmp_path / "fake.jsonl", push_data_dir, fake="panic:close")
+    assert proc.returncode == 0, proc.stderr
+    assert "PanicException: assertion failed" in proc.stderr
+    assert len([line for line in lines if line["kind"] == "database"]) == 1
+    entries = _entries(lines)
+    for item in ("snb_is4", "graphalytics_bfs"):  # both datasets' cases ran, so the first close did not end it
+        assert (entries[_id(item)]["status"], entries[_id(item)]["answer"]) == ("ok", "agree")
+    assert entries[catalog.load_id("snb", "fake", "small", 1)]["status"] == "ok"

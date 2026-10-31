@@ -214,7 +214,15 @@ def test_codspeed_database_panic_is_the_tests_failure(push_data_dir: Path, tmp_p
     assert outcomes[load] == ("failure", f"error: {PANIC}")
     startup = next(name for name in outcomes if name.startswith("test_startup"))
     assert outcomes[startup][0] == "failure"
+    assert "exited with code" not in outcomes[startup][1]  # the child reported the panic itself, it did not die
     assert PANIC in outcomes[startup][1]
+
+
+def test_codspeed_database_panic_in_close_does_not_end_the_session(push_data_dir: Path, tmp_path: Path) -> None:
+    args = ["--db", "fake", "--selection", "push", "--gb-out", str(tmp_path / "gb.jsonl")]
+    args += ["-k", "test_snb_is2 or test_snb_is3 or test_graphalytics_bfs"]
+    proc = _pytest(args, _env(push_data_dir, "panic:close"))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
 def test_codspeed_database_panic_in_an_algorithm_fails_that_test(push_data_dir: Path, tmp_path: Path) -> None:

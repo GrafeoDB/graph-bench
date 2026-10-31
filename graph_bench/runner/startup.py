@@ -48,7 +48,7 @@ import graph_bench.datasets.schema  # noqa: F401
 from graph_bench.answers import SNB_EPS, canonical, verify
 from graph_bench.databases import get_database, model_support
 from graph_bench.databases.base import NotSupported
-from graph_bench.runner import message, reraise_control
+from graph_bench.runner import close_quietly, message, reraise_control
 from graph_bench.runner.sampler import set_child_subreaper
 from graph_bench.runner.timing import summary
 from graph_bench.suites.startup import EXPECTED, primary_model, probe_text
@@ -87,11 +87,7 @@ def measure_start(db: str, threads: int | None, workdir: Path) -> tuple[int, lis
         rows = [tuple(row) for row in instance.query_model(model, text, {})]
         elapsed = time.perf_counter_ns() - start
     except BaseException:
-        try:
-            instance.close()
-        except BaseException as close_error:  # the start's own error is the one the entry records
-            reraise_control(close_error)
-            sys.stderr.write(f"closing after the failed start also failed: {message(close_error)}\n")
+        close_quietly(instance, "closing after the failed start also failed")  # the start's error is recorded
         raise
     instance.close()
     return elapsed, canonical(rows, ordered=False)

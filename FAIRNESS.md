@@ -116,8 +116,8 @@ measured, while results.json and the matrix show ⏱. A ⏱ from the in-run cuto
   setup, so CodSpeed times the writes alone; a later run whose read-back differs has then already been measured
   by CodSpeed, while results.json and the matrix show ≠.
 - **A database panic** (a Rust panic that surfaces as pyo3's `PanicException`, which is not an `Exception`) is a
-  ✗ with its message, "PanicException: ...", wherever the database call was (a query, an algorithm, a load, the
-  startup); the worker goes on with the next case instead of dying.
+  ✗ with its message, "PanicException: ...", wherever the database call was (a query, an algorithm, a load, a
+  close, the startup); the worker goes on with the next case instead of dying.
 
 ## Memory and disk
 

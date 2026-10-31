@@ -1,6 +1,8 @@
 """Running databases: timing, the per-database worker process, the startup children and the supervisor."""
 
-from graph_bench.databases.base import NotSupported
+import sys
+
+from graph_bench.databases.base import Database, NotSupported
 
 
 def message(exc: BaseException) -> str:
@@ -25,3 +27,16 @@ def reraise_control(exc: BaseException) -> None:
     """
     if isinstance(exc, CONTROL_FLOW):
         raise exc
+
+
+def close_quietly(db: Database, context: str = "closing") -> None:
+    """`db.close()` where an error must not replace the result or the error already being recorded.
+
+    A close that raises (or panics) writes its message to stderr as "<context>: <message>" and the run goes on;
+    `KeyboardInterrupt`, `SystemExit` and `GeneratorExit` still stop it.
+    """
+    try:
+        db.close()
+    except BaseException as exc:
+        reraise_control(exc)
+        sys.stderr.write(f"{context}: {message(exc)}\n")

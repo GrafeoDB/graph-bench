@@ -43,7 +43,7 @@ from graph_bench.databases.base import Database, NotSupported
 from graph_bench.datasets import cache
 from graph_bench.datasets.schema import Dataset
 from graph_bench.results import Reference
-from graph_bench.runner import message, reraise_control
+from graph_bench.runner import close_quietly, message, reraise_control
 from graph_bench.runner.startup import STARTUP_TIMEOUT_S, run_startups, startup_entry
 from graph_bench.runner.timing import measure
 from graph_bench.suites import Algorithm, Item, Query, Write, catalog
@@ -587,7 +587,7 @@ def load(
     previous: tuple[Database, Path] | None = None
     for i in range(iterations):
         if previous is not None:
-            previous[0].close()
+            close_quietly(previous[0])
             remove(previous[1])
         db, db_dir = fresh_instance(db_cls, dataset, workdir, threads, i, store)
         previous = (db, db_dir)
@@ -595,7 +595,7 @@ def load(
         try:
             db.load_store(store, dataset)
         except BaseException:
-            db.close()
+            close_quietly(db)
             remove(db_dir)
             raise
         times.append(time.perf_counter_ns() - start)
@@ -659,7 +659,7 @@ def run_load_ql(
                 if probe is not None and reference_file is not None:
                     check.probe(probe, db, reference_file)
             finally:
-                db.close()
+                close_quietly(db)
                 remove(db_dir)
             emit({"kind": "progress", "id": load_id})
     except BaseException as exc:
@@ -712,7 +712,7 @@ def database_line(db_cls: type[Database], workdir: Path, threads: int | None) ->
     try:
         info = probe.info()
     finally:
-        probe.close()
+        close_quietly(probe)
         remove(probe_dir)
     return {"kind": "database", **asdict(info)}
 
@@ -955,7 +955,7 @@ def _load_and_run(
         for case in cases:
             _run_case(case, loaded.db, base, settings, emit)
     finally:
-        loaded.db.close()
+        close_quietly(loaded.db)
         remove(loaded.workdir)
 
 

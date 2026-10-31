@@ -47,7 +47,7 @@ from graph_bench.databases import get_database
 from graph_bench.databases.base import NotSupported
 from graph_bench.datasets import cache
 from graph_bench.results import Resource
-from graph_bench.runner import message, reraise_control
+from graph_bench.runner import close_quietly, message, reraise_control
 from graph_bench.runner.sampler import (
     SAMPLE_INTERVAL_S,
     Sample,
@@ -150,11 +150,7 @@ def measure(
             return _result("failed", f"closing: {message(exc)}")
     finally:
         if not closed:
-            try:
-                instance.close()
-            except BaseException as exc:  # the record keeps the first error
-                reraise_control(exc)
-                sys.stderr.write(f"closing after the failure also failed: {message(exc)}\n")
+            close_quietly(instance, "closing after the failure also failed")  # the record keeps the first error
     try:
         disk = dir_size(paths) if paths else None
     except OSError as exc:

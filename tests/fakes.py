@@ -39,9 +39,10 @@ nothing, `dirty` adds a row to the loaded state, `leak` adds a node per run that
 Resources (the Memory and Disk records): `memory:<load benchmark>=<MiB>` makes that load allocate and keep that
 many MiB, touched so they are resident (e.g. `memory:load_snb=200`); `disk:<load benchmark>=<bytes>` makes it write
 exactly that many bytes in two files under `<workdir>/store`, which `store_paths` then returns, and makes `info()`
-report on-disk storage. `crash_soft:instance` makes the constructor raise, `crash_soft:store_paths` makes
-`store_paths` raise, `slow:environment` makes `prepare_environment` sleep 3 s and `hang:exit` makes the process hang
-at exit (an atexit handler registered by `close()`), like a runtime whose shutdown never ends.
+report on-disk storage. `panic:close` makes every `close()` panic, `crash_soft:instance` makes the constructor
+raise, `crash_soft:store_paths` makes `store_paths` raise, `slow:environment` makes `prepare_environment`
+sleep 3 s and `hang:exit` makes the process hang at exit (an atexit handler registered by
+`close()`), like a runtime whose shutdown never ends.
 
 With `GRAPH_BENCH_FAKE_TRACE` set to a file, every call of `provision`, `prepare_environment` ("environment"),
 `load`, `load_ql`, `open_empty` and every write phase ("setup", "run", "check", "teardown") appends a line to it:
@@ -153,6 +154,7 @@ class FakeDatabase(Database):
         return list(self.stored)
 
     def close(self) -> None:
+        self._misbehave(self._flags("close"))
         if "hang" in self._flags("exit"):
             atexit.register(time.sleep, 3600)
 
