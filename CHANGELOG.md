@@ -9,7 +9,7 @@ benchmark moves to `legacy/` untouched and is deleted once the new comparison re
 
 - **Embedded comparison**: ten embedded databases are planned (Grafeo, LadybugDB, TuringDB, FalkorDB through
   falkordblite, NeuG, ArcadeDB, Neo4j Community, DuckDB + DuckPGQ, Oxigraph, HelixDB). Grafeo, LadybugDB, NeuG,
-  FalkorDB, HelixDB and Oxigraph (RDF/SPARQL only) are implemented, on Load (SNB, Graphalytics), Complex queries (SNB IS1 to IS7, IC2, IC6),
+  FalkorDB, HelixDB and Oxigraph (RDF/SPARQL only) and DuckDB + DuckPGQ (SQL/PGQ only) are implemented, on Load (SNB, Graphalytics), Complex queries (SNB IS1 to IS7, IC2, IC6),
   Hops (IC13) and Algorithms (Graphalytics BFS, WCC, PageRank). See the README for the categories and their status.
 - **Data models**: a database declares one dialect per model it serves, and the harness routes each query by
   its model (`Database.dialects`, `query_model`). SQL/PGQ (SNB IS1, IS4, IS6, IC13 in standard SQL/PGQ) and

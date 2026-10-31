@@ -16,7 +16,16 @@ from graph_bench.types import Model
 if TYPE_CHECKING:
     from graph_bench.databases.base import Database
 
-KNOWN: tuple[str, ...] = ("grafeo", "ladybug", "neug", "falkordb", "turingdb", "helixdb", "oxigraph")
+KNOWN: tuple[str, ...] = (
+    "grafeo",
+    "ladybug",
+    "neug",
+    "falkordb",
+    "turingdb",
+    "helixdb",
+    "oxigraph",
+    "duckdb",
+)
 
 MODELS: dict[str, frozenset[Model]] = {
     "grafeo": frozenset({"property_graph", "sql_pgq", "rdf"}),
@@ -26,6 +35,7 @@ MODELS: dict[str, frozenset[Model]] = {
     "turingdb": frozenset({"property_graph"}),
     "helixdb": frozenset({"property_graph"}),
     "oxigraph": frozenset({"rdf"}),
+    "duckdb": frozenset({"sql_pgq"}),
 }
 
 DISPLAY: dict[str, str] = {
@@ -36,6 +46,7 @@ DISPLAY: dict[str, str] = {
     "turingdb": "TuringDB",
     "helixdb": "HelixDB",
     "oxigraph": "Oxigraph",
+    "duckdb": "DuckDB + DuckPGQ",
 }
 
 EXTRA_ENV = "GRAPH_BENCH_EXTRA_DATABASES"
@@ -48,6 +59,7 @@ REGISTRY: dict[str, str] = {
     "turingdb": "graph_bench.databases.turingdb:TuringDatabase",
     "helixdb": "graph_bench.databases.helixdb:HelixDatabase",
     "oxigraph": "graph_bench.databases.oxigraph:OxigraphDatabase",
+    "duckdb": "graph_bench.databases.duckdb:DuckDatabase",
 }
 
 

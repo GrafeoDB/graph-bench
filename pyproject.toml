@@ -43,7 +43,9 @@ turingdb = ["turingdb>=3.0.2; sys_platform == 'linux'", "pyarrow>=15; sys_platfo
 # for Linux, Windows and macOS.
 helixdb = ["helix-db>=0.3.4", "helix-db-embedded>=0.3.3"]
 oxigraph = ["pyoxigraph>=0.5.13"]
-embedded = ["graph-bench[grafeo,ladybug,neug,falkordb,turingdb,helixdb,oxigraph]"]
+# DuckPGQ is a community extension that `INSTALL duckpgq FROM community` downloads at run time, not a wheel.
+duckdb = ["duckdb>=2.0.0"]
+embedded = ["graph-bench[grafeo,ladybug,neug,falkordb,turingdb,helixdb,oxigraph,duckdb]"]
 bench = ["pytest>=9.0.2", "pytest-codspeed>=5.0.3"]
 dev = [
     "pytest>=9.0.2",
@@ -84,6 +86,7 @@ markers = [
     "turingdb: requires TuringDB (Linux only)",
     "helixdb: requires HelixDB (helix-db and helix-db-embedded)",
     "oxigraph: requires Oxigraph (pyoxigraph)",
+    "duckdb: requires DuckDB (duckdb, and the duckpgq extension from the community repository)",
     "slow: slow tests",
 ]
 
@@ -100,6 +103,7 @@ omit = [
     "graph_bench/databases/turingdb.py",
     "graph_bench/databases/helixdb.py",
     "graph_bench/databases/helix_queries.py",
+    "graph_bench/databases/duckdb.py",
 ]
 
 [tool.coverage.report]

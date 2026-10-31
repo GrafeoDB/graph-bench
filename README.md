@@ -21,7 +21,7 @@ README at each Grafeo release. The rules every database is measured under are in
 | NeuG | `neug` | in-process | implemented |
 | ArcadeDB | `arcadedb-embedded` | in-process (JVM) | planned |
 | Neo4j Community | Maven jars through JPype | in-process (JVM) | planned |
-| DuckDB + DuckPGQ | `duckdb` | in-process | planned |
+| DuckDB + DuckPGQ | `duckdb` (+ the `duckpgq` community extension) | in-process | implemented |
 | Oxigraph | `pyoxigraph` | in-process | implemented |
 | HelixDB | `helix-db` + `helix-db-embedded` | in-process (embedded mode) | implemented |
 

@@ -414,3 +414,49 @@ marked `timeout` (⏱) by the budget rule against Grafeo, not by a hang: 10 bind
 IS5 and IS6 (Grafeo 0.2 to 0.3 ms), 99 ms for IC13, 201 ms for IC2 and 239 ms for IS2 (the 50 `optional` steps).
 Load takes 8.3 s (Graphalytics) and 11.6 s (SNB) against 0.09 s and 0.14 s. No `- id:` line: the adapter test runs
 HelixDB alone and it must agree.
+
+## DuckDB + DuckPGQ: the label disjunction `Post|Comment` does not parse (IS4, IS6; not available as an error)
+
+- id: duckdb/snb_sql_is4
+- id: duckdb/snb_sql_is6
+- The shared SQL/PGQ texts say "a Post or a Comment" as the standard label expression `m:Post|Comment` (ISO/IEC
+  9075-16). DuckPGQ 2.0 (extension build `9c11bc192a`, DuckDB 2.0.0) rejects it while parsing:
+  `Parser Error: syntax error at or near "|"`, at `MATCH (m:Post|Comment)` (IS4) and at
+  `MATCH ANY SHORTEST (m:Post|Comment)-[r:REPLY_OF]->*(p:Post)` (IS6). The cases show ✗ with that error.
+- Not worked around: no union `Message` table and no DuckDB-specific text (a database whose feature does not work has
+  to fix it). IS6 would also fail afterwards on the second gap: DuckPGQ needs unique labels, and `REPLY_OF` is two
+  edge tables (comment to comment, comment to post) in the dataset, so the property graph labels them
+  `REPLY_OF__Comment__Comment` and `REPLY_OF__Comment__Post` and the label `REPLY_OF` does not exist. The same holds
+  for `HAS_CREATOR`, `HAS_TAG` and `IS_LOCATED_IN`, which no SQL/PGQ case uses.
+- Cause: DuckPGQ (SQL/PGQ label expressions and non-unique edge labels), checked against
+  https://duckpgq.org/documentation/property_graph/ and https://duckpgq.org/documentation/sql_pgq/.
+
+## DuckDB + DuckPGQ: PageRank stops at a fixed tolerance (≠)
+
+- id: duckdb/graphalytics_pr
+- `pagerank(g, V, E)` (https://duckpgq.org/documentation/graph_functions/) has a fixed damping factor 0.85 and a fixed
+  tolerance of 1e-6 that cannot be set. On `graphalytics-small` it stops early: every one of the 1001 ranks is off
+  the converged ranks (NetworkX, tolerance 1e-10) by 3e-6 to 4.5e-6 absolute, 1.0e-4 to 3.1e-4 relative, above the
+  relative `LDBC_EPS` of 1e-4 (first mismatch: 0.013918058 against 0.013922308). The epsilon is not loosened, so the
+  answer is ≠. Cause: DuckPGQ (no tolerance parameter).
+
+## DuckDB + DuckPGQ: slow cases under the 10x budget rule (not allowlisted)
+
+The answers agree with the references. Against Grafeo alone in `bench --selection push --db grafeo,duckdb`
+(Windows, one thread): BFS 103 ms (Grafeo 0.5 ms, an `ANY SHORTEST` query that returns the 1000 hop distances) and
+WCC 20.7 ms (Grafeo 1.6 ms) are marked ⏱, and SQL/PGQ IS1 15.6 ms for 10 bindings (Grafeo 0.24 ms; the shared text
+filters in the graph pattern WHERE, which DuckPGQ evaluates after matching, where the element pattern form
+`(n:Person WHERE n.id = $personId)` took 1.2 ms in research). IC13 is 3.5 s for 10 bindings (`ANY SHORTEST` from the
+filtered endpoints). No `- id:` line: the adapter test runs DuckDB alone, where no budget applies. The texts are not
+rewritten.
+
+## DuckDB + DuckPGQ: threads, storage and the extension (notes)
+
+- Threads: `SET threads=1` (https://duckdb.org/docs/current/configuration/overview) when the run is single-threaded.
+- Storage: `duckdb.connect(":memory:")`, in-memory.
+- The extension: `INSTALL duckpgq FROM community` runs once per process in `prepare_environment` (it downloads), and
+  `LOAD duckpgq` plus `SET active_grammar_extensions=['duckpgq']` run per connection in the load, which DuckDB 2.0
+  requires (https://github.com/cwida/duckpgq-extension/blob/main/docs/GRAMMAR_EXTENSION.md). The load is typed
+  `CREATE TABLE` plus `COPY` per CSV and one `CREATE PROPERTY GRAPH` over all node and edge tables, all in the load
+  clock. A type spread over several node pairs is labelled by its table name (`HAS_TAG__Comment__Tag`), because
+  DuckPGQ labels must be unique.
