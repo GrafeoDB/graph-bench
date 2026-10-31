@@ -254,3 +254,68 @@ target vertex (`MATCH (s:V {id: $s}), (b:V) WITH b, shortestPath((s)-[:E*0..]->(
 https://docs.falkordb.com/cypher/functions.html), because `algo.BFS` returns no levels. On `graphalytics-small`
 (Linux, Docker) the median is 128.6 ms against Grafeo's 0.42 ms, so it is marked `timeout` (⏱, 302.8x the top-3
 average) by the budget rule, not by a hang. No `- id:` line: the adapter test runs FalkorDB alone and it must agree.
+
+## TuringDB: IC13 does not parse (shortestPath is a different, weighted function)
+
+- id: turingdb/snb_ic13
+- Query: `snb_ic13` (IC13 shortest path), the shared openCypher text, no TuringDB override.
+- Dataset: `snb-small`.
+- TuringDB 3.0.2 answer: none. Every binding fails with `PARSE_ERROR ... syntax error, unexpected SHORTESTPATH,
+  expecting OPAREN` at `OPTIONAL MATCH path = shortestPath((p1)-[:KNOWS*]-(p2))`, so the entry is `failed` (✗).
+- Reference answer: `[[1]]` for the first binding; -1 for an unreachable pair and 0 for the same person.
+- Cause: TuringDB engine (openCypher coverage). Its own `shortestPath(source, target, edgePropName, dist, path)` is
+  a statement after `MATCH`, weighted (Dijkstra on a numeric edge property) and follows outgoing edges only
+  (https://docs.turingdb.ai/shortest-path), so it cannot give the undirected hop count. The docs point to
+  variable-length paths for hop questions, which "enumerate every path"; no bounded rewrite is used, because a
+  database that cannot run the standard text gets the marker (FAIRNESS.md).
+
+## TuringDB: no native graph algorithms (BFS, WCC, PageRank)
+
+- id: turingdb/graphalytics_bfs
+- id: turingdb/graphalytics_wcc
+- id: turingdb/graphalytics_pr
+- All three are `not_supported` (⊘). `CALL db.procedures()` lists only `db.*` and `gnn.*` procedures
+  (https://docs.turingdb.ai/query/procedures); `pageRank`, `algo.pageRank` and `gds.pageRank` do not exist.
+- BFS levels are not computed with a query: TuringDB documents no shortest-path form giving hop distances from a
+  source (`shortestPath` is weighted and directed, see above), and a variable-length `MATCH` enumerates every
+  path. LadybugDB and FalkorDB compute BFS through their documented hop-count shortest-path forms; TuringDB has none.
+
+## TuringDB: no value parameters, so each call carries its literals (disadvantage)
+
+TuringDB's parser rejects `$name` in value positions (`Not implemented: Parameters`); parameters work only for
+labels and edge types (https://docs.turingdb.ai/query/cypher_subset). Its documented way is literals in the query
+text, so the adapter inlines every parameter through one quoting function (`turingdb.literal`: single-quoted
+strings with `\` and `'` escaped, ints and floats as numbers, anything else rejected; unit-tested with quotes,
+backslashes and unicode). This is not a workaround but the only documented path. The cost is TuringDB's: every
+binding is a different text, so the engine cannot reuse a parsed query, where the other databases bind real
+parameters. Measured on `snb-small` IS1 (Linux, Docker): 2.5 ms per call with 50 different person ids against
+3.1 ms per call with one id repeated, so the lack of plan reuse is not what dominates a call; a call costs a few
+milliseconds either way.
+
+## TuringDB: point lookups, IC2 and IC6 under the 10x budget rule (not allowlisted)
+
+The answers agree with the references. In a `bench --selection push --db grafeo,turingdb` run on Linux (Docker,
+ubuntu:24.04, PyPI Grafeo 0.6.0) these are marked `timeout` (⏱) by the budget rule (slower than 10x the mean of
+the 3 fastest other databases), not by a hang. They carry no `- id:` line because the adapter test runs TuringDB
+alone, where no budget applies and they must agree.
+
+- Queries and medians (10 bindings): `snb_is1` 40 ms (Grafeo 0.42 ms), `snb_is2` 99 ms (0.86), `snb_is3` 57 ms
+  (2.3), `snb_is5` 33 ms (0.28), `snb_is6` 52 ms (0.39), `snb_ic2` 52 ms (4.1). `snb_is4` 25 ms, `snb_is7`
+  88 ms and `snb_ic6` 151 ms stay inside the budget.
+- Cause: TuringDB engine, per-call cost of a few milliseconds (the query goes through the pandas-returning
+  client); not measured further.
+- `snb_is7` agrees on this data: the `IS NOT NULL` over an `OPTIONAL MATCH` variable that failed with a
+  `ColumnMask` error on a tiny graph (research) ran correctly on `snb-small`, so the shared text is used as is.
+
+## TuringDB: one engine per process, threads and storage (notes)
+
+- The embedded engine starts a process-wide event handler; a second `TuringDB(type="embedded")` in one process
+  fails with `Could not initialize system event handler`, also after the first client is deleted (the client has
+  no close method). The worker loads several times per process, so the adapter starts the engine once per process
+  (`data_dir` = `<workdir parent>/turingdb`) and gives each load a graph of its own. TuringDB has no
+  `DROP GRAPH`, so loaded graphs stay in that directory until the worker's base directory is removed.
+- There is no in-memory mode: the graph is on disk (`storage="on-disk"`), and no thread setting is exposed
+  (`threads_configurable=False`).
+- The load clock covers the engine start (first load only), the CSV to Parquet conversion with pyarrow and
+  `LOAD PARQUET` (https://docs.turingdb.ai/import_data/parquet). TuringDB's load needs this conversion because it
+  has no CSV bulk path for more than a few thousand edges (https://docs.turingdb.ai/import_data/csv).

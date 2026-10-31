@@ -36,7 +36,10 @@ ladybug = ["ladybug>=0.22.1"]
 neug = ["neug>=0.3.0"]
 # The wheel is manylinux_2_38 only (glibc 2.38 or newer), so the extra is empty elsewhere.
 falkordb = ["falkordblite>=0.11.0; sys_platform == 'linux'"]
-embedded = ["graph-bench[grafeo,ladybug,neug,falkordb]"]
+# The wheel is Linux only (manylinux_2_35). pyarrow writes the Parquet files `LOAD PARQUET` reads and is not a
+# turingdb dependency.
+turingdb = ["turingdb>=3.0.2; sys_platform == 'linux'", "pyarrow>=15; sys_platform == 'linux'"]
+embedded = ["graph-bench[grafeo,ladybug,neug,falkordb,turingdb]"]
 bench = ["pytest>=9.0.2", "pytest-codspeed>=5.0.3"]
 dev = [
     "pytest>=9.0.2",
@@ -74,6 +77,7 @@ markers = [
     "ladybug: requires LadybugDB",
     "neug: requires NeuG",
     "falkordb: requires FalkorDB (falkordblite, Linux only)",
+    "turingdb: requires TuringDB (Linux only)",
     "slow: slow tests",
 ]
 
@@ -87,6 +91,7 @@ omit = [
     "graph_bench/databases/ladybug.py",
     "graph_bench/databases/neug.py",
     "graph_bench/databases/falkordb.py",
+    "graph_bench/databases/turingdb.py",
 ]
 
 [tool.coverage.report]

@@ -16,7 +16,7 @@ README at each Grafeo release. The rules every database is measured under are in
 | --- | --- | --- | --- |
 | Grafeo | `grafeo` | in-process | implemented |
 | LadybugDB | `ladybug` | in-process | implemented |
-| TuringDB | `turingdb` (embedded mode) | in-process | planned |
+| TuringDB | `turingdb` (embedded mode, Linux only) | in-process | implemented |
 | FalkorDB | `falkordblite` (Linux only) | local process (a Redis server subprocess) | implemented |
 | NeuG | `neug` | in-process | implemented |
 | ArcadeDB | `arcadedb-embedded` | in-process (JVM) | planned |
