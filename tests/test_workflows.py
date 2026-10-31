@@ -293,7 +293,15 @@ def test_heartbeat_pushes_one_beat(tmp_path: Path) -> None:
     worker.write_text('{"event": "start"}\n{"event": "case", "id": "hops/hop_2"}\n', encoding="utf-8")
     log = tmp_path / "bench.log"
     log.write_text("line 1\nloading snb-medium\n", encoding="utf-8")
-    env = {**os.environ, "HEARTBEAT_ONCE": "1", "GITHUB_RUN_ID": "42"}
+    ps = tmp_path / "ps.txt"
+    jit = "eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloy"
+    ps.write_text(
+        f"110592 07:37 /actions-runner/bin/Runner.Listener run --jitconfig {jit}\n"
+        "225280 06:08 python -m graph_bench.runner.worker --db grafeo\n"
+        "5120 00:01 tool --token=hunter2 --other\n",
+        encoding="utf-8",
+    )
+    env = {**os.environ, "HEARTBEAT_ONCE": "1", "GITHUB_RUN_ID": "42", "HEARTBEAT_PS": str(ps)}
     done = subprocess.run(
         ["bash", str(SCRIPTS / "heartbeat.sh"), "out", str(log)], cwd=work, env=env, capture_output=True, text=True
     )
@@ -308,6 +316,12 @@ def test_heartbeat_pushes_one_beat(tmp_path: Path) -> None:
     assert "Mem:" in text
     assert 'grafeo-1: {"event": "case", "id": "hops/hop_2"}' in text
     assert "  loading snb-medium" in text
+    # The branch is public: a credential argument never lands on it.
+    assert "Runner.Listener run --jitconfig [redacted]" in text
+    assert "--token=[redacted]" in text
+    assert jit[:20] not in text
+    assert "hunter2" not in text
+    assert "graph_bench.runner.worker --db grafeo" in text
 
 
 @pytest.mark.skipif(sys.platform != "linux" or shutil.which("git") is None, reason="heartbeat.sh reads Linux /proc")
