@@ -9,7 +9,7 @@ from typing import Any
 
 import networkx
 
-from graph_bench.datasets import graphalytics, rdf, snb
+from graph_bench.datasets import graphalytics, multigraph, rdf, snb
 from graph_bench.datasets.schema import Dataset
 from graph_bench.suites import catalog
 
@@ -55,16 +55,17 @@ def dataset_key(selection: str) -> str:
     return h.hexdigest()[:16]
 
 
-def _write_references(selection: str, snb_ds: Dataset, ga_ds: Dataset) -> None:
+def _write_references(selection: str, snb_ds: Dataset, ga_ds: Dataset, mg_ds: Dataset) -> None:
     """Write `references/<item_id>-<scale>.json` for every reference the selection's items use (`reference_items`).
 
     Each item's suite module (`catalog.reference_source`) computes them on its dataset's reference graph: the
-    `SnbGraph` for SNB, the `Dataset` itself for Graphalytics. A write's file holds the rows after the write
-    (`answers`), before it (`before`) and, with `Write.ready`, after its setup (`ready`). An item that shares
+    `SnbGraph` for SNB, the `Dataset` itself for Graphalytics and the multigraph fixture. A write's file holds the
+    rows after the write (`answers`), before it (`before`) and, with `Write.ready`, after its setup (`ready`). An
+    item that shares
     another item's references (`Query.same_as`) uses that item's file, written once.
     """
     sel = catalog.selection(selection)
-    graphs: dict[str, Any] = {"snb": snb.SnbGraph.from_dataset(snb_ds), "graphalytics": ga_ds}
+    graphs: dict[str, Any] = {"snb": snb.SnbGraph.from_dataset(snb_ds), "graphalytics": ga_ds, multigraph.NAME: mg_ds}
     for item in catalog.reference_items(selection):
         source = catalog.reference_source(item.id)
         graph = graphs[item.dataset]
@@ -96,19 +97,24 @@ def prepare(selection: str) -> dict[tuple[str, str], Dataset]:
     for scale in catalog.selection(selection).scales:
         snb_root = base / f"snb-{scale}"
         ga_root = base / f"graphalytics-{scale}"
-        if (snb_root / ".complete").exists() and (ga_root / ".complete").exists():
+        mg_root = base / f"{multigraph.NAME}-{scale}"
+        roots = (snb_root, ga_root, mg_root)
+        if all((root / ".complete").exists() for root in roots):
             snb_ds = Dataset.load(snb_root)
             ga_ds = Dataset.load(ga_root)
+            mg_ds = Dataset.load(mg_root)
         else:
-            for root in (snb_root, ga_root):
+            for root in roots:
                 if root.exists():
                     shutil.rmtree(root)
             snb_ds = snb.generate(scale, snb_root, SEED)
             ga_ds = graphalytics.generate(snb_ds, ga_root)
-            _write_rdf(selection, (snb_ds, ga_ds))
-            _write_references(selection, snb_ds, ga_ds)
-            snb_ds.root.joinpath(".complete").write_text("ok", encoding="utf-8")
-            ga_ds.root.joinpath(".complete").write_text("ok", encoding="utf-8")
+            mg_ds = multigraph.generate(scale, mg_root)
+            _write_rdf(selection, (snb_ds, ga_ds, mg_ds))
+            _write_references(selection, snb_ds, ga_ds, mg_ds)
+            for root in roots:
+                root.joinpath(".complete").write_text("ok", encoding="utf-8")
         result[("snb", scale)] = snb_ds
         result[("graphalytics", scale)] = ga_ds
+        result[(multigraph.NAME, scale)] = mg_ds
     return result

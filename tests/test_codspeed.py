@@ -249,7 +249,8 @@ def test_codspeed_prepares_environment_once_before_loads(push_data_dir: Path, tm
     proc = _pytest(["--db", "fake", "--selection", "push", "--gb-out", str(tmp_path / "gb.jsonl")], env)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     sel = catalog.selection("push")
-    loads = sel.load_iterations * len(catalog.load_ids("push", ["fake"]))
+    # The load tests, and the multigraph fixture's load for its case (answer-only, no load test).
+    loads = sel.load_iterations * len(catalog.load_ids("push", ["fake"])) + 1
     loads_ql = sel.load_iterations * len(catalog.load_ql_ids("push", ["fake"]))
     calls = [line.split() for line in trace.read_text(encoding="utf-8").splitlines()]
     names = [call for call, *_ in calls if call != "open_empty"]
@@ -394,7 +395,7 @@ def test_codspeed_rerun_when_the_last_case_hangs(
     """The last case hangs, so nothing is left unrecorded; the passed cases still get a relaunch to be measured."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("GRAPH_BENCH_DATA_DIR", str(push_data_dir))
-    monkeypatch.setenv("GRAPH_BENCH_FAKE", "hang:scan_filter_avg_rdf")
+    monkeypatch.setenv("GRAPH_BENCH_FAKE", "hang:sem_trail_self_loop")
     launches: list[tuple[list[str], dict[str, str]]] = []
     monkeypatch.setattr(supervisor, "_launch", _without_codspeed(launches))
     resources_off(monkeypatch)
@@ -402,8 +403,8 @@ def test_codspeed_rerun_when_the_last_case_hangs(
     results = supervisor.run_codspeed("push", ["fake"], out, workdir=tmp_path / "work", case_timeout_s=HANG_TIMEOUT_S)
 
     lines = [json.loads(line) for line in (out / "raw" / "fake-1" / "pytest.jsonl").read_text("utf-8").splitlines()]
-    # The last case: the RDF store is loaded and run last, and benches/test_scans.py is its last module.
-    hung = _id("scan_filter_avg_rdf")
+    # The last case: the answer-only multigraph fixture is loaded and run last, after every other dataset and store.
+    hung = _id("sem_trail_self_loop")
     second = next(i for i, line in enumerate(lines) if i > 0 and line["kind"] == "database")
     first_starts = [line["id"] for line in lines[:second] if line["kind"] == "start"]
     assert first_starts[-1] == hung  # the last case of the first process

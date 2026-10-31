@@ -1,4 +1,4 @@
-"""The SNB queries as HelixDB DSL builders (dialect `helix`).
+"""The suite queries as HelixDB DSL builders (dialect `helix`).
 
 HelixDB's Python SDK has no query text (https://docs.helix-db.com/database/helix-db/query-guides/reading-data): a
 read is an operation tree built with `g()` and sent as a `read_batch`. The `helix` text of a suite query is the
@@ -61,6 +61,7 @@ _NONE = define_params({})
 _WINDOW = define_params({"from": param.i64(), "to": param.i64()})
 _MIN_LENGTH = define_params({"minLength": param.i64()})
 _THRESHOLD = define_params({"min": param.i64()})
+_PAIR = define_params({"person1Id": param.string(), "person2Id": param.string()})
 
 _B = BindingProjection
 
@@ -296,6 +297,54 @@ def hop_var(b: Mapping[str, Any]) -> tuple[QueryRequest, Rows]:
     return _distinct_count(t, b)
 
 
+def pattern_common(b: Mapping[str, Any]) -> tuple[QueryRequest, Rows]:
+    # The friends of person1 are the batch variable `f`; the friends of person2 kept by `within("f")` (the nodes held
+    # by that variable) are the common friends, deduplicated and counted in HelixDB. The two persons of a binding
+    # differ, so the two KNOWS edges of a match differ (see `suites/patterns.py`).
+    friends = g().n_with_label_where("Person", SourcePredicate.eq("id", _PAIR.person1Id)).both("KNOWS")
+    common = g().n_with_label_where("Person", SourcePredicate.eq("id", _PAIR.person2Id)).both("KNOWS").within("f")
+    request = (
+        read_batch()
+        .var_as("f", friends)
+        .var_as("n", common.dedup().count())
+        .returning(["n"])
+        .to_query_request(_PAIR, dict(b))
+    )
+
+    def rows(result: Mapping[str, Any]) -> list[tuple[Any, ...]]:
+        return [(result["n"],)]
+
+    return request, rows
+
+
+def pm_two_hop_count(b: Mapping[str, Any]) -> tuple[QueryRequest, Rows]:
+    # Every V, two `out("E")` steps, counted. A traversal step follows every edge from every node of the stream, so
+    # this counts walks (an edge may repeat). On Graphalytics walks and the openCypher trails are the same matches
+    # (no self-loop, see `suites/patterns.py`); on the multigraph fixture of the trail-semantics case they are not,
+    # and the case shows what HelixDB counts.
+    t = g().n_with_label("V").out("E").out("E").count()
+
+    def rows(result: Mapping[str, Any]) -> list[tuple[Any, ...]]:
+        return [(result["n"],)]
+
+    return _request(_NONE, b, n=t), rows
+
+
+def _unsupported_group(query: str, detail: str) -> str:
+    return (
+        f"{query}: {detail}. group_count is a terminal step whose result is a map, which order_by and limit cannot "
+        "rank by its counts, and the query is not run without that order"
+    )
+
+
+def _unsupported_cycle(query: str, condition: str) -> str:
+    return (
+        f"{query}: the condition {condition} compares the ids of two nodes of the pattern. A predicate compares a "
+        "property of the current element with a literal or a parameter (Predicate, Expr), never with a node bound "
+        "earlier in the traversal, so the condition cannot be applied, and the query is not run without it"
+    )
+
+
 def startup_probe(b: Mapping[str, Any]) -> tuple[QueryRequest, Rows]:
     """The Startup probe (`suites.startup.PROBE["helix"]`): the number of nodes, `MATCH (n) RETURN count(n)`, with
     the `count` step over all nodes (https://docs.helix-db.com/database/helix-db/query-guides/projections)."""
@@ -343,11 +392,24 @@ BUILDERS: dict[str, Builder | str] = {
     "scan_filter_avg": scan_filter_avg,
     "hop_1": hop_1,
     "hop_2": hop_2,
-    "hop_3": (
-        "3-hop: the condition f.id <> a.id compares the walk's last person with its first friend, and a predicate "
-        "compares a property only with a constant, a parameter or an expression over the current element (no "
-        "reference to a node bound earlier in the walk), so the distinct count over the pattern cannot be expressed"
-    ),
     "hop_var": hop_var,
+    "pattern_triangle": _unsupported_cycle("Triangles through a person", "b.id < c.id"),
+    "pattern_square": _unsupported_cycle("4-cycles through a person", "b.id < d.id"),
+    "pattern_common": pattern_common,
+    "pattern_join": _unsupported_group(
+        "Multi-pattern join", "the shared text counts the matches per tag name and orders the tags by that count"
+    ),
+    "pattern_triangle_hub": _unsupported_cycle("Triangles through a hub person", "b.id < c.id"),
+    "pattern_triangle_all": _unsupported_cycle("Triangles, whole graph", "a.id < b.id AND b.id < c.id"),
+    "pm_two_hop_count": pm_two_hop_count,
+    "pm_two_hop_top10": _unsupported_group(
+        "2-hop paths per source, top 10",
+        "the shared text counts the paths per source and orders the sources by that count",
+    ),
+    "agg_out_degree_top10": _unsupported_group(
+        "Out-degree, top 10", "the shared text counts the edges per source and orders the sources by that count"
+    ),
+    # C1 runs the A1 text, so the A1 builder.
+    "sem_trail_self_loop": pm_two_hop_count,
     "startup_probe": startup_probe,
 }

@@ -4,7 +4,9 @@ A result is ranked when its status is `ok` and its answer `agree`. A load's answ
 language)) is its node and edge count check (`unchecked` when the database has no `counts()`), so a load is ranked
 when its status is `ok` and its answer is not `disagree`, by `load_ns`. Startup ranks by `timing.median_ns` in
 both modes (its children's in-process times, which a CodSpeed run records too). Other results rank by
-`timing.median_ns` in bench mode and by `preflight_ns` in codspeed mode, where timings are null.
+`timing.median_ns` in bench mode and by `preflight_ns` in codspeed mode, where timings are null. An answer-only
+item (`catalog.answer_only`) is never ranked: it counts as correct when it agrees (`is_ranked`) but has no place in
+the speed order, so it is nobody's fastest and no rank position.
 """
 
 import math
@@ -13,7 +15,7 @@ from dataclasses import dataclass
 
 from graph_bench.databases import display_name
 from graph_bench.results import Entry, Results
-from graph_bench.suites.catalog import ITEMS, load_benchmark, load_ql_benchmark
+from graph_bench.suites.catalog import ITEMS, answer_only, load_benchmark, load_ql_benchmark
 from graph_bench.types import CATEGORY_ORDER, LOAD_CATEGORIES, Category
 
 SCALE_ORDER: tuple[str, ...] = ("small", "medium", "large")
@@ -141,7 +143,8 @@ def group_key(entry: Entry) -> tuple[int, tuple[int, str], int, tuple[int, str]]
 
 
 def rank(results: Results) -> list[Ranked]:
-    """One `Ranked` per (benchmark, scale, threads) in the results, in matrix order; `order` may be empty."""
+    """One `Ranked` per (benchmark, scale, threads) in the results, in matrix order; `order` may be empty (always
+    for an answer-only item)."""
     groups: dict[tuple[str, str, int | None], list[Entry]] = {}
     for e in sorted(results.entries, key=group_key):
         groups.setdefault((e.benchmark, e.scale, e.threads), []).append(e)
@@ -150,7 +153,7 @@ def rank(results: Results) -> list[Ranked]:
         order = []
         for e in members:
             value = speed(e, results.mode)
-            if is_ranked(e) and value is not None:
+            if is_ranked(e) and value is not None and not answer_only(e.benchmark):
                 order.append((e.database, value))
         order.sort(key=lambda pair: (pair[1], pair[0]))
         ranked.append(Ranked(members[0].category, benchmark, title(benchmark), scale, threads, order))

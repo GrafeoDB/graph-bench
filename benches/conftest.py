@@ -108,7 +108,8 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
 
 def _order(item: pytest.Item) -> tuple[Any, ...]:
     """The startup first; then by dataset and store: the load, the read cases, the write cases, the query-language
-    load. pytest's order is kept otherwise (the sort is stable)."""
+    load, with the answer-only fixtures last (as the worker runs them). pytest's order is kept otherwise (the sort is
+    stable)."""
     case = item.callspec.params["gb_case"]  # type: ignore[attr-defined]
     if isinstance(case, StartupCase):
         return (0, case.threads is None)
@@ -119,7 +120,7 @@ def _order(item: pytest.Item) -> tuple[Any, ...]:
     else:
         key, rank = case_key(case), 2 if isinstance(case.item, Write) else 1
     dataset, store, scale, threads = key
-    return (1, dataset, store, scale, threads is None, rank)
+    return (1, dataset in catalog.ANSWER_ONLY_DATASETS, dataset, store, scale, threads is None, rank)
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:

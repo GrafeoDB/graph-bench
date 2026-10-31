@@ -50,7 +50,7 @@ Each benchmark belongs to one category and one data model (property graph, SQL/P
 | Load (query language) | bulk load of the graph-store datasets through the database's query language (Grafeo `LOAD CSV`, Neo4j `LOAD CSV`, Kùzu-family `COPY` from a query, DuckDB SQL `COPY`, ArcadeDB's documented importer), tracked separately so engine-side load fixes show up; fresh instances, count-checked plus a content probe, never used by the queries; the Load row above uses each database's fastest documented bulk path | every database with a model that reads a property graph; ⊘ without a documented query-language loader for these files (FalkorDB, HelixDB) and for TuringDB, whose `LOAD CSV` is documented for small files only (user decision, 2026-10-31); RDF-only databases ⊘ by model |
 | Batch writes | batch insert, update, delete, upsert | property graph DBs |
 | Scans | label scan, property filter, aggregation, order + limit | property graph DBs |
-| Hops | 1, 2, 3 hop expansion, variable-length paths, shortest path [IC13] | property graph DBs |
+| Hops | 1 and 2 hop expansion, variable length 1 to 3, shortest path [IC13] | property graph DBs |
 | Pattern matching | triangles, cycles, multi-pattern joins | property graph DBs |
 | Complex queries | LDBC SNB Interactive short reads IS1-7 and complex reads [IS1-7, IC2, IC6] | property graph DBs |
 | Algorithms | Graphalytics BFS, WCC, PR [these three], then CDLP, LCC, SSSP, Louvain, betweenness | DBs with native algorithms and a model that reads a property graph (property graph or SQL/PGQ); RDF-only DBs get ⊘ |

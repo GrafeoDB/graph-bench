@@ -577,3 +577,19 @@ def test_drop_empty_codspeed_result_removes_only_an_empty_file(tmp_path: Path) -
     assert (results_dir / "13.json").exists()
     assert not supervisor.drop_empty_codspeed_result(env, 14)
     assert not supervisor.drop_empty_codspeed_result({}, 11)
+
+
+def test_budget_rule_exempts_answer_only_items() -> None:
+    """The trail-semantics case is answer-only: never marked by the final rule, no yardstick, no in-run budget."""
+    entries = [_entry(db, ms, item="sem_trail_self_loop") for db, ms in (("a", 1), ("b", 1), ("c", 500))]
+    assert [(e.status, e.error) for e in _apply(entries)] == [("ok", None)] * 3
+    meta = supervisor._expected(catalog.selection("push"), "fake", 1)
+    c1 = next(i for i, m in meta.items() if m.benchmark == "sem_trail_self_loop")
+    a1 = next(i for i, m in meta.items() if m.benchmark == "pm_two_hop_count")
+    earlier = [
+        dataclasses.replace(_entry(db, 1, item=meta[i].benchmark), id=i, category=meta[i].category)
+        for db in ("a", "b", "c")
+        for i in (c1, a1)
+    ]
+    assert set(supervisor._budgets(earlier, "fake", meta)) == {a1}
+    assert not [i for i in meta if "multigraph" in i]  # no Load or Load (query language) entry for the fixture

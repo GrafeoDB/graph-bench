@@ -24,7 +24,7 @@ from graph_bench.report.ranking import (
 )
 from graph_bench.report.summary import LEGEND, grafeo_label, machine_label
 from graph_bench.results import Entry, Resource, Results
-from graph_bench.suites.catalog import load_benchmark
+from graph_bench.suites.catalog import answer_only, load_benchmark
 from graph_bench.types import CATEGORY_NAMES, LOAD_CATEGORIES, Category, marker
 
 START = "<!-- results:start -->"
@@ -65,11 +65,18 @@ def _overview_cell(entries: list[Entry], n: int) -> str:
     return " ".join([f"✓ {k}/{n}", *counts])
 
 
+# The detail cell of an answer-only item whose answer agrees: it has no time to show.
+ANSWER_ONLY_CELL = "✓"
+ANSWER_ONLY_NOTE = f"{ANSWER_ONLY_CELL}: an answer-check-only case agrees; it has no time budget and is not ranked."
+
+
 def _detail_cell(entry: Entry | None, r: Ranked, mode: str) -> str:
     if entry is None:
         return ""
     if not is_ranked(entry):
         return marker(entry.status, entry.answer)
+    if answer_only(entry.benchmark):
+        return ANSWER_ONLY_CELL
     value = speed(entry, mode)
     if value is None:
         return ""
@@ -154,7 +161,10 @@ def render_readme(results: Results) -> str:
 
     lines += _resource_tables(results, dbs, names)
 
-    lines += ["", LEGEND, "", _run_line(results)]
+    lines += ["", LEGEND]
+    if any(answer_only(e.benchmark) for e in results.entries):
+        lines += ["", ANSWER_ONLY_NOTE]
+    lines += ["", _run_line(results)]
     if results.mode == "codspeed":
         note = "Times are single preflight runs; CodSpeed holds the measured timings."
         if results.resources:

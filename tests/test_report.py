@@ -559,3 +559,31 @@ def test_report_resources_per_scale_and_in_codspeed_mode(results: Results) -> No
 def test_report_without_resources_has_no_memory_or_disk(results: Results) -> None:
     text = render_readme(results)
     assert "### Memory" not in text and "### Disk" not in text
+
+
+def test_answer_only_case_shows_its_answer_but_is_never_ranked(results: Results) -> None:
+    """The trail-semantics case (an answer-only item) is ✓ or its marker in the matrix, counts towards ✓ k/n and
+    Grafeo's n, but has no time, no bold fastest and no rank position, even when it is much faster or slower."""
+    pm: Category = "pattern_matching"
+    results.entries += [
+        _entry(pm, "pattern_triangle", "grafeo", "ok", "agree", 2.0),
+        _entry(pm, "pattern_triangle", "ladybug", "ok", "agree", 1.0),
+        _entry(pm, "sem_trail_self_loop", "grafeo", "ok", "agree", 0.1),
+        _entry(pm, "sem_trail_self_loop", "ladybug", "ok", "disagree", 0.01),
+        _entry(pm, "sem_trail_self_loop", "fake", "ok", "agree", 900.0),
+    ]
+    [c1] = [r for r in rank(results) if r.benchmark == "sem_trail_self_loop"]
+    assert c1.order == [] and c1.position("grafeo") is None
+    text = render_readme(results)
+    assert _row(text, "Trail semantics with self-loops") == ["✓", "✓", "≠"]
+    assert _row(text, "Pattern matching") == ["✓ 2/2", "✓ 1/2", "✓ 1/2 ≠1"]
+    assert "✓: an answer-check-only case agrees; it has no time budget and is not ranked." in text
+    summary = render_summary(results)
+    # Pattern matching: two databases ranked on the triangles; Grafeo second there, so fastest 0 of its 2 agreed
+    # answers (the triangles and C1), median rank 2.
+    assert "| Pattern matching | 2 | 0 / 2 | 2 |" in summary
+    assert "sem_trail_self_loop" not in summary
+
+
+def test_answer_only_note_only_with_an_answer_only_case(results: Results) -> None:
+    assert "answer-check-only" not in render_readme(results)

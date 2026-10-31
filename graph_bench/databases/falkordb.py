@@ -83,6 +83,8 @@ class FalkorDatabase(Database):
         """Start the falkordblite server and select the graph: what `load` does before its first index."""
         # No path: a temporary directory. An empty `save` removes the periodic RDB snapshots, so the data stays in
         # memory only (https://docs.falkordb.com/operations/durability.html, the `save ""` development setting).
+        # The client keeps falkordblite's defaults (a 5 s socket timeout, 10 retries); see "FalkorDB: a call longer
+        # than about 50 s fails on the client's socket timeout" in docs/known-disagreements.md.
         self.server = FalkorDB(None, serverconfig={"save": ""})
         self.graph = self.server.select_graph(GRAPH)
 

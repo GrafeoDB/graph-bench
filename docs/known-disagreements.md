@@ -5,7 +5,8 @@ left as it is in the results instead of being worked around in the adapter or th
 the case, the data it was seen on, what the database did, what the reference expects and where the cause lies
 (the database engine or our adapter).
 
-The data is what `graph-bench data prepare --selection push` generates (`snb-small` and `graphalytics-small`).
+The data is what `graph-bench data prepare --selection push` generates (`snb-small`, `graphalytics-small` and
+the multigraph fixture `multigraph-small`).
 The `- id: <database>/<benchmark>` line of each section is read by the adapter tests as an allowlist: those
 entries may fail without failing the test.
 
@@ -61,6 +62,56 @@ the plans or the per-row costs leave room to improve. They carry no `- id:` line
   about 0.4 ms against about 1.1 to 1.6 ms for the full sort (grafeo-31's measurement). The gap with NeuG is the
   per-row cost of scanning, filtering and reading properties, the same as `scan_filter_avg`. Cause: Grafeo engine
   (per-row scan and property read cost), covered by the A4 profile planned for grafeo 0.6.1.
+
+## Grafeo: closing a cycle on a bound node is slow (4-cycles through a person, triangles of the whole graph)
+
+- id: grafeo/pattern_square
+- id: grafeo/pattern_triangle_all
+- Query: `pattern_square` (4-cycles through a person), the shared openCypher text in
+  `graph_bench/suites/patterns.py`, no Grafeo override: the cycle `(a:Person {id: $personId})-[:KNOWS]-(b)-[:KNOWS]-(c)`
+  `-[:KNOWS]-(d)-[:KNOWS]-(a)` over Persons, `WHERE b.id < d.id AND c.id <> $personId RETURN count(*) AS cycles`.
+- Dataset: `snb-small`. Bindings: 10 persons of KNOWS degree 20 to 36 (at most the median), answers 3,359 to 9,942.
+- Grafeo 0.6.0 outcome: the answers agree, but a preflight of the 10 bindings takes about 106 s (7 to 13 s per
+  binding) on an idle machine. In `bench --selection push` (Windows, eight databases, with a Docker run beside it)
+  one binding passed Grafeo's own default query timeout: ✗ `GRAFEO-Q003: timeout error: Query exceeded the 30s
+  timeout` (the adapter keeps Grafeo's default configuration). In the adapter test, whose silence limit is 60 s,
+  the preflight is either cut off (⏱) or ends the same way. The others' medians for the same 10 bindings: NeuG
+  83 ms, Neo4j 664 ms, TuringDB 4.3 s (Docker), ArcadeDB 4.6 s (⏱), FalkorDB 14 s (Docker); LadybugDB is ≠ (below).
+- `pattern_triangle_all` (every triangle of `snb-small`, one call) takes 29 s alone, just under that 30 s query
+  timeout, and failed the same way (✗ `GRAFEO-Q003`) in the same push run, against LadybugDB's 60 ms and NeuG's
+  78 ms.
+- Reduced (outside the benchmark, binding `person_10`): the open path without the closing edge,
+  `...-[:KNOWS]-(d:Person) WHERE b.id < d.id AND c.id <> $personId RETURN count(*)`, counts 97,292 paths in 98 ms;
+  adding `-[:KNOWS]-(a)` takes 9 s (19 s without the WHERE). The time is in closing the cycle on the already bound
+  `a`: each open path seems to expand the whole KNOWS adjacency of `d` (hubs have up to 608 edges) and then keep the
+  rows that reach `a`, where an edge-existence check or an intersection with `a`'s adjacency would do.
+- The SQL/PGQ twin `pattern_square_sql` (same pattern) agrees in about 15 s on the same Grafeo, against DuckDB's
+  165 ms; the triangle (`pattern_triangle`, closing after 2 hops) agrees in 0.88 s against NeuG's 4.3 ms.
+- Reference answer: matched.
+- Cause: Grafeo engine (cyclic pattern planning: the closing edge to a bound node). The analytics brief tracks the
+  worst-case-optimal join for grafeo 0.6.3 (T-hub, T-all); this case is its median-degree guard. Not rewritten.
+
+## Grafeo: pattern matching cases are slow under the 10x budget rule (not allowlisted)
+
+These cases agree with the reference. In a `bench` run next to the others they are marked ⏱ by the budget rule,
+not by a hang; they carry no `- id:` line because the adapter test runs Grafeo alone, where no budget applies and
+they must agree. Preflight times of the push bindings on Windows (Grafeo 0.6.0, single-threaded), with the fastest
+other databases:
+
+- `pattern_triangle` 0.88 s for 10 bindings (NeuG 4.3 ms, LadybugDB 7.4 ms, FalkorDB 27 ms); 2.4 s in the push run
+  (⏱, 418.6x).
+- `pattern_triangle_hub` 9.1 s for the 10 hubs (NeuG 41 ms, LadybugDB 138 ms, ArcadeDB 0.56 s); 14.5 s in the push
+  run (⏱, 64.8x). Same cause as `pattern_square` above; tracked as T-hub and T-all (leapfrog join, grafeo 0.6.3).
+- `pattern_common` 61 ms (⏱, 16.0x; LadybugDB 2.7 ms, Neo4j 2.3 ms, NeuG 6.5 ms) and `pattern_join` 96 ms (⏱,
+  29.0x; NeuG 0.21 ms, LadybugDB 3.4 ms, ArcadeDB 6.3 ms) in the push run; 34 ms and 74 ms on an idle machine.
+- `pm_two_hop_count` (A1) 2.27 s (LadybugDB 1.5 ms, NeuG 4.3 ms, TuringDB 24 ms) and `pm_two_hop_top10` (A2) 16.9 s
+  for 10 cuts (LadybugDB 139 ms, NeuG 450 ms, TuringDB 688 ms): every one of the 4,367,196 paths is materialized to
+  be counted (analytics brief A1, A2: count pushdown, grafeo 0.6.3); in the push run 2.9 s (⏱, 41.4x) and 20.4 s
+  (⏱, 17.2x). `agg_out_degree_top10` (A3) is 8.5 ms in the push run against NeuG's 0.70 ms, LadybugDB's 2.3 ms and
+  Neo4j's 7.4 ms, within the rule.
+- `pattern_square_sql` about 15 s alone, 38.8 s in the push run (⏱, 262x; DuckDB 148 ms) and `pattern_join_sql` 1.5 s for the join the openCypher
+  `pattern_join` answers in 74 ms on the same Grafeo (DuckDB cannot run it, so no budget applies there).
+- `pattern_join_rdf` 3.0 s against Oxigraph's 0.36 s (8.2x; at the edge of the rule).
 
 ## Grafeo: medium-scale RDF and IC13 (not allowlisted)
 
@@ -172,23 +223,32 @@ queries agree afterwards), but slower than the batch API. It is not a disagreeme
   materializes every path before the distinct count.
 - Reference answer: 999 for every binding (the radius-3 ball holds every person with friends on `snb-small`).
 - Cause: Grafeo engine (openCypher variable-length expand: all paths are kept, millions of trails of up to 3 edges
-  from this hub, although the result needs only the distinct end nodes). Not rewritten in the shared text.
+  from this hub, although the result needs only the distinct end nodes). Confirmed by grafeo-31: the reachability
+  search is allowed for Cypher trails only when the hops are directed or at most one, so an undirected `*1..3`
+  enumerates every trail (directed takes 1.4 ms); queued for grafeo 0.6.1. Not rewritten in the shared text.
 
-## Grafeo: SPARQL alternative of a path and its inverse is not supported (1-hop, 2-hop, 3-hop (SPARQL))
+## Grafeo: SPARQL alternative of a path and its inverse is not supported (1-hop, 2-hop, triangles, 4-cycles and
+common friends (SPARQL))
 
 - id: grafeo/hop_1_rdf
 - id: grafeo/hop_2_rdf
-- id: grafeo/hop_3_rdf
-- Queries: `hop_1_rdf`, `hop_2_rdf`, `hop_3_rdf`, the shared SPARQL texts in `graph_bench/suites/hops.py`; every
-  step is `?x (v:KNOWS|^v:KNOWS) ?y`, KNOWS in either direction (each pair is stored once, as one triple).
+- id: grafeo/pattern_triangle_rdf
+- id: grafeo/pattern_square_rdf
+- id: grafeo/pattern_common_rdf
+- Queries: `hop_1_rdf`, `hop_2_rdf`, the shared SPARQL texts in `graph_bench/suites/hops.py`, and
+  `pattern_triangle_rdf`, `pattern_square_rdf`, `pattern_common_rdf` in `graph_bench/suites/patterns.py`; every
+  KNOWS step is `?x (v:KNOWS|^v:KNOWS) ?y`, KNOWS in either direction (each pair is stored once, as one triple).
+  The fourth pattern twin, `pattern_join_rdf`, has no KNOWS step and agrees.
 - Dataset: `snb-small` as RDF triples.
 - Grafeo 0.6.0 outcome: ✗ on the first binding, `GRAFEO-Q004: unsupported: Complex property paths not yet
   supported`. Reduced on an empty store: `?s (v:a|^v:a) ?o` fails the same way, while `?s v:a|v:b ?o` and
-  `?s ^v:a ?o` parse and run, so it is the alternative whose branch is an inverse path. Oxigraph runs the same three
-  texts and agrees.
-- Reference answers: the openCypher `hop_1`, `hop_2` and `hop_3` references.
+  `?s ^v:a ?o` parse and run, so it is the alternative whose branch is an inverse path. Oxigraph runs the same
+  five texts and agrees.
+- Reference answers: the openCypher `hop_1`, `hop_2`, `pattern_triangle`, `pattern_square` and `pattern_common`
+  references.
 - Cause: Grafeo engine (SPARQL property path evaluation, SPARQL 1.1 section 9.1 alternative and inverse paths).
-  Not rewritten as a `UNION` of the two directions, which would be a different text for one engine.
+  Confirmed by grafeo-31: an alternative path is translated only when every branch is a plain predicate; queued for
+  grafeo 0.6.1. Not rewritten as a `UNION` of the two directions, which would be a different text for one engine.
 
 ## Grafeo: SPARQL IS6 property path is slow (not allowlisted)
 
@@ -202,6 +262,36 @@ queries agree afterwards), but slower than the batch API. It is not a disagreeme
   transitional: the adapter calls `db.load_rdf(path, format="ntriples")` (grafeo release/0.6.1, commit 61c4388d)
   as soon as the installed grafeo has it, so the RDF load switches to the file loader with a Grafeo 0.6.1 build,
   and the fallback is then removed.
+
+## Trail semantics with self-loops: engines that match walks (LadybugDB, NeuG, TuringDB, FalkorDB, HelixDB)
+
+- id: ladybug/sem_trail_self_loop
+- id: neug/sem_trail_self_loop
+- id: turingdb/sem_trail_self_loop
+- id: falkordb/sem_trail_self_loop
+- id: helixdb/sem_trail_self_loop
+- Query: `sem_trail_self_loop` (C1 of the analytics brief), the A1 text
+  `MATCH (a:V)-[:E]->(b:V)-[:E]->(c:V) RETURN count(*) AS paths`, answer-only (no budget, never ranked).
+- Dataset: the multigraph fixture (`graph_bench/datasets/multigraph.py`): 6 vertices and 11 edges, among them two
+  parallel edges 1->2, a self-loop on 2 and on 5, two parallel self-loops on 3, and an isolated vertex. Every
+  adapter loads all 11 edges (the count check agrees on every database).
+- Reference answer: 22, the trails: openCypher matches a relationship at most once per pattern (relationship
+  isomorphism), so a self-loop e gives no match (e, e). The walk count, an edge allowed twice, is 26 (one more per
+  self-loop); the sum of in-degree times out-degree minus the 4 self-loops is 22.
+- Grafeo 0.6.0, ArcadeDB 26.10.2.post1 and Neo4j agree (22).
+- LadybugDB 0.22.1, NeuG 0.3.0 and TuringDB 3.0.2 answer 26: they match walks. LadybugDB's walk semantics is visible
+  on the SNB 4-cycle as well (below): without the WHERE its matches include `a-b-c-b-a`, which reuses edges.
+- FalkorDB (falkordblite 0.11.0) answers 17. An anonymous relationship pattern matches each pair of nodes once:
+  `MATCH (a:V)-[:E]->(b:V) RETURN count(*)` gives 9, the number of distinct (source, target) pairs, while
+  `MATCH (a:V)-[e:E]->(b:V)` returns all 11 edges. With named relationships the 2-hop count is 26, the walks; with
+  anonymous ones it is 17, the walks over the 9 distinct pairs. So the parallel edges collapse and a self-loop is
+  matched twice.
+- HelixDB (helix-db 0.3.4, embedded 0.3.3) answers 17 through the builder `pm_two_hop_count` (two `out("E")` steps):
+  `out` yields each neighbour once per node, not once per edge (`n_with_label("V").out("E").count()` is 9 while
+  `out_e("E").count()` is 11), and traversal steps repeat edges, so it counts the walks over the 9 distinct pairs.
+  The same builder is exact on Graphalytics (no parallel edge, no self-loop), where it agrees.
+- Cause: the engines' match semantics (walks, and for FalkorDB and HelixDB also one step per pair of nodes), against
+  openCypher's relationship isomorphism. Not rewritten (an edge-identity condition in the text would hide it).
 
 ## LadybugDB: the ALGO extension does not load (PageRank, WCC)
 
@@ -251,6 +341,25 @@ queries agree afterwards), but slower than the batch API. It is not a disagreeme
   `length(path)` is null, so the `CASE` falls through to `length(path)`. The same happens with a bounded
   `[:KNOWS*1..3]` pattern. A relationship variable is null as expected
   (`OPTIONAL MATCH (p1)-[k:KNOWS]-(p2) RETURN k IS NULL` gives true). The query is left as it is.
+
+## LadybugDB: a constant filter on a node of a cyclic pattern drops matches (4-cycles through a person)
+
+- id: ladybug/pattern_square
+- Query: `pattern_square` (4-cycles through a person), the shared openCypher text in `graph_bench/suites/patterns.py`:
+  the cycle `(a:Person {id: $personId})-[:KNOWS]-(b)-[:KNOWS]-(c)-[:KNOWS]-(d)-[:KNOWS]-(a)` over Persons,
+  `WHERE b.id < d.id AND c.id <> $personId RETURN count(*) AS cycles`.
+- Dataset: `snb-small`. LadybugDB 0.22.1 answers 1,531 for binding 0 (`person_10`), where the reference is 5,070;
+  the triangles (`pattern_triangle`, `pattern_triangle_hub`, `pattern_triangle_all`) agree.
+- Reduced (outside the benchmark), persons p0 to p4 and the KNOWS edges p2->p1, p2->p3, p4->p1, p3->p4, p1->p0,
+  p2->p0, from `a` = p1. The only 4-cycle is p1-p2-p3-p4-p1, so the text should give 1; LadybugDB gives 0.
+  Without the WHERE it returns 15 matches (walks), p1-p2-p3-p4 among them. `WHERE c.id <> 'p1'` alone (or
+  `c.id <> $personId`) returns 3 of the 6 walks whose c is not p1, losing every walk with `b` = p2; `WHERE c.id <>
+  a.id` returns all 6. So a constant inequality on `c` removes rows it should keep, and with `b.id < d.id` the one
+  true cycle is lost. The triangles, whose only condition compares two pattern nodes, are not affected.
+- Reference answer: the 4-cycles through the person, each once (tests/test_references.py checks the reference
+  against a naive enumeration). Grafeo, NeuG, FalkorDB, TuringDB, ArcadeDB and Neo4j agree on all 10 bindings.
+- Cause: LadybugDB engine (a filter with a constant on a node of a cyclic pattern, likely pushed into the wrong
+  side of the cycle's join). Not rewritten (`c.id <> a.id` would hide it).
 
 ## LadybugDB: slow point lookups under the 10x budget rule (not allowlisted)
 
@@ -362,23 +471,6 @@ not a disagreement, so there is no `- id:` line.
 - Cause: FalkorDB engine (openCypher coverage). KNOWS is stored once per pair, so a directed form is not the same
   question. No rewrite is used: a database that cannot run the standard text gets the marker (FAIRNESS.md).
 
-## FalkorDB: the 3-hop count runs past the client's socket timeout (3-hop)
-
-- id: falkordb/hop_3
-- Query: `hop_3` (3-hop), the shared openCypher text in `graph_bench/suites/hops.py`, no FalkorDB override.
-- Dataset: `snb-small` (Linux, Docker ubuntu:24.04, falkordblite 0.11.0, FalkorDB 4.22.1).
-- FalkorDB outcome: ✗ on the first binding (`person_0`), `TimeoutError: Timeout reading from socket`, after about
-  58 s. The falkordblite client connection (redis-py 8.1.0) has a 5 s socket timeout and retries a timed-out
-  command 10 times with backoff; the adapter keeps falkordblite's client settings. With no socket timeout (tried
-  outside the benchmark, not used), the second binding alone, `person_143` (36 friends), answers 999, the
-  reference, in 45 s, so the 10 bindings would take minutes and the case would be ⏱ instead.
-- `hop_1`, `hop_2` and `hop_var` agree; `hop_var` is ⏱ by the budget rule in a multi-database run (6.6 s for 10
-  bindings in the Docker run against TuringDB's 26 ms).
-- Reference answer: 999 for every binding.
-- Cause: FalkorDB engine (the fixed-length 3-hop pattern with its `WHERE` conditions over 18,000 KNOWS edges, tens
-  of seconds per person), surfaced as ✗ by the client's socket timeout. A follow-up case can start while the
-  server still runs the timed-out query; in the Docker run `hop_var` (next) still agreed.
-
 ## FalkorDB: PageRank parameters are fixed (answer agrees)
 
 `algo.pageRank(label, relationship)` takes no damping, iteration or tolerance argument and its docs list none
@@ -392,6 +484,29 @@ becomes ≠ and belongs here. No `- id:` line: it agrees today.
 and falkordblite starts the module with none, so the server uses the core count, while every other database runs
 single-threaded where it can. The results record `threads_configurable=False`. The server is also a separate
 process (`local process`), so its memory is not under the harness's per-process caps.
+
+## FalkorDB: a call longer than about 50 s fails on the client's socket timeout (known limitation)
+
+- The adapter keeps falkordblite's client settings. falkordblite 0.11.0's `FalkorDB(dbfilename, serverconfig,
+  **kwargs)` builds a `redislite.Redis` client (redis-py 8.1.0) whose connection has, read from the code and the
+  live connection pool, `socket_timeout` 5 s and a `Retry` of 10 attempts with exponential backoff on
+  `TimeoutError` and `ConnectionError`.
+- Effect: a single FalkorDB call that runs longer than about 50 s (5 s times 10 retries; 58 s measured) fails as
+  ✗ `TimeoutError: Timeout reading from socket` on that binding, instead of reaching the harness's case timeout
+  (which kills the process tree) or the 10x budget rule (⏱). The server goes on running the query, so the next case
+  may start behind it. Seen with the 3-hop pattern this category had before its removal (45 s for one person); in
+  the push selection the longest FalkorDB calls are a `hop_var` binding from a hub, about 3.5 s, and the whole-graph
+  triangle count `pattern_triangle_all`, one call of 3.3 s alone; in a Docker push run that shared the host with
+  the Windows run, that call passed the limit and was ✗ (`TimeoutError: Timeout reading from socket`), while the
+  adapter test, alone, agreed. So it is not allowlisted, but a busy machine can mark it.
+- Why it is not changed: falkordblite documents only `FalkorDB(path)`
+  (https://docs.falkordb.com/operations/falkordblite/falkordblite-py.html, https://github.com/FalkorDB/falkordblite).
+  redislite documents that `redislite.Redis` takes every `redis.Redis()` keyword argument
+  (https://redislite.readthedocs.io/en/latest/topic/redislite_module.html) and redis-py documents `socket_timeout`
+  (https://redis.readthedocs.io/en/stable/connections.html), but falkordblite does not document passing it through
+  `FalkorDB(...)`; that hand-off is visible only in its code, and the adapter uses documented paths only.
+- It can change once falkordblite documents client options: then `socket_timeout=None` would leave the limit to
+  the harness, as for every other database.
 
 ## FalkorDB: Startup starts a redis-server per child (note)
 
@@ -420,6 +535,8 @@ budget applies and they must agree.
   milliseconds per call.
 - Cause: FalkorDB engine and the out-of-process server (per-call overhead); `snb_is6` and `snb_ic6` also include
   variable-length traversals. The adapter uses the `id` indexes it creates in the load and no query cache.
+- Hops: `hop_1` and `hop_2` are within the budget; `hop_var` agrees but takes 6.6 to 11.1 s for 10 bindings (Docker runs
+  with TuringDB, 250x to 348x its 26 to 32 ms), about 3.5 s for the one binding from a hub.
 
 ## FalkorDB: BFS is slow under the 10x budget rule (not allowlisted)
 
@@ -428,6 +545,11 @@ target vertex (`MATCH (s:V {id: $s}), (b:V) WITH b, shortestPath((s)-[:E*0..]->(
 https://docs.falkordb.com/cypher/functions.html), because `algo.BFS` returns no levels. On `graphalytics-small`
 (Linux, Docker) the median is 128.6 ms against Grafeo's 0.42 ms, so it is marked `timeout` (⏱, 302.8x the top-3
 average) by the budget rule, not by a hang. No `- id:` line: the adapter test runs FalkorDB alone and it must agree.
+
+Pattern matching (Docker, beside TuringDB alone, so compared with TuringDB only): `pattern_join` 699 ms against
+TuringDB's 4.7 ms (⏱, 148.6x). Its other pattern cases agree within the rule there; next to the Windows databases
+`pattern_square` (14.3 s), `pattern_triangle_hub` (22.4 s) and `pm_two_hop_top10` (3.5 s) would be far beyond it
+(NeuG 83 ms, 40 ms and 407 ms), on a shared host.
 
 ## TuringDB: IC13 does not parse (shortestPath is a different, weighted function)
 
@@ -480,6 +602,9 @@ alone, where no budget applies and they must agree.
   client); not measured further.
 - `snb_is7` agrees on this data: the `IS NOT NULL` over an `OPTIONAL MATCH` variable that failed with a
   `ColumnMask` error on a tiny graph (research) ran correctly on `snb-small`, so the shared text is used as is.
+- Pattern matching (Docker, `bench --selection push --db falkordb,turingdb`, so against FalkorDB only):
+  `pattern_common` 146 ms (⏱, 11.2x) and `pattern_triangle` 667 ms (⏱, 15.2x); `pattern_triangle_all` 13.6 s and
+  `pattern_triangle_hub` 2.5 s agree within the rule there.
 
 ## TuringDB: one engine per process, threads and storage (notes)
 
@@ -543,25 +668,6 @@ alone, where no budget applies and they must agree.
   where the shared text has one (a disadvantage, not a workaround).
 - Cause: HelixDB DSL (feature coverage), not the adapter.
 
-## HelixDB: the 3-hop count cannot be expressed in the DSL (not available)
-
-- id: helixdb/hop_3
-- Query: `hop_3` (3-hop): `MATCH (s:Person {id: $personId})-[:KNOWS]-(a:Person)-[:KNOWS]-(b:Person)-[:KNOWS]-(f:Person)
-  WHERE b.id <> $personId AND f.id <> a.id AND f.id <> $personId RETURN count(DISTINCT f.id) AS persons`.
-- HelixDB outcome: `not_supported` (⊘), "3-hop: the condition f.id <> a.id compares the walk's last person with its
-  first friend, and a predicate compares a property only with a constant, a parameter or an expression over the
-  current element (no reference to a node bound earlier in the walk), so the distinct count over the pattern cannot
-  be expressed". In helix-db 0.3.4 `Predicate` compares a property with a value, a parameter or an `Expr`, and
-  `Expr` has properties of the current element, constants, parameters and arithmetic; a node named with `bind` can
-  only be projected (`BindingProjection`), not compared
-  (https://docs.helix-db.com/database/helix-db/query-guides/filtering). Dropping `f.id <> a.id` would count the
-  walks `s-a-b-a` and change the answer; checking it in Python would compute the answer outside HelixDB; neither is
-  done.
-- `hop_1`, `hop_2` and `hop_var` run as builders (`both("KNOWS")` steps, `dedup`, `count`; `hop_var` is `repeat`
-  three times with `emit_after`) and agree; `hop_2`'s one condition, `f.id <> $personId`, is a parameter
-  comparison.
-- Cause: HelixDB DSL (feature coverage), not the adapter.
-
 ## HelixDB: no BFS, WCC or PageRank (not available)
 
 - id: helixdb/graphalytics_bfs
@@ -574,6 +680,28 @@ alone, where no budget applies and they must agree.
   (https://docs.helix-db.com/database/helix-db/start-here/sdk-setup/python-project-setup) and never describe the
   snapshot or its traversal, so it is not a documented path and the adapter does not use it.
 - Cause: HelixDB (no documented algorithm API).
+
+## HelixDB: cyclic patterns, the join and the grouped 2-hop counts cannot be expressed in the DSL (not available)
+
+- id: helixdb/pattern_triangle
+- id: helixdb/pattern_square
+- id: helixdb/pattern_triangle_hub
+- id: helixdb/pattern_triangle_all
+- id: helixdb/pattern_join
+- id: helixdb/pm_two_hop_top10
+- id: helixdb/agg_out_degree_top10
+- Queries: the Pattern matching items in `graph_bench/suites/patterns.py`; their `helix` texts are reasons in
+  `graph_bench/databases/helix_queries.py`, so each case is ⊘ with that reason.
+- Triangles (through a person, a hub, the whole graph) and 4-cycles: the conditions `b.id < c.id`, `b.id < d.id`
+  and `a.id < b.id AND b.id < c.id` compare the ids of two nodes of the pattern. A DSL predicate (`Predicate`,
+  `Expr`) compares a property of the current element with a literal or a parameter, never with a node bound earlier
+  in the traversal. Closing the cycle is expressible (`within` a batch variable), but without the condition each
+  cycle would be counted once per direction, and halving in Python is computing the answer outside the database.
+- `pattern_join`, `pm_two_hop_top10`, `agg_out_degree_top10`: the text counts the matches per group (tag, source)
+  and orders the groups by that count. `group_count` is a terminal step whose result is a map that `order_by` and
+  `limit` cannot rank, as for IC6 above.
+- `pattern_common` (common friends, through `within`) and `pm_two_hop_count` (two `out` steps) run; the 2-hop count
+  agrees on Graphalytics and is ≠ on the multigraph fixture (see the trail semantics section).
 
 ## HelixDB: loading goes through write_batch chunks (disadvantage)
 
@@ -605,10 +733,14 @@ Aggregation section). Every filtered scan reads the label's nodes and filters th
 created on `creationDate` or `length`, as no other database gets one.
 
 The Hops it runs agree and are ⏱ by the same rule in `bench --selection push` (Windows, eight databases): `hop_1`
-37.7 ms for 10 bindings (64.7x), `hop_2` 3.68 s (123.5x) and `hop_var` 66.7 s (51.1x). The builders follow the
+22 to 38 ms for 10 bindings (37x to 65x), `hop_2` 1.7 to 3.7 s (78x to 124x) and `hop_var` 67 to 70 s (49x to
+51x), over two runs. The builders follow the
 shared texts: every walk is expanded (`both("KNOWS")` per step, `repeat` three times for `hop_var`) and deduplicated
 once at the end, as `count(DISTINCT f.id)`; no step deduplicates the intermediate persons, which the texts do not
 ask for either. `hop_var` makes the HelixDB adapter test take about 6 minutes longer (warm-up plus 5 runs).
+
+Pattern matching: `pattern_common` agrees within the rule (16.8 ms); `pm_two_hop_count` agrees but is ⏱ (1.27 s,
+17.9x; LadybugDB 1.6 ms, NeuG 2.9 ms): the builder streams every one of the 4,367,196 walks to count them.
 
 ## HelixDB: intermittent planner error during loads on a busy machine (✗ when it happens, not allowlisted)
 
@@ -676,6 +808,11 @@ before the JVM thread caps) are marked `timeout` (⏱) by the budget rule in
 created). `algo.bfs` leaves the start vertex out of its result ("The start node is excluded from the results",
 https://docs.arcadedb.com/arcadedb/reference/graph-algorithms/path-finding.html#algo-bfs), so the adapter adds it
 at depth 0, the reference's definition. No `- id:` line.
+
+Pattern matching, in `bench --selection push` (Windows, eight databases): `pattern_triangle` 67.7 ms (⏱, 12.0x),
+`pattern_square` 4.6 s (⏱, 12.4x) and `pm_two_hop_count` 1.09 s (⏱, 15.4x) agree but are beyond the rule;
+`pm_two_hop_top10` (7.3 s) and `pattern_triangle_all` (2.4 s) agree within it. ArcadeDB matches trails: the
+trail-semantics case agrees.
 
 ## ArcadeDB: threads, heap, storage and the JVM start (notes)
 
@@ -763,6 +900,10 @@ The answers agree with the references (PageRank within `LDBC_EPS`, see below). A
 A Cypher call through the embedded API costs about 0.1 ms even for `RETURN 1` (a transaction, the parameter map
 and the JPype crossing). The algorithms map each GDS node id back to the app `id` with `gds.util.asNode`, as the
 GDS docs do. No `- id:` line.
+
+Pattern matching, in `bench --selection push` (Windows, eight databases): `pattern_triangle_hub` 4.3 s (⏱, 19.3x;
+NeuG 40 ms, LadybugDB 131 ms, ArcadeDB 499 ms) agrees but is beyond the rule; the other pattern cases agree within
+it, the trail-semantics case included.
 
 ## Neo4j: GDS algorithms (notes)
 
@@ -896,6 +1037,21 @@ Measured on Windows (one thread, push data, three loads per dataset in one proce
 - Cause: DuckPGQ (SQL/PGQ label expressions and non-unique edge labels), checked against
   https://duckpgq.org/documentation/property_graph/ and https://duckpgq.org/documentation/sql_pgq/.
 
+## DuckDB + DuckPGQ: an edge type stored in several tables is not a label (Multi-pattern join (SQL/PGQ))
+
+- id: duckdb/pattern_join_sql
+- Query: `pattern_join_sql`, the shared SQL/PGQ text in `graph_bench/suites/patterns.py`, whose pattern is
+  `(p:Person)-[i:HAS_INTEREST]->(t:Tag), (m:Post)-[h:HAS_TAG]->(t:Tag), (m:Post)-[c:HAS_CREATOR]->(p:Person)`.
+- Dataset: `snb-small`. `HAS_TAG` and `HAS_CREATOR` connect Posts and Comments, so each is two tables
+  (`HAS_TAG__Post__Tag`, `HAS_TAG__Comment__Tag`, ...), and the adapter labels a type spread over several tables
+  with the table names, because DuckPGQ needs one label per edge table (the IS4 and IS6 section above).
+- DuckDB 2.0.0 with DuckPGQ: ✗, `BinderException: Binder Error: The label HAS_TAG is not registered in property
+  graph snb`. With the table labels in the text (`-[h:HAS_TAG__Post__Tag]->`, tried outside the benchmark) it runs,
+  but that is a different text for one engine. Grafeo runs the shared text and agrees.
+- Cause: DuckPGQ (one label per edge table, no label shared by tables). The other three pattern twins agree; their
+  cycles repeat the labelled first variable, `(a:Person)`, because DuckPGQ reads a bare `(a)` as the label `a`
+  ("The label a is not registered in property graph snb"), which the twins' docstring records.
+
 ## DuckDB + DuckPGQ: PageRank stops at a fixed tolerance (≠)
 
 - id: duckdb/graphalytics_pr
@@ -916,9 +1072,9 @@ filtered endpoints). No `- id:` line: the adapter test runs DuckDB alone, where 
 rewritten.
 
 The Hops twins agree too; in `bench --selection push` (Windows, eight databases, Grafeo the only other SQL/PGQ
-database) `hop_1_sql` 26.3 ms for 10 bindings (72.5x Grafeo's 0.36 ms, the same graph pattern WHERE filter on the
-start person) and `hop_var_sql` 164 ms (15.9x Grafeo's 10.3 ms) are ⏱; `hop_2_sql` (58 ms) and `hop_3_sql` (7.9 s)
-are within the budget.
+database) `hop_1_sql` 25 to 26 ms for 10 bindings (67x to 73x Grafeo's 0.36 to 0.38 ms, the same graph pattern WHERE filter on the
+start person) and `hop_var_sql` 163 to 164 ms (16x to 17x Grafeo's 10 ms) are ⏱, over two runs; `hop_2_sql` (58 to 65 ms) is
+within the budget.
 
 ## DuckDB + DuckPGQ: SQL/PGQ IC13 does not finish on `snb-medium` (⏱, not allowlisted)
 
