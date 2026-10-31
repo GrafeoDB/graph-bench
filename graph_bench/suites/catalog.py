@@ -59,6 +59,7 @@ __all__ = [
     "reference_items",
     "reference_path",
     "reference_source",
+    "resource_id",
     "selection",
     "startup_id",
     "startup_ids",
@@ -258,6 +259,14 @@ def load_benchmark(dataset: str, store: Store = "graph") -> str:
 def load_id(dataset: str, db: str, scale: str, threads: int | None, store: Store = "graph") -> str:
     """The load benchmark id of one dataset and store: `benches/test_load.py::test_<load_benchmark>[<params>]`."""
     return f"benches/test_load.py::test_{load_benchmark(dataset, store)}[{param_id(db, scale, threads)}]"
+
+
+def resource_id(dataset: str, db: str, scale: str, threads: int | None, store: Store = "graph") -> str:
+    """The id of a load's Memory and Disk record (results.json `resources`): `resources::<load_benchmark>[<params>]`.
+
+    Not a benchmark id: resources never reach pytest or CodSpeed.
+    """
+    return f"resources::{load_benchmark(dataset, store)}[{param_id(db, scale, threads)}]"
 
 
 def startup_id(db: str, threads: int | None) -> str:

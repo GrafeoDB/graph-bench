@@ -520,6 +520,28 @@ def test_write_setup_that_misses_its_state_fails(writes_dir: Path, tmp_path: Pat
     assert entry["answer"] == ("unchecked" if fake.startswith("nosetup:") else "agree")
 
 
+def test_write_with_ready_needs_ready_rows_in_its_reference(tmp_path: Path) -> None:
+    """A write with a setup state whose reference file has no `ready` rows fails with a clear error, before any
+    phase runs: the setup check is never skipped silently."""
+    from tests.fake_writes import WRITES as FAKE_WRITES
+
+    item = next(w for w in FAKE_WRITES if w.ready)
+    reference = tmp_path / f"{item.id}-small.json"
+    rows = [[[1, "loaded"]]]
+    reference.write_text(json.dumps({"bindings": [{"batch": 0}], "answers": rows, "before": rows}), encoding="utf-8")
+
+    class Untouched:
+        def __getattr__(self, name: str) -> Any:
+            raise AssertionError(f"the database was used: {name}")
+
+    pf = worker.write_preflight(Case(item, "fake", "small", 1), Untouched(), reference, budget_s=60)  # type: ignore[arg-type]
+    assert pf.status == "failed"
+    assert pf.error == (
+        f"ValueError: the reference file {reference.name} has no 'ready' rows, but {item.id} has a setup state;"
+        " regenerate the references"
+    )
+
+
 def test_write_case_run_error_fails(writes_dir: Path, tmp_path: Path) -> None:
     entry = _entries(_run_writes(writes_dir, tmp_path, fake="crash_soft:fake_write"))[_write_id()]
     assert (entry["status"], entry["error"]) == ("failed", "RuntimeError: soft crash")

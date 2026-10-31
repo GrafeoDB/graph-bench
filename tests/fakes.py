@@ -34,6 +34,11 @@ nothing, `dirty` adds a row to the loaded state, `leak` adds a node per run that
 `counts()`), `nosetup` makes the setup prepare nothing and `nosetup_later` only after the first run, and `crash`,
 `crash_soft`, `hang` and `unsupported` apply to the run.
 
+Resources (the Memory and Disk records): `memory:<load benchmark>=<MiB>` makes that load allocate and keep that
+many MiB, touched so they are resident (e.g. `memory:load_snb=200`); `disk:<load benchmark>=<bytes>` makes it write
+exactly that many bytes in two files under `<workdir>/store`, which `store_paths` then returns, and makes `info()`
+report on-disk storage.
+
 With `GRAPH_BENCH_FAKE_TRACE` set to a file, every call of `provision`, `prepare_environment` ("environment"),
 `load`, `load_ql`, `open_empty` and every write phase ("setup", "run", "check", "teardown") appends a line to it:
 the call, the process id and, for `open_empty`, the instance's directory.
@@ -81,6 +86,8 @@ class FakeDatabase(Database):
         self.prepared: dict[str, set[int]] = {}
         self.runs: dict[str, int] = {}
         self.leaked = 0
+        self.ballast: list[bytes] = []
+        self.stored: list[Path] = []
 
     @classmethod
     def provision(cls) -> None:
@@ -94,7 +101,8 @@ class FakeDatabase(Database):
         cls._misbehave(cls._flags("environment"))
 
     def info(self) -> DatabaseInfo:
-        return DatabaseInfo(self.name, "1.0", "in-process", False, "fake, no threads", "in-memory")
+        storage = "on-disk" if "disk:" in os.environ.get(self.env_var, "") else "in-memory"
+        return DatabaseInfo(self.name, "1.0", "in-process", False, "fake, no threads", storage)
 
     def open_empty(self) -> None:
         self._trace("open_empty", str(self.workdir))
@@ -114,8 +122,21 @@ class FakeDatabase(Database):
 
     def load(self, dataset: Dataset) -> None:
         self._trace("load")
-        self._misbehave(self._flags(catalog.load_benchmark(dataset.name, self.store)))
+        benchmark = catalog.load_benchmark(dataset.name, self.store)
+        self._misbehave(self._flags(benchmark))
+        for mib in self._values("memory", benchmark):
+            self.ballast.append(b"" * (int(mib) << 20))
+        for size in self._values("disk", benchmark):
+            store = self.workdir / "store"
+            (store / "sub").mkdir(parents=True, exist_ok=True)
+            half = int(size) // 2
+            (store / "data.bin").write_bytes(b"d" * half)
+            (store / "sub" / "wal.bin").write_bytes(b"w" * (int(size) - half))
+            self.stored = [store]
         self.dataset = dataset
+
+    def store_paths(self) -> list[Path]:
+        return list(self.stored)
 
     def load_store(self, store: Store, dataset: Dataset) -> None:
         self.store = store
@@ -184,6 +205,17 @@ class FakeDatabase(Database):
             if target == item_id:
                 flags.add(flag)
         return flags
+
+    @classmethod
+    def _values(cls, flag: str, target: str) -> list[str]:
+        """The values of `<flag>:<target>=<value>` flags."""
+        values = []
+        for part in os.environ.get(cls.env_var, "").split(","):
+            name, _, rest = part.strip().partition(":")
+            key, sep, value = rest.partition("=")
+            if name == flag and sep and key == target:
+                values.append(value)
+        return values
 
     def _probe(self, model: Model, text: str) -> list[tuple[Any, ...]]:
         """The startup probe on the empty instance: `EXPECTED[model]`, or one more with `wrong:startup`."""

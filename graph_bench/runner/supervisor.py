@@ -25,6 +25,13 @@ is outside the window. At the end `apply_budget_rule` compares every entry with 
 10x on the final timings; that decides the marker, and that final rule does not depend on the run order. Startup and
 both load rows (`types.BUDGET_EXEMPT`) have no budget, in the run or at the end, and are no yardstick.
 
+Resources (the Memory and Disk records, `Selection.resources`): after a database's worker (or pytest) process for
+one thread setting has finished, in both modes, the supervisor measures each load the database's models reach, one
+fresh child per (dataset, store, scale), sampling the child's process tree from here
+(`graph_bench.runner.resources.run_resource`). The child inherits the worker's environment and may stay silent for
+`case_timeout_s`. The selection's other loads get ⊘ records, and a database that is not installed ✗ records.
+These go to results.json `resources`, never to CodSpeed.
+
 Resume rule: when a worker exits non-zero or is killed for silence, the last `start` id without an entry
 becomes `failed` ("worker exited with code <n>") or `timeout`. When that id is a load (the Load row, not Load
 (query language), whose instances no case uses), every not yet recorded case of that dataset becomes `failed`
@@ -56,7 +63,8 @@ import psutil
 from graph_bench.databases import model_support
 from graph_bench.databases.base import DatabaseInfo
 from graph_bench.datasets import cache
-from graph_bench.results import Entry, GrafeoSource, Machine, Reference, Results
+from graph_bench.results import Entry, GrafeoSource, Machine, Reference, Resource, Results
+from graph_bench.runner.resources import run_resource, unmeasured
 from graph_bench.runner.startup import STARTUP_TIMEOUT_S
 from graph_bench.runner.worker import DEFAULT_CASE_TIMEOUT_S, reference_kind
 from graph_bench.suites import catalog
@@ -97,6 +105,11 @@ def _platform_label() -> str:
 
 def _tag(threads: int | None) -> str:
     return "1" if threads == 1 else "all"
+
+
+def _not_installed_reason(error: str) -> str:
+    """The error of every entry and resource record of a database whose driver does not import."""
+    return f"not installed: {error} (the package is missing or has no build for {_platform_label()})"
 
 
 Kind = Literal["case", "load", "load_ql", "startup"]
@@ -340,6 +353,7 @@ def machine() -> Machine:
         "cpu": cpu_name(),
         "cores": psutil.cpu_count(logical=True) or 0,
         "os": platform.platform(),
+        "memory_bytes": psutil.virtual_memory().total,
     }
 
 
@@ -487,16 +501,54 @@ class _Run:
             meta = _expected(self.sel, db, threads)
             if "error" in probe:
                 self._not_installed(meta, probe["error"])
+                self._resources(db, threads, None, missing=_not_installed_reason(probe["error"]))
             else:
-                self._worker(db, threads, meta, probe["env"][_tag(threads)])
+                extra_env = probe["env"][_tag(threads)]
+                self._worker(db, threads, meta, extra_env)
+                self._resources(db, threads, extra_env)
 
     def _not_installed(self, meta: dict[str, _Meta], error: str) -> None:
         for bench_id, m in meta.items():
             if m.supported:
-                reason = f"not installed: {error} (the package is missing or has no build for {_platform_label()})"
-                self.record(m.entry(bench_id, status="failed", error=reason))
+                self.record(m.entry(bench_id, status="failed", error=_not_installed_reason(error)))
             else:
                 self.record(m.entry(bench_id, status="not_supported", error=f"model {m.model} not supported"))
+
+    def _resources(
+        self, db: str, threads: int | None, extra_env: dict[str, str] | None, *, missing: str | None = None
+    ) -> None:
+        """The Memory and Disk records of one database and thread setting, after its worker finished.
+
+        Every (dataset, store) of the selection at every scale gets one: measured in a fresh child where the
+        database's models reach the load, ⊘ where they do not, ✗ with `missing` when the database is not installed.
+        """
+        if not self.sel.resources:
+            return
+        reached = set(catalog.load_keys(self.sel.name, model_support(db)))
+        raw = self.out_dir / "raw" / f"{db}-{_tag(threads)}" / "resources"
+        env = {**os.environ, **dict(self.runner.env), **(extra_env or {})}
+        for (dataset, store), model in catalog.all_load_keys(self.sel.name).items():
+            for scale in self.sel.scales:
+                record: Resource
+                if (dataset, store) not in reached:
+                    error = f"model {model} not supported"
+                    record = unmeasured(db, dataset, store, scale, threads, "not_supported", error)
+                elif missing is not None:
+                    record = unmeasured(db, dataset, store, scale, threads, "failed", missing)
+                else:
+                    record = run_resource(
+                        db,
+                        self.sel.name,
+                        dataset,
+                        store,
+                        scale,
+                        threads,
+                        workdir=self.workdir / f"{db}-{_tag(threads)}-resources",
+                        raw=raw,
+                        env=env,
+                        timeout_s=self.case_timeout_s,
+                    )
+                self.results.resources.append(record)
 
     def _worker(self, db: str, threads: int | None, meta: dict[str, _Meta], extra_env: dict[str, str]) -> None:
         name = self.runner.name
@@ -747,6 +799,7 @@ def _run_all(
     for db in dbs:
         run.database(db)
     results.entries.sort(key=lambda e: e.id)
+    results.resources.sort(key=lambda r: r.id)
     apply_budget_rule(results)
     results.write(out_dir / RESULTS_FILE)
     return results

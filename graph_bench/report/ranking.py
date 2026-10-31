@@ -120,7 +120,8 @@ def _category_key(category: str) -> int:
     return _CATEGORY_INDEX.get(category, len(_CATEGORY_INDEX))
 
 
-def _benchmark_key(benchmark: str) -> tuple[int, str]:
+def benchmark_key(benchmark: str) -> tuple[int, str]:
+    """Sort key of a benchmark within its category: catalog order; loads in the order of `_LOADS`."""
     if benchmark.startswith(LOAD_QL_PREFIX):
         known = benchmark in _LOADS_QL
         return (_LOAD_QL_ORDER.index(benchmark) if known else len(_LOAD_QL_ORDER), benchmark)
@@ -135,7 +136,7 @@ def group_key(entry: Entry) -> tuple[int, tuple[int, str], int, tuple[int, str]]
         _category_key(entry.category),
         scale_key(entry.scale),
         0 if entry.threads is not None else 1,
-        _benchmark_key(entry.benchmark),
+        benchmark_key(entry.benchmark),
     )
 
 

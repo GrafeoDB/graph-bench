@@ -65,6 +65,16 @@ benchmark moves to `legacy/` untouched and is deleted once the new comparison re
   and edge count guard after the case; write cases run after every read query of their dataset.
 - **Selections**: `push` now plans Startup, Load (query language), Batch writes, Scans and Pattern matching too
   (their queries arrive with the next steps), and both selections turn the Memory and Disk records on.
+- **Memory and Disk records**: after each database's worker (or pytest process), the supervisor loads every
+  dataset and store the database's models reach once more, each in a fresh child process
+  (`graph_bench/runner/resources.py`), and samples the child's whole process tree every 10 ms from outside
+  (`graph_bench/runner/sampler.py`, psutil RSS; a child subreaper on Linux keeps daemonized servers in the tree).
+  Each record holds the resident memory before and after the load, the footprint (after minus before), the peak
+  during the load and, after `close()`, the size of the store's files (`Database.store_paths`; "in memory" for an
+  in-memory store), with the load's count check. They go to the new `resources` list of `results.json` (schema 2,
+  which also records `machine.memory_bytes`; schema 1 files still read), never to CodSpeed, and to the README's
+  Memory and Disk tables. The startup harness now uses the same subreaper, which ends and reaps the processes it
+  adopted when it exits.
 - **Known disagreements**: `docs/known-disagreements.md` records wrong answers, slow cases and engine findings as
   they are, instead of working around them in the adapters.
 

@@ -106,6 +106,20 @@ def test_supervisor_all_agree(two_dbs: tuple[Results, list[list[str]], Path]) ->
     assert results.databases["fake"].name == "fake"
 
 
+def test_supervisor_records_resources(two_dbs: tuple[Results, list[list[str]], Path]) -> None:
+    """After each worker, one measured Memory and Disk record per load, its lines under the raw directory."""
+    results, _, out = two_dbs
+    keys = catalog.all_load_keys("push")
+    for db in ("fake", "fake2"):
+        records = {r.id: r for r in results.resources if r.database == db}
+        assert set(records) == {catalog.resource_id(d, db, "small", 1, st) for d, st in keys}
+        for r in records.values():
+            assert (r.status, r.answer, r.disk_bytes) == ("ok", "agree", None), r
+            assert r.peak_bytes is not None and r.baseline_bytes is not None and r.after_bytes is not None
+            assert r.peak_bytes >= max(r.baseline_bytes, r.after_bytes)
+    assert (out / "raw" / "fake-1" / "resources" / "load_snb-small.jsonl").is_file()
+
+
 def test_supervisor_writes_raw_output(two_dbs: tuple[Results, list[list[str]], Path]) -> None:
     _, _, out = two_dbs
     raw = out / "raw" / "fake-1"

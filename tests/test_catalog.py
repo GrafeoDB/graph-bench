@@ -188,6 +188,11 @@ def test_category_order_starts_with_startup_and_loads() -> None:
     assert set(CATEGORY_NAMES) == set(CATEGORY_ORDER)
 
 
+def test_resource_id_format() -> None:
+    assert catalog.resource_id("snb", "fake", "small", 1) == "resources::load_snb[fake-small]"
+    assert catalog.resource_id("snb", "fake", "small", None, "rdf") == "resources::load_snb_rdf[fake-small-allcores]"
+
+
 def test_startup_id_format() -> None:
     assert catalog.STARTUP_SCALE == "empty"
     assert catalog.startup_id("fake", 1) == "benches/test_startup.py::test_startup[fake-empty]"

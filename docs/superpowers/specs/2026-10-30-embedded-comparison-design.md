@@ -30,7 +30,14 @@ New dependencies in graph-bench need no approval (user, 2026-10-30).
 The output is a capability matrix covering everything Grafeo does. Columns are the databases. The README shows:
 
 - an **overview**: one row per category, each cell showing how many of that category's benchmarks the database completed correctly, plus counts per marker;
-- **one detail table per category**: one row per benchmark, each cell the median time (fastest in bold) or a marker.
+- **one detail table per category**: one row per benchmark, each cell the median time (fastest in bold) or a marker;
+- **Memory and Disk tables** per scale, after the category tables and outside the overview and the summary block:
+  "### Memory (<scale> scale, MiB)" with the rows "<dataset>, loaded" (resident memory after the load minus
+  before) and "<dataset>, peak during load" (the process tree's highest reading during it), and "### Disk (<scale>
+  scale, MiB)" with one row per dataset and store (the store's files after `close()`, "in memory" for an
+  in-memory store); RDF stores as "<dataset> (RDF)", lowest bold, the same markers. They come from the
+  `resources` records, measured by graph-bench (FAIRNESS.md "Memory and disk"); CodSpeed holds no memory or disk
+  data.
 
 There is never one combined score across categories.
 
@@ -121,10 +128,10 @@ These go into FAIRNESS.md, which is trimmed to embedded use.
 ### results.json
 
 Top level:
-- `schema_version`
+- `schema_version` (2; a schema 1 file, without `resources` and `machine.memory_bytes`, still reads)
 - `graph_bench_commit`
 - `grafeo` `{version, source, sha}`
-- `machine` `{cpu, cores, os}`
+- `machine` `{cpu, cores, os, memory_bytes}`
 - `selection`, `mode` (`bench` | `codspeed`), `started_at`
 - `databases` `{name: {version, process, storage, threads_configurable, threads_note, java}}`
 
@@ -139,6 +146,16 @@ Top level:
 - `reference`: `python` | `networkx`
 - `answer_digest`
 - `detail`
+
+`resources[]`, one per (database, dataset, store, scale, threads), the Memory and Disk records (never in CodSpeed):
+- `id` (`resources::<load benchmark>[<db>-<scale>]`, e.g. `resources::load_snb_rdf[grafeo-small]`), `database`,
+  `dataset`, `store` (`graph` | `rdf`), `scale`, `threads`
+- `status`, `error`, `answer` (the load's count check), `detail`
+- `storage` (`in-memory` | `on-disk`)
+- `baseline_bytes` (the process tree's RSS before the load, engine started), `after_bytes`, `footprint_bytes`
+  (after minus before), `peak_bytes` (the highest reading from before to after), `samples` (the supervisor's
+  samples in that window), `sample_interval_ms`, `processes` (the most processes the tree held in it)
+- `disk_bytes` (the store's files after `close()`; null for an in-memory store)
 
 The grafeo side annotates entries that match `database == "grafeo" and answer == "disagree"`.
 

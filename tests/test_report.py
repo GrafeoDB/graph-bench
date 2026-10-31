@@ -9,7 +9,7 @@ from graph_bench.databases.base import DatabaseInfo
 from graph_bench.report.ranking import rank
 from graph_bench.report.readme import render_readme, update_readme
 from graph_bench.report.summary import render_summary
-from graph_bench.results import Entry, Results
+from graph_bench.results import Entry, Resource, Results
 from graph_bench.types import AnswerVerdict, Category, Status, Timing
 
 LEGEND = "⊘ not available · ✗ failing · ≠ wrong answer · ⏱ beyond 10x the top-3 average"
@@ -342,7 +342,7 @@ def test_load_rows_name_the_rdf_store_and_follow_the_graph_loads() -> None:
 
     assert ranking.title("load_snb") == "LDBC SNB"
     assert ranking.title("load_snb_rdf") == "LDBC SNB (RDF)"
-    order = sorted(["load_snb_rdf", "load_graphalytics", "load_snb"], key=ranking._benchmark_key)
+    order = sorted(["load_snb_rdf", "load_graphalytics", "load_snb"], key=ranking.benchmark_key)
     assert order == ["load_snb", "load_graphalytics", "load_snb_rdf"]
 
 
@@ -435,7 +435,123 @@ def test_load_ql_titles_and_order() -> None:
     assert ranking.title("load_ql_snb") == "LDBC SNB"
     assert ranking.title("load_ql_graphalytics") == "Graphalytics"
     assert ranking.title("startup") == "Empty database"
-    assert sorted(["load_ql_graphalytics", "load_ql_snb"], key=ranking._benchmark_key) == [
+    assert sorted(["load_ql_graphalytics", "load_ql_snb"], key=ranking.benchmark_key) == [
         "load_ql_snb",
         "load_ql_graphalytics",
     ]
+
+
+MIB = 1 << 20
+
+
+def _resource(
+    db: str,
+    dataset: str,
+    store: str,
+    status: Status = "ok",
+    answer: AnswerVerdict = "agree",
+    *,
+    loaded: float | None = None,
+    peak: float | None = None,
+    disk: float | None = None,
+    storage: str = "in-memory",
+    scale: str = "small",
+) -> Resource:
+    measured = status == "ok"
+    baseline = 30 * MIB
+    load = "load_" + dataset + ("_rdf" if store == "rdf" else "")
+    return Resource(
+        id=f"resources::{load}[{db}-{scale}]",
+        database=db,
+        dataset=dataset,
+        store=store,  # type: ignore[arg-type]
+        scale=scale,
+        threads=1,
+        status=status,
+        answer=answer,
+        storage=storage,  # type: ignore[arg-type]
+        baseline_bytes=baseline if measured else None,
+        after_bytes=baseline + int((loaded or 0) * MIB) if measured else None,
+        footprint_bytes=int(loaded * MIB) if loaded is not None else None,
+        peak_bytes=int(peak * MIB) if peak is not None else None,
+        samples=3 if measured else None,
+        sample_interval_ms=10.0 if measured else None,
+        processes=1 if measured else None,
+        disk_bytes=int(disk * MIB) if disk is not None else None,
+    )
+
+
+def _with_resources(results: Results) -> Results:
+    results.resources = [
+        _resource("grafeo", "snb", "graph", loaded=10, peak=60),
+        _resource("ladybug", "snb", "graph", loaded=20, peak=50),
+        _resource("fake", "snb", "graph", "ok", "disagree", loaded=1, peak=31, disk=1, storage="on-disk"),
+        _resource("grafeo", "graphalytics", "graph", "failed", "unchecked"),
+        _resource("ladybug", "graphalytics", "graph", "timeout", "unchecked"),
+        _resource("fake", "graphalytics", "graph", loaded=-0.5, peak=30.5, disk=2, storage="on-disk"),
+        _resource("grafeo", "snb", "rdf", loaded=5, peak=40),
+        _resource("ladybug", "snb", "rdf", "not_supported", "unchecked"),
+        _resource("fake", "snb", "rdf", loaded=1.5, peak=30.25, disk=3, storage="on-disk"),
+    ]
+    return results
+
+
+def test_report_memory_and_disk_tables(results: Results) -> None:
+    """Memory (loaded and peak rows per dataset and store) and Disk tables in MiB, lowest bold, markers as in the
+    category tables (≠ for a count mismatch in both), after the category tables and before the legend."""
+    text = render_readme(_with_resources(results))
+    lines = text.splitlines()
+    memory = lines.index("### Memory (small scale, MiB)")
+    disk = lines.index("### Disk (small scale, MiB)")
+    last_category = max(i for i, line in enumerate(lines) if line.startswith("### Algorithms"))
+    assert last_category < memory < disk < lines.index(LEGEND)
+    # Columns: Grafeo, fake, LadybugDB.
+    assert lines[memory + 2] == "| Dataset | Grafeo | fake | LadybugDB |"
+    assert _row(text, "LDBC SNB, loaded") == ["**10.0**", "≠", "20.0"]
+    assert _row(text, "LDBC SNB, peak during load") == ["60.0", "≠", "**50.0**"]
+    assert _row(text, "Graphalytics, loaded") == ["✗", "**-0.500**", "⏱"]
+    assert _row(text, "Graphalytics, peak during load") == ["✗", "**30.5**", "⏱"]
+    assert _row(text, "LDBC SNB (RDF), loaded") == ["5.00", "**1.50**", "⊘"]
+    assert _row(text, "LDBC SNB (RDF), peak during load") == ["40.0", "**30.2**", "⊘"]
+    order = [line.split("|")[1].strip() for line in lines[memory + 4 : disk - 1]]
+    assert order == [
+        "LDBC SNB, loaded",
+        "LDBC SNB, peak during load",
+        "Graphalytics, loaded",
+        "Graphalytics, peak during load",
+        "LDBC SNB (RDF), loaded",
+        "LDBC SNB (RDF), peak during load",
+    ]
+    disk_rows = lines[disk + 4 : disk + 7]
+    assert disk_rows == [
+        "| LDBC SNB | in memory | ≠ | in memory |",
+        "| Graphalytics | ✗ | **2.00** | ⏱ |",
+        "| LDBC SNB (RDF) | in memory | **3.00** | ⊘ |",
+    ]
+    # Not in the overview, nor in the summary block.
+    overview = lines[: lines.index("### Overview") + 12]
+    assert not any("Memory" in line or "Disk" in line for line in overview)
+    assert "Memory" not in render_summary(results) and "Disk" not in render_summary(results)
+    assert "CodSpeed holds no memory or disk data" not in text
+
+
+def test_report_resources_per_scale_and_in_codspeed_mode(results: Results) -> None:
+    _with_resources(results)
+    medium = [dataclasses.replace(r, scale="medium", id=r.id.replace("small", "medium")) for r in results.resources]
+    results.resources += medium
+    results.mode = "codspeed"
+    text = render_readme(results)
+    lines = text.splitlines()
+    headings = [line for line in lines if line.startswith(("### Memory", "### Disk"))]
+    assert headings == [
+        "### Memory (small scale, MiB)",
+        "### Disk (small scale, MiB)",
+        "### Memory (medium scale, MiB)",
+        "### Disk (medium scale, MiB)",
+    ]
+    assert "CodSpeed holds no memory or disk data" in text
+
+
+def test_report_without_resources_has_no_memory_or_disk(results: Results) -> None:
+    text = render_readme(results)
+    assert "### Memory" not in text and "### Disk" not in text

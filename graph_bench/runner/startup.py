@@ -15,7 +15,8 @@ environment, so the database's `process_env(threads)` applies.
 Parent: `run_startups` runs the children one after another, each in a fresh `workdir/startup-<i>` removed after
 it. Each child runs in its own process group (session on POSIX); when it ends or times out, every process it
 started is killed (`kill_tree`): its descendants, its process group and, on Linux where this process is a child
-subreaper, any daemonized descendant that was re-parented to this process. Its output goes to a temporary file, so
+subreaper (`sampler.set_child_subreaper`), any daemonized descendant that was re-parented to this process. Such a
+process reaps (or kills) the adopted orphans it still has when it exits. Its output goes to a temporary file, so
 a descendant that keeps the output open cannot hold the answer up. The first child is the preflight: unless it
 completes with the expected probe answer, no other child runs. This measures a process-cold start, not an
 OS-cache-cold one: the driver's files are in the OS cache after the first child.
@@ -23,7 +24,6 @@ OS-cache-cold one: the driver's files are in the OS cache after the first child.
 
 import argparse
 import contextlib
-import ctypes
 import json
 import os
 import shutil
@@ -49,6 +49,7 @@ from graph_bench.answers import SNB_EPS, canonical, verify
 from graph_bench.databases import get_database, model_support
 from graph_bench.databases.base import NotSupported
 from graph_bench.runner import message
+from graph_bench.runner.sampler import set_child_subreaper
 from graph_bench.runner.timing import summary
 from graph_bench.suites.startup import EXPECTED, primary_model, probe_text
 from graph_bench.types import AnswerVerdict, Model, Status, Timing
@@ -61,6 +62,7 @@ __all__ = [
     "kill_tree",
     "main",
     "measure_start",
+    "new_process_group",
     "passed",
     "run_child",
     "run_startups",
@@ -158,27 +160,9 @@ def run_child(db: str, threads: int | None, workdir: Path, timeout_s: float, *, 
         shutil.rmtree(workdir, ignore_errors=True)
 
 
-# PR_SET_CHILD_SUBREAPER (man 2 prctl): orphaned descendants are re-parented to this process, so a daemonized
-# grandchild of a startup child (a server that double-forks) stays findable and killable.
-_PR_SET_CHILD_SUBREAPER = 36
-_SUBREAPER: list[bool] = []
 # How often, on Windows, the child's descendants are listed while it runs: Windows does not re-parent an orphan,
 # so a descendant is only found while its parent lives.
 _SNAPSHOT_S = 0.05
-
-
-def _subreaper() -> bool:
-    """Make this process a child subreaper (Linux only, once); whether it is one."""
-    if not _SUBREAPER:
-        ok = False
-        if sys.platform.startswith("linux"):
-            try:
-                libc = ctypes.CDLL(None, use_errno=True)
-                ok = libc.prctl(_PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) == 0
-            except (OSError, AttributeError):
-                ok = False
-        _SUBREAPER.append(ok)
-    return _SUBREAPER[0]
 
 
 def _descendants(pid: int) -> list[psutil.Process]:
@@ -188,8 +172,17 @@ def _descendants(pid: int) -> list[psutil.Process]:
         return []
 
 
+def new_process_group() -> dict[str, Any]:
+    """`Popen` arguments that start a child in a process group (Windows) or session (POSIX) of its own, which
+    `kill_tree` then kills as a whole."""
+    if sys.platform == "win32":
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True}
+
+
 def kill_tree(proc: "subprocess.Popen[bytes]", seen: dict[int, psutil.Process], before: set[int]) -> None:
-    """Kill a startup child and every process it started, then reap it.
+    """Kill a child (a startup child, or a resources child of `runner.resources`) and every process it started, then
+    reap it.
 
     The victims: the child's descendants now and those `seen` while it ran, its process group (POSIX), and this
     process's descendants that were not there before the child started (`before`): daemonized descendants a
@@ -252,16 +245,14 @@ def spawn_child(db: str, threads: int | None, workdir: Path, timeout_s: float, *
     """
     argv = [sys.executable, "-m", "graph_bench.runner.startup", "--db", db]
     argv += ["--threads", "1" if threads == 1 else "all", "--workdir", str(workdir)]
-    _subreaper()
-    group: dict[str, Any] = (
-        {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
-        if sys.platform == "win32"
-        else {"start_new_session": True}
-    )
+    # A daemonized grandchild of the child (a server that double-forks) is re-parented to this process, so
+    # `kill_tree` still finds it. The process (the worker or the pytest session) stays a subreaper and, at exit,
+    # ends and reaps the descendants it still has, adopted orphans among them (`set_child_subreaper`).
+    set_child_subreaper()
     before = {p.pid for p in _descendants(os.getpid())}
     seen: dict[int, psutil.Process] = {}
     with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
-        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=err, **group)
+        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=err, **new_process_group())
         try:
             timed_out = _wait(proc, timeout_s, seen)
         finally:

@@ -116,6 +116,38 @@ measured, while results.json and the matrix show ⏱. A ⏱ from the in-run cuto
   setup, so CodSpeed times the writes alone; a later run whose read-back differs has then already been measured
   by CodSpeed, while results.json and the matrix show ≠.
 
+## Memory and disk
+
+Memory and Disk are records, not timed benchmarks: they never reach CodSpeed and have no budget.
+
+- **Where:** after a database's worker (or pytest) process has finished, the supervisor loads each dataset and
+  store the database's models reach once more, each in a fresh child process with the worker's environment
+  (`graph_bench/runner/resources.py`). The child first runs the database's untimed environment setup
+  (`prepare_environment()`: a JVM or engine started and warmed), opens a fresh instance, then reads its own
+  process tree's memory (`before`), runs the same load the Load row times, reads it again (`after`), checks the
+  node and edge counts, closes the instance and measures the store's files.
+- **What is read:** the resident set size (RSS, psutil) summed over the child and all its descendants. RSS is
+  what psutil reads cheaply on Linux, Windows and macOS, often enough to sample. Its limits apply to every
+  database alike: a page shared by several processes counts once per process; memory reserved but never touched
+  (a JVM's unused heap) is not resident, so it does not count; memory a garbage collector touched stays resident
+  until it is returned to the OS, so it counts. USS would be more exact but is too slow to read every 10 ms.
+  No step forces a garbage collection, in any runtime: memory as a user sees it.
+- **The process tree:** an importer the database starts during the load (Neo4j's `neo4j-admin` JVMs) is a child
+  and counts, as the load's real cost. On Linux the child is a child subreaper, so a server that daemonizes
+  (falkordblite's redis-server) is re-parented to it and stays in the tree.
+- **Loaded** is after minus before: the memory the loaded data keeps (it may be negative, and is shown as it is).
+  **Peak during load** is the highest reading of the whole tree, interpreter and started engine included, among
+  `before`, `after` and the supervisor's samples, taken every 10 ms from outside the measured process, between
+  the `before` and `after` times (one monotonic clock across processes). A load faster than one interval may
+  have no sample in between; its peak is then the higher of `before` and `after`, and a short spike between two
+  samples can be missed.
+- **Disk** is the apparent size of the regular files under the store's paths (`Database.store_paths()`; symlinks
+  are not followed), measured after `close()`, so each database's own shutdown has flushed and checkpointed. An
+  in-memory store has none: "in memory".
+- **Answers and markers:** a record carries its load's count check; a mismatch is ≠ in both tables, a load error
+  ✗, a child silent for longer than the case timeout is killed (⏱), a load the database's models do not reach is
+  ⊘. Lowest is bold.
+
 ## Loading
 
 Load uses each database's **fastest documented bulk path, CSV parsing included**:

@@ -296,6 +296,12 @@ def write_preflight(
     ready = catalog.load_write_ready(reference_file) if item.ready else None
     write = WriteRun(db, item, bindings, after, before, ready=ready)
     result = Preflight(write.run, bindings, write=write)
+    if item.ready and ready is None:  # never skip the setup check silently
+        problem = (
+            f"the reference file {reference_file.name} has no 'ready' rows, but {item.id} has a setup state;"
+            " regenerate the references"
+        )
+        return result.fail(ValueError(problem))
     try:
         write.baseline = _counts(db)
     except Exception as exc:

@@ -1,7 +1,9 @@
-"""The results section of graph-bench's README: an overview, one detail table per category and a footer.
+"""The results section of graph-bench's README: an overview, one detail table per category, the Memory and Disk
+tables and a footer.
 
 Every database is named here. Columns are Grafeo first, then the others alphabetically by display name. There
-is never a combined score across categories.
+is never a combined score across categories. Memory and Disk (results.json `resources`) are not categories: they
+appear in neither the overview nor the summary block.
 """
 
 from collections import Counter
@@ -10,21 +12,27 @@ from pathlib import Path
 from graph_bench.report.ranking import (
     Ranked,
     all_databases,
+    benchmark_key,
     format_sig3,
     is_load,
     is_ranked,
     rank,
     safe_display_name,
+    scale_key,
     speed,
+    title,
 )
 from graph_bench.report.summary import LEGEND, grafeo_label, machine_label
-from graph_bench.results import Entry, Results
+from graph_bench.results import Entry, Resource, Results
+from graph_bench.suites.catalog import load_benchmark
 from graph_bench.types import CATEGORY_NAMES, LOAD_CATEGORIES, Category, marker
 
 START = "<!-- results:start -->"
 END = "<!-- results:end -->"
 
 _MARKER_ORDER = ("⊘", "✗", "≠", "⏱")
+MIB = 1 << 20
+IN_MEMORY = "in memory"
 
 Section = tuple[Category, str, int | None]  # category, scale, threads
 
@@ -140,11 +148,66 @@ def render_readme(results: Results) -> str:
         ]
         lines += ["", heading, "", *_table(["Benchmark", *names], rows)]
 
+    lines += _resource_tables(results, dbs, names)
+
     lines += ["", LEGEND, "", _run_line(results)]
     if results.mode == "codspeed":
-        lines += ["", "Times are single preflight runs; CodSpeed holds the measured timings."]
+        note = "Times are single preflight runs; CodSpeed holds the measured timings."
+        if results.resources:
+            note += " Memory and disk are graph-bench's own readings: CodSpeed holds no memory or disk data."
+        lines += ["", note]
     lines += ["", *_table(["Database", "Version", "Process", "Storage", "Threads"], _database_rows(results, dbs))]
     return "\n".join(lines) + "\n"
+
+
+def _resource_ranked(r: Resource) -> bool:
+    """A record whose numbers count: measured (`ok`) with a count check that did not disagree."""
+    return r.status == "ok" and r.answer != "disagree"
+
+
+def _resource_row(label: str, records: dict[str, Resource], dbs: list[str], value: str) -> list[str]:
+    """One row: `value` (a `Resource` field, bytes) in MiB per database, the lowest bold; markers for records that
+    did not measure, and "in memory" for a missing disk size of an in-memory store."""
+    numbers: dict[str, int] = {}
+    for db, r in records.items():
+        number = getattr(r, value)
+        if _resource_ranked(r) and number is not None:
+            numbers[db] = number
+    lowest = min(numbers.values(), default=None)
+    cells = []
+    for db in dbs:
+        r = records.get(db)
+        if r is None:
+            cells.append("")
+        elif (mark := marker(r.status, r.answer)) != "":
+            cells.append(mark)
+        elif db in numbers:
+            text = format_sig3(numbers[db] / MIB)
+            cells.append(f"**{text}**" if numbers[db] == lowest else text)
+        else:
+            cells.append(IN_MEMORY if value == "disk_bytes" and r.storage == "in-memory" else "")
+    return [label, *cells]
+
+
+def _resource_tables(results: Results, dbs: list[str], names: list[str]) -> list[str]:
+    """Per scale (and thread setting): "### Memory (<scale> scale, MiB)", a loaded and a peak row per dataset and
+    store, then "### Disk (<scale> scale, MiB)", one row per dataset and store."""
+    sections: dict[tuple[str, int | None], dict[str, dict[str, Resource]]] = {}
+    for r in results.resources:
+        load = load_benchmark(r.dataset, r.store)
+        sections.setdefault((r.scale, r.threads), {}).setdefault(load, {})[r.database] = r
+    lines: list[str] = []
+    for (scale, threads), loads in sorted(sections.items(), key=lambda kv: (scale_key(kv[0][0]), kv[0][1] is None)):
+        where = f"{scale} scale" + (", all cores" if threads is None else "")
+        order = sorted(loads, key=benchmark_key)
+        memory = []
+        for load in order:
+            memory.append(_resource_row(f"{title(load)}, loaded", loads[load], dbs, "footprint_bytes"))
+            memory.append(_resource_row(f"{title(load)}, peak during load", loads[load], dbs, "peak_bytes"))
+        disk = [_resource_row(title(load), loads[load], dbs, "disk_bytes") for load in order]
+        lines += ["", f"### Memory ({where}, MiB)", "", *_table(["Dataset", *names], memory)]
+        lines += ["", f"### Disk ({where}, MiB)", "", *_table(["Dataset", *names], disk)]
+    return lines
 
 
 def _run_line(results: Results) -> str:
