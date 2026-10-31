@@ -47,10 +47,19 @@ def post_all(
     url: str,
     payloads: list[dict[str, Any]],
     *,
+    start: int = 0,
+    on_sent: Callable[[int], None] | None = None,
     send: Send | None = None,
     sleep: Callable[[float], None] = time.sleep,
 ) -> int:
-    """POST each payload in order; return how many were sent. Raises NotifyError on a failure."""
+    """POST the payloads in order, skipping the first `start`; return how many were sent in all.
+
+    `on_sent(n)` is called after message n (counted from 1) went out, so a caller can record the progress and a
+    retry can resume with `start=n` instead of repeating messages. A 429 is retried after Discord's
+    `retry_after`; a transport error (OSError) is retried with a growing backoff; both up to MAX_RETRIES times.
+    A transport error after the server handled the request can post one message twice, which is accepted.
+    Raises NotifyError on any other failure.
+    """
 
     send = send or urllib_send  # looked up at call time, so tests can replace it
 
@@ -58,11 +67,16 @@ def post_all(
         return text.replace(url, "<webhook>")
 
     for index, payload in enumerate(payloads, start=1):
+        if index <= start:
+            continue
         body = json.dumps(payload).encode("utf-8")
         for attempt in range(MAX_RETRIES + 1):
             try:
                 status, text = send(url, body)
             except OSError as exc:
+                if attempt < MAX_RETRIES:
+                    sleep(min(2.0 * 2**attempt, MAX_WAIT_S))
+                    continue
                 raise NotifyError(scrub(f"message {index}: request failed: {type(exc).__name__}")) from None
             if 200 <= status < 300:
                 break
@@ -70,6 +84,8 @@ def post_all(
                 sleep(_retry_after(text))
                 continue
             raise NotifyError(scrub(f"message {index}: HTTP {status}: {text.strip()[:500]}"))
+        if on_sent is not None:
+            on_sent(index)
         if index < len(payloads):
             sleep(PAUSE_S)
     return len(payloads)
