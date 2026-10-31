@@ -49,7 +49,7 @@ def test_falkordb_push_agrees(
     assert not failing, "\n".join(failing)
 
 
-def test_falkordb_info_and_bfs(push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_falkordb_info_and_algorithms(push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GRAPH_BENCH_DATA_DIR", str(push_data_dir))
     cls = get_database("falkordb")
     info = cls(tmp_path, 1).info()
@@ -61,7 +61,10 @@ def test_falkordb_info_and_bfs(push_data_dir: Path, tmp_path: Path, monkeypatch:
     try:
         db.load(cache.prepare("push")[("graphalytics", "small")])
         assert db.counts()[0] > 0
+        levels = db.algorithm("bfs", {"source": 0})
+        assert levels[0] == 0
+        assert all(depth >= 0 for depth in levels.values())
         with pytest.raises(NotSupported):
-            db.algorithm("bfs", {"source": 0})
+            db.algorithm("cdlp", {})
     finally:
         db.close()

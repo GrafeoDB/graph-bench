@@ -20,6 +20,15 @@ WCC = "CALL algo.WCC({nodeLabels: ['V'], relationshipTypes: ['E']}) YIELD node, 
 # PageRank: https://docs.falkordb.com/algorithms/pagerank.html. The procedure takes only a label and a relationship
 # type; damping, iteration bound and tolerance are fixed inside FalkorDB and not documented, so none is passed.
 PAGE_RANK = "CALL algo.pageRank('V', 'E') YIELD node, score RETURN node.id, score"
+# BFS levels: the documented `shortestPath` function, in a WITH clause, gives the fewest-edges path from the source to
+# each vertex (https://docs.falkordb.com/cypher/functions.html, "shortestPath"). Its endpoints must be bound before the
+# call and the pattern may carry no property filters; a minimum of 0 includes the source (depth 0), and no path gives
+# NULL, which the WHERE drops (the reference omits unreachable vertices). Outgoing E edges, as in the other adapters.
+# `algo.BFS` yields no levels and `algo.SSpaths` is a weighted, path-count-limited search, so neither is used.
+BFS = (
+    "MATCH (s:V {id: $s}), (b:V) WITH b, shortestPath((s)-[:E*0..]->(b)) AS p WHERE p IS NOT NULL "
+    "RETURN b.id, length(p)"
+)
 # The load check (`counts`): every node and every relationship, counted with Cypher.
 COUNT_NODES = "MATCH (n) RETURN count(n)"
 COUNT_EDGES = "MATCH ()-[r]->() RETURN count(r)"
@@ -101,8 +110,8 @@ class FalkorDatabase(Database):
             return dict(self.query(WCC, {}))
         if name == "pr":
             return dict(self.query(PAGE_RANK, {}))
-        # `algo.BFS` returns the visited nodes without their levels (https://docs.falkordb.com/algorithms/bfs.html),
-        # and no other documented procedure gives levels from a source: BFS is not available.
+        if name == "bfs":
+            return dict(self.query(BFS, {"s": params["source"]}))
         raise NotSupported(name)
 
     def close(self) -> None:

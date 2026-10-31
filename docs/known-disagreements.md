@@ -219,17 +219,6 @@ load entry has no answer, so there is no `- id:` line.
 - Cause: FalkorDB engine (openCypher coverage). KNOWS is stored once per pair, so a directed form is not the same
   question. No rewrite is used: a database that cannot run the standard text gets the marker (FAIRNESS.md).
 
-## FalkorDB: no BFS with levels (not available)
-
-- id: falkordb/graphalytics_bfs
-- Query: `graphalytics_bfs` (vertex depths from a source).
-- Dataset: `graphalytics-small`.
-- FalkorDB answer: none, the entry is `not_supported` (⊘). The documented procedure `algo.BFS(start, max_depth,
-  relationship)` yields only `nodes` and `edges` in breadth-first order and no depth per node
-  (https://docs.falkordb.com/algorithms/bfs.html). No other documented procedure gives levels from a source; a
-  `shortestPath` per target vertex would be a different, much slower computation and is not used.
-- Cause: FalkorDB feature gap.
-
 ## FalkorDB: PageRank parameters are fixed (answer agrees)
 
 `algo.pageRank(label, relationship)` takes no damping, iteration or tolerance argument and its docs list none
@@ -257,3 +246,11 @@ budget applies and they must agree.
   milliseconds per call.
 - Cause: FalkorDB engine and the out-of-process server (per-call overhead); `snb_is6` and `snb_ic6` also include
   variable-length traversals. The adapter uses the `id` indexes it creates in the load and no query cache.
+
+## FalkorDB: BFS is slow under the 10x budget rule (not allowlisted)
+
+The answer agrees with the reference. BFS levels come from the documented `shortestPath` function, one search per
+target vertex (`MATCH (s:V {id: $s}), (b:V) WITH b, shortestPath((s)-[:E*0..]->(b)) AS p ...`,
+https://docs.falkordb.com/cypher/functions.html), because `algo.BFS` returns no levels. On `graphalytics-small`
+(Linux, Docker) the median is 128.6 ms against Grafeo's 0.42 ms, so it is marked `timeout` (⏱, 302.8x the top-3
+average) by the budget rule, not by a hang. No `- id:` line: the adapter test runs FalkorDB alone and it must agree.
