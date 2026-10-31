@@ -8,7 +8,7 @@ import pytest
 from graph_bench.datasets import cache
 from graph_bench.datasets.schema import Column, Dataset, EdgeTable, NodeTable
 from graph_bench.datasets.snb import SnbGraph
-from graph_bench.suites import catalog, graphalytics, snb
+from graph_bench.suites import catalog, graphalytics, scans, snb
 
 
 @pytest.fixture(scope="module")
@@ -90,6 +90,99 @@ def test_ic13_bindings_cover_unreachable_and_self(graph: SnbGraph) -> None:
     assert "person_1000" in (unreachable["person1Id"], unreachable["person2Id"])
     same = bindings[answers.index(0)]
     assert same["person1Id"] == same["person2Id"]
+
+
+def _hand_graph() -> SnbGraph:
+    """Five nodes: three comments (two created at the same time, one content with a comma and quotes) and two
+    persons whose insertion order is not the aggregate's ORDER BY."""
+    comments = [
+        ("comment_1", 'Hi, "you"', 100),
+        ("comment_10", "x", 300),
+        ("comment_2", "it's", 300),
+    ]
+    persons = [("person_1", "Firefox", "male", 50, 500), ("person_2", "Chrome", "female", 40, 600)]
+    return SnbGraph(
+        nodes={
+            "Comment": {c: {"id": c, "content": t, "creationDate": d, "length": len(t)} for c, t, d in comments},
+            "Person": {
+                p: {"id": p, "browserUsed": b, "gender": s, "birthday": born, "creationDate": d}
+                for p, b, s, born, d in persons
+            },
+        },
+        out={},
+        incoming={},
+    )
+
+
+def test_scan_references_on_a_hand_graph() -> None:
+    g = _hand_graph()
+    assert scans.reference("scan_label", g, {}) == [["comment_1"], ["comment_10"], ["comment_2"]]
+    # The window includes `from` and excludes `to`.
+    assert scans.reference("scan_filter", g, {"from": 100, "to": 300}) == [["comment_1"]]
+    assert scans.reference("scan_filter", g, {"from": 101, "to": 301}) == [["comment_10"], ["comment_2"]]
+    assert scans.reference("scan_filter", g, {"from": 301, "to": 400}) == []
+    assert scans.reference("scan_aggregate", g, {}) == [
+        ["Chrome", "female", 1, 40, 600],
+        ["Firefox", "male", 1, 50, 500],
+    ]
+    # Newest first; the tie at 300 is broken by id as a string ("comment_10" < "comment_2").
+    assert scans.reference("scan_order_limit", g, {"minLength": 1}) == [
+        ["comment_10", "x", 300],
+        ["comment_2", "it's", 300],
+        ["comment_1", 'Hi, "you"', 100],
+    ]
+    assert scans.reference("scan_order_limit", g, {"minLength": 4}) == [
+        ["comment_2", "it's", 300],
+        ["comment_1", 'Hi, "you"', 100],
+    ]
+    # Lengths 9, 1 and 4; the threshold is exclusive.
+    assert scans.reference("scan_filter_avg", g, {"min": 0}) == [[3, 14 / 3]]
+    assert scans.reference("scan_filter_avg", g, {"min": 1}) == [[2, 6.5]]
+    assert scans.reference("scan_filter_avg", g, {"min": 4}) == [[1, 9]]
+
+
+def test_scan_bindings_spread_over_the_comments(graph: SnbGraph) -> None:
+    n = 10
+    comments = graph.nodes["Comment"].values()
+    assert scans.bindings("scan_label", graph, n) == [{}]
+    assert scans.bindings("scan_aggregate", graph, n) == [{}]
+    # Ten windows, each over about 10% of the comments by creationDate, moving forward.
+    windows = scans.bindings("scan_filter", graph, n)
+    assert len(windows) == n
+    assert [w["from"] for w in windows] == sorted({w["from"] for w in windows})
+    for w in windows:
+        inside = sum(w["from"] <= c["creationDate"] < w["to"] for c in comments)
+        assert 0.08 * len(comments) <= inside <= 0.12 * len(comments), w
+    # Every distinct comment length (fewer than 10 on the generated data).
+    lengths = sorted({c["length"] for c in comments})
+    assert scans.bindings("scan_order_limit", graph, n) == [{"minLength": x} for x in lengths]
+    assert all(
+        len(scans.reference("scan_order_limit", graph, b)) == 20 for b in scans.bindings("scan_order_limit", graph, n)
+    )
+    # Ten distinct thresholds below the longest comment, so every binding counts at least one comment.
+    thresholds = [b["min"] for b in scans.bindings("scan_filter_avg", graph, n)]
+    assert len(thresholds) == n and thresholds == sorted(set(thresholds))
+    assert thresholds[0] < lengths[0] and thresholds[-1] < lengths[-1]
+    assert all(scans.reference("scan_filter_avg", graph, {"min": t})[0][0] > 0 for t in thresholds)
+
+
+def test_scan_twins_share_the_references() -> None:
+    by_id = {item.id: item for item in catalog.ITEMS}
+    for qid in ("scan_label", "scan_filter", "scan_aggregate", "scan_order_limit", "scan_filter_avg"):
+        base = by_id[qid]
+        assert (base.category, base.model) == ("scans", "property_graph")
+        for suffix, model, dialect, name in (
+            ("sql", "sql_pgq", "sql_pgq", "SQL/PGQ"),
+            ("rdf", "rdf", "sparql", "SPARQL"),
+        ):
+            twin = by_id[f"{qid}_{suffix}"]
+            assert isinstance(twin, catalog.Query)
+            assert (twin.category, twin.model, twin.same_as) == ("scans", model, qid)
+            assert twin.title == f"{base.title} ({name})"
+            assert twin.text[dialect].strip()
+            assert catalog.reference_source(twin.id) is scans
+    assert catalog.LOAD_QL_PROBES[("snb", "property_graph")] == "scan_order_limit"
+    assert catalog.LOAD_QL_PROBES[("snb", "sql_pgq")] == "scan_order_limit_sql"
 
 
 def test_bfs_reference_depths(tmp_path: Path) -> None:

@@ -65,6 +65,10 @@ benchmark moves to `legacy/` untouched and is deleted once the new comparison re
   and edge count guard after the case; write cases run after every read query of their dataset.
 - **Selections**: `push` now plans Startup, Load (query language), Batch writes, Scans and Pattern matching too
   (their queries arrive with the next steps), and both selections turn the Memory and Disk records on.
+- **Scans**: label scan, property filter, aggregation, order plus limit and property filter with average over the
+  SNB comments and persons (`graph_bench/suites/scans.py`), each with an SQL/PGQ and a SPARQL twin in the same
+  category that shares its references, so DuckDB + DuckPGQ and Oxigraph take part. HelixDB runs four through DSL
+  builders (the aggregation is ⊘). The order plus limit scan is the Load (query language) content probe.
 - **Memory and Disk records**: after each database's worker (or pytest process), the supervisor loads every
   dataset and store the database's models reach once more, each in a fresh child process
   (`graph_bench/runner/resources.py`), and samples the child's whole process tree every 10 ms from outside

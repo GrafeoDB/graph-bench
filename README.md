@@ -48,7 +48,7 @@ the Load table has a separate row for it (⊘ for a database without RDF, as a l
 | Load | bulk load per dataset (SNB, Graphalytics, SNB as RDF triples), each database's fastest documented bulk path | all | implemented |
 | Load (query language) | bulk load through the query language (`LOAD CSV`, `COPY` from a query) | databases with a query-language loader | planned |
 | Batch writes | batch insert, update, delete, upsert | property graph | planned |
-| Scans | label scan, property filter, aggregation, order and limit | property graph | planned |
+| Scans | label scan, property filter, aggregation, order plus limit, property filter with average | property graph, plus SQL/PGQ and SPARQL twins | implemented |
 | Hops | 1, 2 and 3 hop expansion, variable-length paths, shortest path | property graph | IC13 implemented, the rest planned |
 | Pattern matching | triangles, cycles, multi-pattern joins | property graph | planned |
 | Complex queries | LDBC SNB Interactive short reads IS1 to IS7 and complex reads | property graph | IS1 to IS7, IC2, IC6 implemented |

@@ -5,7 +5,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from graph_bench.cli import app
-from graph_bench.suites import GRAPH_MODELS, Write, catalog, snb_rdf, snb_sql
+from graph_bench.suites import GRAPH_MODELS, Write, catalog, scans, snb_rdf, snb_sql
 from graph_bench.suites.catalog import Case, cases
 from graph_bench.suites.snb import QUERIES
 from graph_bench.types import BUDGET_EXEMPT, CATEGORY_NAMES, CATEGORY_ORDER, LOAD_CATEGORIES, STANDARD_DIALECT
@@ -17,7 +17,8 @@ def _item(item_id: str) -> catalog.Query | catalog.Algorithm:
 
 def test_push_selection_cases() -> None:
     result = cases("push", ["grafeo", "ladybug"])
-    assert len(result) == 2 * (13 + 4 + 3)
+    # 13 SNB and Graphalytics items, 4 SQL/PGQ, 3 RDF and the 15 Scans rows (5 queries, each in three models).
+    assert len(result) == 2 * (13 + 4 + 3 + 15)
     assert all(c.threads == 1 for c in result)
     assert all(c.scale == "small" for c in result)
     assert [c.bench_id for c in result] == sorted(c.bench_id for c in result)
@@ -58,8 +59,10 @@ def test_list_output_is_stable() -> None:
 
 def test_limited_queries_have_total_order() -> None:
     pattern = re.compile(r"(\w+\.)?\w*[iI]d\s+(ASC|DESC)?\s*LIMIT")
-    limited = [q for q in QUERIES if "LIMIT" in q.text["cypher"]]
-    assert limited
+    # The SNB queries and the openCypher and SQL/PGQ scans; the SPARQL scan orders with `ASC(?id)` (checked below).
+    texts = [*QUERIES, *(q for q in scans.QUERIES if q.model != "rdf")]
+    limited = [q for q in texts if any("LIMIT" in t for t in q.text.values())]
+    assert len(limited) > 2
     for q in limited:
         for dialect, text in q.text.items():
             if dialect == "helix":  # the name of a DSL builder, not query text
@@ -67,6 +70,8 @@ def test_limited_queries_have_total_order() -> None:
                 continue
             assert "ORDER BY" in text, q.id
             assert pattern.search(text), q.id
+    sparql = next(q for q in scans.QUERIES if q.id == "scan_order_limit_rdf").text["sparql"]
+    assert "ORDER BY DESC(?created) ASC(?id)\nLIMIT" in sparql
 
 
 def test_every_query_has_cypher_text() -> None:
@@ -212,7 +217,13 @@ def test_load_ql_ids_cover_the_graph_store_datasets() -> None:
         "benches/test_load_ql.py::test_load_ql_snb[oxigraph-small]",
     ]
     assert catalog.load_ql_keys("push") == {"graphalytics": "property_graph", "snb": "property_graph"}
-    assert catalog.LOAD_QL_PROBES == {}
+    assert catalog.LOAD_QL_PROBES == {
+        ("snb", "property_graph"): "scan_order_limit",
+        ("snb", "sql_pgq"): "scan_order_limit_sql",
+    }
+    # Each probe is a query of its key's dataset and model, so a database of that primary model can run it.
+    for (dataset, model), item_id in catalog.LOAD_QL_PROBES.items():
+        assert (_item(item_id).dataset, _item(item_id).model) == (dataset, model)
 
 
 def test_selections_plan_startup_load_ql_and_the_core_categories() -> None:

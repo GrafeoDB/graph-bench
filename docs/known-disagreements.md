@@ -55,6 +55,11 @@ the plans show avoidable work. They carry no `- id:` line, so the adapter test s
 - `snb_is4` on `snb-small` (median 45 ms for 10 bindings): `MATCH (m {id: $messageId}) WHERE m:Post OR m:Comment`
   is planned as `NodeScan (m:*)`, a label filter, then the `id` filter, so the property index on `id` is not
   used when the label is a disjunction or absent. Cause: Grafeo engine (query planner).
+- `scan_order_limit` and `scan_filter_avg` on `snb-small` (push run medians 3.35 ms and 2.15 ms for 7 and 10
+  bindings, against NeuG's 0.38 ms and 0.27 ms; within the 10x rule). `scan_order_limit` plans `Limit (20)` over a
+  full `Sort (created DESC, id ASC)` over `Return (m.id, m.content, m.creationDate)`, so every matching comment's
+  content is projected and the whole set sorted, where a top-20 sort would keep 20 rows. Cause: Grafeo engine
+  (query planner, no top-k for `ORDER BY ... LIMIT`).
 
 ## Grafeo: medium-scale RDF and IC13 (not allowlisted)
 
@@ -127,6 +132,24 @@ queries agree afterwards), but slower than the batch API. It is not a disagreeme
   search prefix (with it, quantified edges inside `GRAPH_TABLE`). For IS6 this is the first failure: the label
   disjunction `Post|Comment` in the same text could fail next. The decision on the target release is the
   user's (decisions.md, 6).
+
+## Grafeo: an SQL/PGQ parameter named `$from` does not parse (Property filter)
+
+- id: grafeo/scan_filter_sql
+- Query: `scan_filter_sql` (Property filter (SQL/PGQ)), the shared SQL/PGQ text in `graph_bench/suites/scans.py`,
+  no Grafeo override: `MATCH (m:Comment) WHERE m.creationDate >= $from AND m.creationDate < $to`, the same
+  parameter names as the openCypher `scan_filter`, whose bindings and references it shares.
+- Dataset: `snb-small`, the named graph `snb`.
+- Grafeo 0.6.0 outcome: ✗ at parse time on the first binding, `GRAFEO-Q001: syntax error: [SQL/PGQ] Expected
+  identifier` pointing at `$from`. The openCypher `scan_filter` with the same `$from` agrees, and DuckDB + DuckPGQ
+  runs the same SQL/PGQ text and agrees.
+- Reduced: on a one-node graph, `$x`, `$to` and `$min` parse in a graph pattern WHERE; `$from` and `$select` fail
+  with the same error, so a parameter whose name is an SQL reserved word is not accepted after `$`. `$name` is the
+  binding convention both engines' Python APIs take (see `snb_sql.py`), and a name after `$` is a parameter name,
+  not a keyword.
+- Reference answer: the openCypher `scan_filter` references (10 windows of about 200 comments each).
+- Cause: Grafeo engine (SQL/PGQ parser: the parameter name after `$` is lexed as a keyword). Not renamed in the
+  shared text, which would hide it.
 
 ## Grafeo: SPARQL IS6 property path is slow (not allowlisted)
 
@@ -449,6 +472,21 @@ alone, where no budget applies and they must agree.
   instead of `repeat`.
 - Cause: HelixDB DSL (feature coverage), not the adapter. The other seven SNB queries agree with the references.
 
+## HelixDB: the Aggregation scan cannot be expressed in the DSL (not available)
+
+- id: helixdb/scan_aggregate
+- Query: `scan_aggregate` (Aggregation): Persons grouped by `browserUsed` and `gender`, with `count(*)`,
+  `min(birthday)` and `max(creationDate)` per group, ordered by the two keys.
+- HelixDB outcome: `not_supported` (⊘), "Aggregation: grouping by two properties (browser and gender) with a count,
+  a minimum and a maximum per group cannot be expressed". `group` and `group_count` take one property and are
+  terminal steps, and `aggregate_by(fn, property)` computes one function over the whole stream (helix-db 0.3.4,
+  https://docs.helix-db.com/database/helix-db/query-guides/projections). Running one entry per known group would need
+  the groups in advance, and grouping in Python would compute the answer outside HelixDB; neither is done.
+- The other four scans agree. `scan_filter_avg` is two entries of one read batch, `count` and
+  `aggregate_by(MEAN, "length")`, each over the same filtered stream, since both steps are terminal: two scans
+  where the shared text has one (a disadvantage, not a workaround).
+- Cause: HelixDB DSL (feature coverage), not the adapter.
+
 ## HelixDB: no BFS, WCC or PageRank (not available)
 
 - id: helixdb/graphalytics_bfs
@@ -484,6 +522,12 @@ marked `timeout` (⏱) by the budget rule against Grafeo, not by a hang: 10 bind
 IS5 and IS6 (Grafeo 0.2 to 0.3 ms), 99 ms for IC13, 201 ms for IC2 and 239 ms for IS2 (the 50 `optional` steps).
 Load takes 8.3 s (Graphalytics) and 11.6 s (SNB) against 0.09 s and 0.14 s. No `- id:` line: the adapter test runs
 HelixDB alone and it must agree.
+
+The Scans it runs agree as well and are ⏱ by the same rule in `bench --selection push` (Windows, eight databases):
+`scan_label` 49 ms (32x the top-3 average), `scan_filter` 520 ms for 10 bindings (207x), `scan_order_limit` 543 ms
+for 7 bindings (249x) and `scan_filter_avg` 1051 ms for 10 bindings (924x, two filtered scans per binding, see the
+Aggregation section). Every filtered scan reads the label's nodes and filters them in the DSL; no range index is
+created on `creationDate` or `length`, as no other database gets one.
 
 ## HelixDB: intermittent planner error during loads on a busy machine (✗ when it happens, not allowlisted)
 

@@ -24,7 +24,7 @@ from types import ModuleType
 from typing import Any
 
 from graph_bench.databases import model_support
-from graph_bench.suites import Algorithm, Item, Query, Write, graphalytics, snb, snb_rdf, snb_sql
+from graph_bench.suites import Algorithm, Item, Query, Write, graphalytics, scans, snb, snb_rdf, snb_sql
 from graph_bench.types import CATEGORY_ORDER, Category, Model, Store
 
 __all__ = [
@@ -80,7 +80,7 @@ def _extra_suites() -> tuple[ModuleType, ...]:
 # The modules GRAPH_BENCH_EXTRA_SUITES adds, and all suite modules in catalog order; their items, in that order, are
 # the catalog.
 EXTRA_SUITES: tuple[ModuleType, ...] = _extra_suites()
-SUITES: tuple[ModuleType, ...] = (snb, graphalytics, snb_sql, snb_rdf, *EXTRA_SUITES)
+SUITES: tuple[ModuleType, ...] = (scans, snb, graphalytics, snb_sql, snb_rdf, *EXTRA_SUITES)
 
 ITEMS: tuple[Item, ...] = tuple(item for module in SUITES for item in _module_items(module))
 
@@ -88,8 +88,12 @@ _BY_ID = {item.id: item for item in ITEMS}
 _SOURCE = {item.id: module for module in SUITES for item in _module_items(module)}
 
 # The Load (query language) content probe per (dataset, primary model): the item whose preflight call runs,
-# untimed, on each instance a query-language load filled, against that item's references.
-LOAD_QL_PROBES: dict[tuple[str, Model], str] = {}
+# untimed, on each instance a query-language load filled, against that item's references. The order plus limit scan
+# returns comment contents, strings with commas and quotes, so a loader that mangles quoting disagrees.
+LOAD_QL_PROBES: dict[tuple[str, Model], str] = {
+    ("snb", "property_graph"): "scan_order_limit",
+    ("snb", "sql_pgq"): "scan_order_limit_sql",
+}
 
 # The scale of the Startup row: a database opened empty.
 STARTUP_SCALE = "empty"

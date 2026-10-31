@@ -12,9 +12,9 @@ pytest.importorskip("helixdb_uniffi")
 
 from graph_bench.databases import get_database
 from graph_bench.databases.base import NotSupported
-from graph_bench.databases.helix_queries import BUILDERS, snb_ic13
+from graph_bench.databases.helix_queries import BUILDERS, scan_filter_avg, snb_ic13
 from graph_bench.results import Results
-from graph_bench.suites import snb
+from graph_bench.suites import Query, catalog
 from graph_bench.suites.startup import PROBE
 from graph_bench.types import Model
 from tests.conftest import (
@@ -84,15 +84,18 @@ def test_helixdb_settings(tmp_path: Path) -> None:
     assert info.process == "in-process"
 
 
-def test_every_snb_query_names_a_builder_or_a_reason() -> None:
-    """The suite's `helix` text is the query id, and each id has a builder or a reason (never a KeyError); the
-    Startup probe's text names its builder too."""
-    assert {q.text["helix"] for q in snb.QUERIES} | {PROBE["helix"]} == set(BUILDERS)
+def test_every_query_names_a_builder_or_a_reason() -> None:
+    """Each property graph query's `helix` text is its id, and each id has a builder or a reason (never a KeyError)
+    that starts with the query's name (IS3, ...; the title for a scan); the Startup probe's text names its builder
+    too."""
+    queries = [q for q in catalog.ITEMS if isinstance(q, Query) and q.model == "property_graph"]
+    assert all(q.text["helix"] == q.id for q in queries)
+    assert {q.id for q in queries} | {PROBE["helix"]} == set(BUILDERS)
     assert callable(BUILDERS[PROBE["helix"]])
-    for name, builder in BUILDERS.items():
-        if name == PROBE["helix"]:
-            continue
-        assert callable(builder) or (isinstance(builder, str) and builder.startswith(name.removeprefix("snb_").upper()))
+    for q in queries:
+        builder = BUILDERS[q.id]
+        name = q.id.removeprefix("snb_").upper() if q.id.startswith("snb_") else q.title
+        assert callable(builder) or (isinstance(builder, str) and builder.startswith(name)), q.id
 
 
 def test_unsupported_queries_raise_not_supported(tmp_path: Path) -> None:
@@ -100,6 +103,8 @@ def test_unsupported_queries_raise_not_supported(tmp_path: Path) -> None:
     for name in ("snb_is3", "snb_is7", "snb_ic6"):
         with pytest.raises(NotSupported, match=r"ORDER BY|ranking"):
             db.query(name, {})
+    with pytest.raises(NotSupported, match="grouping by two properties"):
+        db.query("scan_aggregate", {})
     for algo in ("bfs", "wcc", "pr"):
         with pytest.raises(NotSupported):
             db.algorithm(algo, {})
@@ -112,3 +117,10 @@ def test_ic13_rows_count_the_edges_of_the_returned_path() -> None:
     assert rows({"p": []}) == [(-1,)]
     assert rows({"p": [7]}) == [(0,)]
     assert rows({"p": [7, 8, 9]}) == [(2,)]
+
+
+def test_scan_filter_avg_rows_read_the_count_and_the_mean() -> None:
+    """The count entry is a number; the mean entry is `aggregate_by`'s one map with one value."""
+    request, rows = scan_filter_avg({"min": 25})
+    assert request is not None
+    assert rows({"n": 3, "mean": [{"length_Mean": 27.5}]}) == [(3, 27.5)]

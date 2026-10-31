@@ -25,6 +25,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from helixdb import (
+    AggregateFunction,
     BindingProjection,
     NodeRef,
     Order,
@@ -56,6 +57,10 @@ _PERSON = define_params({"personId": param.string()})
 _MESSAGE = define_params({"messageId": param.string()})
 _IC2 = define_params({"personId": param.string(), "maxDate": param.i64()})
 _IC13 = define_params({"person1Id": param.string(), "person2Id": param.string()})
+_NONE = define_params({})
+_WINDOW = define_params({"from": param.i64(), "to": param.i64()})
+_MIN_LENGTH = define_params({"minLength": param.i64()})
+_THRESHOLD = define_params({"min": param.i64()})
 
 _B = BindingProjection
 
@@ -219,6 +224,44 @@ def snb_ic13(b: Mapping[str, Any]) -> tuple[QueryRequest, Rows]:
     return _request(_IC13, b, a=person1, b=person2, p=path), rows
 
 
+def scan_label(b: Mapping[str, Any]) -> tuple[QueryRequest, Rows]:
+    t = g().n_with_label("Comment").value_map(["id"])
+    return _request(_NONE, b, r=t), _columns(("r",), ("id",))
+
+
+def scan_filter(b: Mapping[str, Any]) -> tuple[QueryRequest, Rows]:
+    window = Predicate.and_([Predicate.gte("creationDate", _WINDOW["from"]), Predicate.lt("creationDate", _WINDOW.to)])
+    t = g().n_with_label("Comment").where(window).value_map(["id"])
+    return _request(_WINDOW, b, r=t), _columns(("r",), ("id",))
+
+
+def scan_order_limit(b: Mapping[str, Any]) -> tuple[QueryRequest, Rows]:
+    t = (
+        g()
+        .n_with_label("Comment")
+        .where(Predicate.gte("length", _MIN_LENGTH.minLength))
+        .order_by_multiple([("creationDate", Order.DESC), ("id", Order.ASC)])
+        .limit(20)
+        .value_map(["id", "content", "creationDate"])
+    )
+    return _request(_MIN_LENGTH, b, r=t), _columns(("r",), ("id", "content", "creationDate"))
+
+
+def scan_filter_avg(b: Mapping[str, Any]) -> tuple[QueryRequest, Rows]:
+    # `count` and `aggregate_by` are both terminal steps, so the count and the mean are two entries of one read batch,
+    # each over the same filtered stream (two scans where the shared text has one).
+    def longer() -> Any:
+        return g().n_with_label("Comment").where(Predicate.gt("length", _THRESHOLD.min))
+
+    def rows(result: Mapping[str, Any]) -> list[tuple[Any, ...]]:
+        # `aggregate_by` returns one map with one entry (`{"length_Mean": ...}` in helix-db 0.3.4): its value.
+        [mean] = [value for entry in result["mean"] for value in entry.values()]
+        return [(result["n"], mean)]
+
+    mean = longer().aggregate_by(AggregateFunction.MEAN, "length")
+    return _request(_THRESHOLD, b, n=longer().count(), mean=mean), rows
+
+
 def startup_probe(b: Mapping[str, Any]) -> tuple[QueryRequest, Rows]:
     """The Startup probe (`suites.startup.PROBE["helix"]`): the number of nodes, `MATCH (n) RETURN count(n)`, with
     the `count` step over all nodes (https://docs.helix-db.com/database/helix-db/query-guides/projections)."""
@@ -255,5 +298,14 @@ BUILDERS: dict[str, Builder | str] = {
         "group_count is a terminal step whose result is a map that order_by and limit cannot rank by count"
     ),
     "snb_ic13": snb_ic13,
+    "scan_label": scan_label,
+    "scan_filter": scan_filter,
+    "scan_aggregate": (
+        "Aggregation: grouping by two properties (browser and gender) with a count, a minimum and a maximum per "
+        "group cannot be expressed: group and group_count group by one property and are terminal, and aggregate_by "
+        "computes one function over the whole stream"
+    ),
+    "scan_order_limit": scan_order_limit,
+    "scan_filter_avg": scan_filter_avg,
     "startup_probe": startup_probe,
 }

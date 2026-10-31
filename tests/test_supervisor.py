@@ -377,10 +377,11 @@ def test_supervisor_load_crash_is_not_retried(bench_env: pytest.MonkeyPatch, tmp
     assert "exited with code 3" in (entries[load_id].error or "")
     # The RDF store is a load of its own: the graph load's crash leaves it and its cases alone.
     assert entries[catalog.load_id("snb", "fake", "small", 1, "rdf")].status == "ok"
+    graph_cases = {i.id for i in catalog.ITEMS if (i.dataset, i.store) == ("snb", "graph")}
     for entry in entries.values():
         if entry.id == load_id:
             continue
-        if entry.benchmark.startswith("snb_") and entry.model != "rdf":
+        if entry.benchmark in graph_cases:
             assert entry.status == "failed", entry
             assert entry.error == f"load failed: {load_id}"
         else:

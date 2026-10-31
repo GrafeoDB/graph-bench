@@ -314,7 +314,8 @@ def test_worker_runs_algorithms_on_an_sql_pgq_database(push_data_dir: Path, tmp_
     assert set(entries) == set(catalog.all_ids("push", ["fake_sql"]))
     for case in catalog.cases("push", ["fake_sql"]):
         entry = entries[case.bench_id]
-        if case.item.category in ("sql_pgq", "algorithms"):
+        # The SQL/PGQ cases (the SQL/PGQ category and the Scans twins) and the algorithms run.
+        if case.item.model == "sql_pgq" or case.item.category == "algorithms":
             assert (entry["status"], entry["answer"]) == ("ok", "agree"), entry
         else:
             assert (entry["status"], entry["error"]) == ("not_supported", f"model {case.item.model} not supported")
