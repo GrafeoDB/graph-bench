@@ -33,7 +33,11 @@ RETURN CASE WHEN path IS NULL THEN -1 ELSE length(path) END"""
 q_with = """MATCH (p1:P {id:'a'}), (p2:P {id:'b'})
 WITH p1, p2, shortestPath((p1)-[:KNOWS*]-(p2)) AS path
 RETURN length(path)"""
-for name, text in [("directed, in RETURN", q_ok.replace("]-(p2)", "]->(p2)")), ("OPTIONAL MATCH", q), ("undirected, in WITH", q_with)]:
+for name, text in [
+    ("directed, in RETURN", q_ok.replace("]-(p2)", "]->(p2)")),
+    ("OPTIONAL MATCH", q),
+    ("undirected, in WITH", q_with),
+]:
     try:
         print(name, "->", g.query(text).result_set)
     except Exception as e:
