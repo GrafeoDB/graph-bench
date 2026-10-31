@@ -182,7 +182,14 @@ def test_release_workflow_triggers_and_state() -> None:
     assert triggers["workflow_dispatch"]["inputs"]["force"]["type"] == "boolean"
     detect, post = workflow["jobs"]["detect"], workflow["jobs"]["post"]
     assert any("graph_bench.release latest" in run for run in _runs(detect))
-    assert any("FORCE" in run and "bot/state" in run for run in _runs(detect))
+    check = next(run for run in _runs(detect) if "FORCE" in run)
+    assert "bot/state" in check
+    # Numeric comparison through graph_bench.release, never string equality; a failed lookup stops the job.
+    assert "graph_bench.release newer" in check
+    assert '"$latest" = "$posted"' not in check
+    assert "sort -V" not in check
+    assert "ls-remote --exit-code" in check
+    assert "2>/dev/null" not in check
     assert post["needs"] == "detect"
     assert post["if"] == "needs.detect.outputs.run == 'true'"
     assert post["runs-on"] == GRAVITON
@@ -208,7 +215,16 @@ def test_release_post_is_conditional_on_the_secret_and_records_after() -> None:
     # The version is recorded after a successful post (a step without `if: always()` does not run after a failure).
     assert names.index("Record the posted version on bot/state") > names.index("Post to Discord")
     assert "always()" not in record["if"]
-    assert "git push origin bot/state" in record["run"]
+    # The push comes from a checkout of bot/state of its own (not a worktree), and a failed push fails the step.
+    assert record["working-directory"] == "state"
+    assert "git push origin HEAD:refs/heads/bot/state" in record["run"]
+    assert "exit 1" in record["run"].split("git push", 1)[1]
+    assert "worktree" not in record["run"]
+    checkouts = [s for s in steps if s.get("uses", "").startswith("actions/checkout@") and "with" in s]
+    assert {c["with"]["path"] for c in checkouts} == {"state"}
+    assert any(c["with"].get("ref") == "bot/state" for c in checkouts)
+    # Retried posting resumes from the recorded progress.
+    assert "--progress notify-progress.txt" in notify["run"]
     # The secret is only ever read from the secrets context, never written into a file.
     text = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
     assert "discord.com/api/webhooks" not in text

@@ -46,6 +46,13 @@ _RUN_URL = typer.Option(None, "--run-url", help="Link to the CI run (discord onl
 _README_URL = typer.Option(RESULTS_URL, "--readme-url", help="Link to the README results section (discord only).")
 
 
+_NOTIFY_PROGRESS = typer.Option(
+    None,
+    "--progress",
+    help="File holding how many messages went out: read to resume a failed post, updated after each message.",
+)
+
+
 @app.callback()
 def _root() -> None:
     """Keep subcommands as subcommands."""
@@ -262,6 +269,7 @@ def notify(
     webhook_env: str = typer.Option(..., "--webhook-env", help="Environment variable that holds the webhook URL."),
     run_url: str | None = _RUN_URL,
     readme_url: str = _README_URL,
+    progress: Path | None = _NOTIFY_PROGRESS,
 ) -> None:
     """Post a results.json to a Discord webhook; skip, with a log line, when the variable is empty or unset."""
     url = os.environ.get(webhook_env, "").strip()
@@ -270,14 +278,21 @@ def notify(
         return
     try:
         payloads = render_discord(Results.read(in_path), run_url=run_url, readme_url=readme_url)
-        sent = notify_module.post_all(url, payloads)
+        start = int(progress.read_text(encoding="utf-8").strip() or 0) if progress and progress.exists() else 0
+
+        def record(count: int) -> None:
+            if progress is not None:
+                progress.write_text(f"{count}\n", encoding="utf-8")
+
+        sent = notify_module.post_all(url, payloads, start=start, on_sent=record)
     except (OSError, ValueError, KeyError) as exc:
         typer.echo(f"notify: {str(exc).replace(url, '<webhook>')}", err=True)
         raise typer.Exit(2) from None
     except notify_module.NotifyError as exc:
-        typer.echo(f"notify: {exc}", err=True)
+        done = progress.read_text(encoding="utf-8").strip() if progress and progress.exists() else "0"
+        typer.echo(f"notify: {exc} ({done} of {len(payloads)} messages had gone out)", err=True)
         raise typer.Exit(1) from None
-    typer.echo(f"notify: posted {sent} messages to {webhook_env}")
+    typer.echo(f"notify: posted {sent} messages to {webhook_env} ({start} were already out)")
 
 
 @data_app.command("prepare")

@@ -8,7 +8,7 @@ from typer.testing import CliRunner
 
 from graph_bench import notify
 from graph_bench.cli import app
-from graph_bench.release import newest_stable
+from graph_bench.release import is_newer, main, newest_stable
 from graph_bench.report.discord import CONTENT_LIMIT, render_discord
 from graph_bench.results import Results
 from graph_bench.types import CATEGORY_ORDER, Category
@@ -200,3 +200,95 @@ def test_newest_stable_ignores_prereleases_and_yanked() -> None:
     }
     assert newest_stable(releases) == "0.6.10"
     assert newest_stable({"1.0.0a1": live}) is None
+
+
+def test_is_newer_orders_numerically() -> None:
+    assert is_newer("0.6.10", "0.6.9")  # newer posts
+    assert is_newer("0.7.0", "0.6.12")
+    assert is_newer("0.6.1", "")  # never posted
+    assert not is_newer("0.6.2", "0.6.2")  # equal skips
+    assert not is_newer("0.6", "0.6.0")  # trailing zeros are the same version
+    assert not is_newer("0.6.1", "0.6.2")  # an older newest (a yanked release) skips
+    assert not is_newer("0.6.9", "0.6.10")  # string order would say newer
+    with pytest.raises(ValueError):
+        is_newer("0.7.0rc1", "0.6.2")  # pre-releases are not versions to post
+    with pytest.raises(ValueError):
+        is_newer("0.7.0", "garbage")
+
+
+def test_release_newer_exit_codes(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["newer", "0.6.10", "0.6.9"]) == 0
+    assert main(["newer", "0.6.2", "0.6.2"]) == 1
+    assert main(["newer", "0.6.1", "0.6.2"]) == 1
+    assert main(["newer", "0.6.1", ""]) == 0
+    assert main(["newer", "0.7.0rc1", "0.6.2"]) == 2
+    assert main(["bogus"]) == 2
+    capsys.readouterr()
+
+
+def test_prereleases_are_not_picked_as_newest() -> None:
+    live = [{"yanked": False}]
+    newest = newest_stable({"0.6.2": live, "0.7.0rc1": live, "0.7.0.dev3": live})
+    assert newest == "0.6.2"
+    assert not is_newer(newest, "0.6.2")
+
+
+def test_transport_errors_are_retried_with_backoff() -> None:
+    calls = {"n": 0}
+    waits: list[float] = []
+
+    def flaky(url: str, body: bytes) -> tuple[int, str]:
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise OSError("blip")
+        return 204, ""
+
+    assert notify.post_all(FAKE_URL, [{"content": "x"}], send=flaky, sleep=waits.append) == 1
+    assert calls["n"] == 3
+    assert waits == [2.0, 4.0]
+
+
+def test_resume_skips_messages_already_sent() -> None:
+    sent: list[str] = []
+    progress: list[int] = []
+
+    def send(url: str, body: bytes) -> tuple[int, str]:
+        sent.append(json.loads(body)["content"])
+        return 204, ""
+
+    payloads = [{"content": c} for c in "abcd"]
+    notify.post_all(FAKE_URL, payloads, start=2, on_sent=progress.append, send=send, sleep=lambda s: None)
+    assert sent == ["c", "d"]
+    assert progress == [3, 4]
+
+
+def test_cli_progress_file_resumes_after_a_partial_failure(
+    big: Results, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "results.json"
+    big.write(path)
+    progress = tmp_path / "progress.txt"
+    total = len(render_discord(big))
+    sent: list[bytes] = []
+    fail_at = {"n": 2}
+
+    def send(url: str, body: bytes) -> tuple[int, str]:
+        if len(sent) == fail_at["n"]:
+            return 500, "boom"
+        sent.append(body)
+        return 204, ""
+
+    monkeypatch.setenv("FAKE_HOOK", FAKE_URL)
+    monkeypatch.setattr(notify, "urllib_send", send)
+    monkeypatch.setattr(notify.time, "sleep", lambda s: None)
+    args = ["notify", "--in", str(path), "--webhook-env", "FAKE_HOOK", "--progress", str(progress)]
+    first = CliRunner().invoke(app, args)
+    assert first.exit_code == 1
+    assert f"2 of {total} messages had gone out" in first.output
+    assert progress.read_text(encoding="utf-8").strip() == "2"
+    fail_at["n"] = -1
+    second = CliRunner().invoke(app, args)
+    assert second.exit_code == 0, second.output
+    assert len(sent) == total  # each message exactly once across both attempts
+    assert len(set(sent)) == total
+    assert FAKE_URL not in first.output + second.output
