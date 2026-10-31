@@ -24,8 +24,23 @@ from graph_bench.datasets import cache
 # it leaves room on a GitHub-hosted ubuntu-latest runner (16 GB RAM for public repositories) for off-heap memory
 # (Neo4j's page cache) and for the harness process.
 MAX_HEAP = "4g"
-# The heap flag, for a database that passes JVM options itself (Neo4j: `jpype.startJVM(path, *heap_args(), ...)`).
+# The heap flag, for a database that passes JVM options itself (Neo4j: `jpype.startJVM(path, *jvm_args(), ...)`).
 HEAP_FLAG = f"-Xmx{MAX_HEAP}"
+# Single-threaded runs (fairness rule 3, "single-threaded where configurable") also cap the JVM's own threads, for
+# every JVM database, with the HotSpot options of the `java` command
+# (https://docs.oracle.com/en/java/javase/25/docs/specs/man/java.html; the same options in the Java 21 page):
+# - ParallelGCThreads: "the number of the stop-the-world (STW) worker threads" of the collector ("Advanced Garbage
+#   Collection Options"); the default collector is kept (G1, or Serial on a small machine).
+# - ConcGCThreads: "the number of threads used for concurrent GC" (same section).
+# - CICompilerCount: "the number of compiler threads to use for compilation" ("Advanced JIT Compiler Options").
+#   With tiered compilation on (the default, kept) HotSpot refuses less than 2 ("CICompilerCount (1) must be at
+#   least 2"), so 2: one C1 and one C2 compiler thread.
+# Defaults on a 16-core machine, for comparison: 13, 3 and 12 (`java -XX:+PrintFlagsFinal`, bundled Corretto 25).
+SINGLE_THREAD_ARGS = ("-XX:ParallelGCThreads=1", "-XX:ConcGCThreads=1", "-XX:CICompilerCount=2")
+# `prepare_environment`, which starts the JVM, has no threads argument, so the thread setting reaches it through the
+# environment: a JVM database returns `process_env(threads)` from its own `process_env` (the worker and the CodSpeed
+# session apply it before the database module is imported).
+THREADS_ENV = "GRAPH_BENCH_JVM_THREADS"
 # Downloaded files (JREs, jar archives) go into this directory of the data cache, under their own file name.
 DOWNLOADS = "downloads"
 _CHUNK = 1 << 20
@@ -35,6 +50,50 @@ _OWNER: dict[str, str] = {}
 def heap_args() -> list[str]:
     """The JVM options of the shared memory cap."""
     return [HEAP_FLAG]
+
+
+def process_env(threads: int | None) -> dict[str, str]:
+    """The worker environment that makes `jvm_args()` single-threaded: `{THREADS_ENV: "1"}` for threads=1."""
+    return {THREADS_ENV: "1"} if threads == 1 else {}
+
+
+def single_threaded() -> bool:
+    """Whether this process runs single-threaded (`THREADS_ENV` is "1", set through `process_env`)."""
+    return os.environ.get(THREADS_ENV) == "1"
+
+
+def jvm_args() -> list[str]:
+    """The JVM options every JVM database starts with: the heap cap, plus `SINGLE_THREAD_ARGS` when single-threaded."""
+    return heap_args() + (list(SINGLE_THREAD_ARGS) if single_threaded() else [])
+
+
+def _vm_option(name: str) -> str:
+    """The value the running JVM uses for a HotSpot option (`HotSpotDiagnosticMXBean.getVMOption`)."""
+    import jpype
+
+    factory = jpype.JClass("java.lang.management.ManagementFactory")
+    bean_class = jpype.JClass("com.sun.management.HotSpotDiagnosticMXBean")
+    return str(factory.getPlatformMXBean(bean_class.class_).getVMOption(name).getValue())
+
+
+def thread_caps() -> dict[str, str]:
+    """The running JVM's values of the options in `SINGLE_THREAD_ARGS`, by option name."""
+    names = [arg.removeprefix("-XX:").partition("=")[0] for arg in SINGLE_THREAD_ARGS]
+    return {name: _vm_option(name) for name in names}
+
+
+def check_threads(threads: int | None) -> None:
+    """With threads=1, raise RuntimeError unless the running JVM uses every value of `SINGLE_THREAD_ARGS`.
+
+    Adapters call it at the start of `load` (it reads three VM options), so a JVM started without
+    `process_env(1)` fails the load instead of running wider than the other databases.
+    """
+    if threads != 1:
+        return
+    expected = {name: value for name, _, value in (a.removeprefix("-XX:").partition("=") for a in SINGLE_THREAD_ARGS)}
+    actual = thread_caps()
+    if actual != expected:
+        raise RuntimeError(f"the JVM's thread options are {actual}, not {expected} (set {THREADS_ENV}=1)")
 
 
 def _jvm_started() -> bool:
@@ -69,10 +128,11 @@ def start_once(owner: str, start: Callable[[], None]) -> None:
     """Start the process's JVM by calling `start`, unless `owner` started it already; then check the heap cap.
 
     Call it from `prepare_environment` (and, for direct use such as tests, lazily from `load`): the JVM start is
-    then outside every clock. `start` must pass the cap, `heap_args()` or `MAX_HEAP`. A JVM that another owner, or
-    something outside this module, started raises RuntimeError: one JVM database per process (fairness rule 1).
-    A JVM whose effective `-Xmx` is not `HEAP_FLAG` raises RuntimeError too, so a JVM_ARGS-style environment
-    variable cannot change the cap unnoticed.
+    then outside every clock. `start` must pass `jvm_args()` (the heap cap, and the thread caps when
+    single-threaded). A JVM that another owner, or something outside this module, started raises RuntimeError: one
+    JVM database per process (fairness rule 1). A JVM whose effective `-Xmx` is not `HEAP_FLAG`, or, in a
+    single-threaded process, whose thread options are not `SINGLE_THREAD_ARGS` (`check_threads`), raises
+    RuntimeError too, so a JVM_ARGS-style environment variable cannot change them unnoticed.
     """
     started_by = _OWNER.get("owner")
     if started_by is not None:
@@ -88,6 +148,8 @@ def start_once(owner: str, start: Callable[[], None]) -> None:
     heap = effective_heap_flag()
     if heap != HEAP_FLAG:
         raise RuntimeError(f"{owner}: the JVM runs with {heap or 'no -Xmx'}, not the shared cap {HEAP_FLAG}")
+    if single_threaded():
+        check_threads(1)
 
 
 def owner() -> str | None:

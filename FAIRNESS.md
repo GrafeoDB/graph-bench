@@ -24,8 +24,12 @@ benchmark, servers included, is kept in [legacy/](legacy/README.md).
      single-threaded until parallel queries land in grafeo 0.6.4; only its rayon parts (vector batch,
      clustering, folds) are parallel, and the variable sets those to one thread.
    - LadybugDB: `max_num_threads=1`.
-   - ArcadeDB: its query, scan and async thread pools and the JVM's common fork-join pool set to 1 (the note lists
-     them). The JVM's own garbage collector and JIT compiler threads keep the JVM defaults.
+   - JVM databases (ArcadeDB, Neo4j Community): the JVM's own threads are capped too, `-XX:ParallelGCThreads=1`,
+     `-XX:ConcGCThreads=1` (the default collector is kept) and `-XX:CICompilerCount=2`, the lowest HotSpot accepts
+     with tiered compilation, which stays on (one C1 and one C2 compiler thread). The JVM's other service threads
+     are not capped.
+   - ArcadeDB: also its query, scan and async thread pools and the JVM's common fork-join pool set to 1 (the note
+     lists them); its housekeeping threads are not capped.
 
    **Planned with grafeo 0.6.4:** the all-cores runs come back to the `full` selection, reported as a separate
    set of tables, and Grafeo's adapter switches from `RAYON_NUM_THREADS` to the real thread setting 0.6.4

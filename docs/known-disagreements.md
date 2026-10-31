@@ -454,15 +454,16 @@ yet supported by optimizer" and `+ MATCH NODE (m)` (IS4: `[filter: (m:Post OR m:
 vertices, while a labeled lookup such as IS3's `(n:Person {id: $personId})` is a `NodeIndexSeek`. On `snb-small`
 (Windows, one thread) a single unlabeled lookup takes 2.3 ms against 0.09 ms for `(m:Comment {id: $id})`. In
 `bench --selection push --db grafeo,arcadedb` the three are marked `timeout` (⏱) by the budget rule against Grafeo
-alone (10 bindings: IS4 14.6 ms, IS5 9.3 ms, IS6 9.7 ms; IS1 0.7 ms). The query text is not rewritten. Cause:
+alone (10 bindings: IS4 11.8 ms, IS5 9.2 ms, IS6 9.8 ms; IS1 0.9 ms). The query text is not rewritten. Cause:
 ArcadeDB (query planner). No `- id:` line: the adapter test runs ArcadeDB alone, where no budget applies.
 
 ## ArcadeDB: algorithms are slow under the 10x budget rule (not allowlisted)
 
 The answers agree with the references (PageRank within `LDBC_EPS`, run with damping 0.85, `maxIterations` 1000 and
-`tolerance` 1e-10 as the other adapters). Against Grafeo alone, BFS (21.9 ms, Grafeo 0.95 ms) and WCC (35.2 ms,
-Grafeo 3.1 ms) are marked `timeout` (⏱) by the budget rule in `bench --selection push --db grafeo,arcadedb`;
-PageRank (11.7 ms, Grafeo 2.4 ms) is within it. The procedures run without a Graph Analytical View (optional, not
+`tolerance` 1e-10 as the other adapters). Against Grafeo alone, BFS (31.7 ms, Grafeo 0.80 ms), WCC (47.8 ms,
+Grafeo 1.5 ms) and PageRank (18.7 ms, Grafeo 1.7 ms; 11.3x, close to the limit: 11.7 ms and within it in a run
+before the JVM thread caps) are marked `timeout` (⏱) by the budget rule in
+`bench --selection push --db grafeo,arcadedb` (Windows). The procedures run without a Graph Analytical View (optional, not
 created). `algo.bfs` leaves the start vertex out of its result ("The start node is excluded from the results",
 https://docs.arcadedb.com/arcadedb/reference/graph-algorithms/path-finding.html#algo-bfs), so the adapter adds it
 at depth 0, the reference's definition. No `- id:` line.
@@ -473,12 +474,23 @@ at depth 0, the reference's definition. No `- id:` line.
   `arcadedb.parallelScanProducerPoolThreads=1`, `arcadedb.queryParallelScan=false` and
   `arcadedb.asyncWorkerThreads=1` (https://docs.arcadedb.com/arcadedb/reference/settings) and
   `java.util.concurrent.ForkJoinPool.common.parallelism=1`, through the package's `ARCADEDB_JVM_ARGS`; GraphBatch
-  gets `parallel_flush=False`. A load with threads=1 fails when the JVM lacks them. Measured on `snb-small` and
-  `graphalytics-small` (Windows, 16 cores, `ThreadMXBean` CPU time per Java thread): during IC6, IS4, BFS, WCC and
-  PageRank the query work is on the calling thread alone (CPU/wall 0.86 to 1.0; no pool thread used CPU). The
-  process as a whole used 1.04 to 2.4 cores, the rest on the JVM's own threads (garbage collector, JIT compiler),
-  which are not Java threads and are not capped: the JVM defaults stay, as they would for any embedding
-  application. The results record `threads_configurable=True` with that note.
+  gets `parallel_flush=False`. The JVM's own threads are capped as for every JVM database (`jvm.py`,
+  `SINGLE_THREAD_ARGS`): `-XX:ParallelGCThreads=1` and `-XX:ConcGCThreads=1` (default collector, G1 here) and
+  `-XX:CICompilerCount=2`, HotSpot's minimum with tiered compilation, which stays on ("CICompilerCount (1) must be
+  at least 2"), so one C1 and one C2 compiler thread
+  (https://docs.oracle.com/en/java/javase/25/docs/specs/man/java.html, "Advanced Garbage Collection Options" and
+  "Advanced JIT Compiler Options"; the bundled Corretto 25.0.4.1 accepts all three). The defaults on this 16-core
+  machine are 13, 3 and 12. A load with threads=1 fails when the JVM lacks any of these settings.
+- Not capped: the JVM's other service threads (signal dispatcher, reference handler, finalizer, the JPype
+  reference queue) and ArcadeDB's housekeeping threads (coarse clock, cleaners, timer); none of them showed CPU
+  use beyond a few percent.
+- Measured on `snb-small` and `graphalytics-small` (Windows, 16 cores, shared with other work, `ThreadMXBean` CPU
+  time per Java thread and psutil per OS thread): during IC6, IS4, BFS, WCC and PageRank the query work is on the
+  calling thread alone (CPU/wall 0.96 to 0.99; no pool thread used CPU). With the caps, IS4 (200 runs after 20
+  warm-up runs) peaks at 2.07 cores for the process (2.39 before the caps, 3.75 with all defaults in the same
+  probe); the second core is JIT compilation, now on the two compiler threads (the JVM's compilation time over the
+  window was 1.26x the wall time, garbage collection 0.05x). After 500 warm-up runs IS4 uses 0.8 to 1.2 cores.
+  The results record `threads_configurable=True` with a note listing what is and is not capped.
 - Heap: the shared JVM cap `-Xmx4g` (`graph_bench/databases/jvm.py`, `MAX_HEAP`), checked after the start; the page
   cache (`arcadedb.maxPageRAM`) keeps its default, a quarter of the heap.
 - Storage: ArcadeDB has no in-memory mode, so each load creates an on-disk database in its fresh workdir

@@ -67,10 +67,13 @@ def test_arcadedb_info_and_env(tmp_path: Path) -> None:
     assert info.storage == "on-disk"
     assert info.threads_configurable
     assert "queryParallelismPoolThreads=1" in info.threads_note
+    assert "-XX:ParallelGCThreads=1, -XX:ConcGCThreads=1, -XX:CICompilerCount=2" in info.threads_note
     assert "not capped" in info.threads_note
     assert re.fullmatch(r"\d+(\.\d+)*", info.java or "")
     assert cls.process_env(None) == {}
-    args = cls.process_env(1)["ARCADEDB_JVM_ARGS"].split()
+    env = cls.process_env(1)
+    assert env["GRAPH_BENCH_JVM_THREADS"] == "1"
+    args = env["ARCADEDB_JVM_ARGS"].split()
     assert "-Darcadedb.queryParallelismPoolThreads=1" in args
     assert "-Darcadedb.queryParallelScan=false" in args
     assert "-Djava.util.concurrent.ForkJoinPool.common.parallelism=1" in args
@@ -102,6 +105,8 @@ def test_arcadedb_load_algorithms_and_jvm(push_data_dir: Path, tmp_path: Path) -
         assert jvm.owner() == "arcadedb"
         assert jvm.effective_heap_flag() == jvm.HEAP_FLAG
         assert jvm.system_property("arcadedb.queryParallelismPoolThreads") == "1"
+        assert jvm.thread_caps() == {"ParallelGCThreads": "1", "ConcGCThreads": "1", "CICompilerCount": "2"}
+        assert jvm._vm_option("TieredCompilation") == "true"  # tiered compilation stays on
         try:
             jvm.start_once("neo4j", lambda: None)
             raise AssertionError("a second JVM database started in the same process")
@@ -131,7 +136,10 @@ def test_arcadedb_load_algorithms_and_jvm(push_data_dir: Path, tmp_path: Path) -
 
 
 def test_arcadedb_load_refuses_a_jvm_without_thread_options(push_data_dir: Path, tmp_path: Path) -> None:
-    """threads=1 with a JVM started without the options of `process_env` fails the load instead of running wider."""
+    """threads=1 with a JVM started without the options of `process_env` fails the load instead of running wider.
+
+    Here neither the JVM thread caps (GRAPH_BENCH_JVM_THREADS) nor the engine options (ARCADEDB_JVM_ARGS) are set.
+    """
     script = """
         from pathlib import Path
         from graph_bench.databases import get_database
@@ -142,7 +150,7 @@ def test_arcadedb_load_refuses_a_jvm_without_thread_options(push_data_dir: Path,
         except RuntimeError as exc:
             print(exc)
     """
-    env = {"GRAPH_BENCH_DATA_DIR": str(push_data_dir), "ARCADEDB_JVM_ARGS": ""}
+    env = {"GRAPH_BENCH_DATA_DIR": str(push_data_dir), "ARCADEDB_JVM_ARGS": "", "GRAPH_BENCH_JVM_THREADS": ""}
     done = _run(script, tmp_path, env)
     assert done.returncode == 0, done.stderr[-3000:]
-    assert "lacks the single-thread options" in done.stdout
+    assert "the JVM's thread options are" in done.stdout

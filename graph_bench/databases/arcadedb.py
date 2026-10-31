@@ -116,8 +116,11 @@ def _start() -> None:
     atexit.register(_cleanup, logs)
     os.environ["ARCADEDB_JVM_ERROR_FILE"] = str(logs / "hs_err_pid%p.log")
     # jvm.md: "a heap_size other than "4g" replaces every -Xmx"; with "4g" itself an -Xmx in ARCADEDB_JVM_ARGS is
-    # kept, so `jvm.start_once` checks the effective cap after the start.
-    adb.jvm.start_jvm(heap_size=jvm.MAX_HEAP, jvm_args=[f"-Djava.util.logging.config.file={_log_config(logs)}"])
+    # kept, so `jvm.start_once` checks the effective cap after the start. `jvm.jvm_args()` adds the shared JVM
+    # thread caps (garbage collector, JIT compiler) in a single-threaded process; `jvm_args` are appended after
+    # ARCADEDB_JVM_ARGS, so they win over it (jvm.md).
+    options = [f"-Djava.util.logging.config.file={_log_config(logs)}", *jvm.jvm_args()]
+    adb.jvm.start_jvm(heap_size=jvm.MAX_HEAP, jvm_args=options)
 
 
 def _check_columns(rel_type: str, tables: list[EdgeTable]) -> tuple[Column, ...]:
@@ -147,8 +150,11 @@ class ArcadeDatabase(Database):
     @classmethod
     def process_env(cls, threads: int | None) -> dict[str, str]:
         if threads != 1:
-            return {}
-        return {JVM_ARGS_ENV: " ".join(f"-D{key}={value}" for key, value in SINGLE_THREAD.items())}
+            return jvm.process_env(threads)
+        return {
+            **jvm.process_env(threads),
+            JVM_ARGS_ENV: " ".join(f"-D{key}={value}" for key, value in SINGLE_THREAD.items()),
+        }
 
     @classmethod
     def prepare_environment(cls) -> None:
@@ -173,8 +179,11 @@ class ArcadeDatabase(Database):
             note = (
                 "configured to 1 thread: "
                 + ", ".join(f"{k}={v}" for k, v in SINGLE_THREAD.items())
-                + ", GraphBatch parallel_flush=False; "
-                "the JVM's garbage collector and JIT compiler threads are not capped"
+                + ", GraphBatch parallel_flush=False; JVM: "
+                + ", ".join(jvm.SINGLE_THREAD_ARGS)
+                + " (default collector and tiered compilation kept; 2 is HotSpot's minimum compiler count with tiered "
+                "compilation, one C1 and one C2 thread); not capped: the JVM's other service threads (signal "
+                "dispatcher, reference handler, finalizer) and ArcadeDB's housekeeping threads"
             )
         else:
             note = "ArcadeDB defaults: thread pools sized to the core count"
@@ -184,6 +193,7 @@ class ArcadeDatabase(Database):
 
     def _check_threads(self) -> None:
         """With threads=1, the JVM must carry the single-thread options (`process_env` sets them before the start)."""
+        jvm.check_threads(self.threads)
         if self.threads != 1:
             return
         wrong = {k: jvm.system_property(k) for k, v in SINGLE_THREAD.items() if jvm.system_property(k) != v}

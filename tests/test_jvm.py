@@ -28,6 +28,28 @@ def test_heap_cap_is_one_constant() -> None:
     assert jvm.heap_args() == ["-Xmx4g"] == [jvm.HEAP_FLAG]
 
 
+def test_jvm_args_cap_threads_only_when_single_threaded(monkeypatch: pytest.MonkeyPatch) -> None:
+    caps = ["-XX:ParallelGCThreads=1", "-XX:ConcGCThreads=1", "-XX:CICompilerCount=2"]
+    assert jvm.process_env(1) == {"GRAPH_BENCH_JVM_THREADS": "1"}
+    assert jvm.process_env(None) == {}
+    monkeypatch.delenv(jvm.THREADS_ENV, raising=False)
+    assert not jvm.single_threaded()
+    assert jvm.jvm_args() == ["-Xmx4g"]
+    monkeypatch.setenv(jvm.THREADS_ENV, "1")
+    assert jvm.single_threaded()
+    assert jvm.jvm_args() == ["-Xmx4g", *caps]
+
+
+def test_check_threads(monkeypatch: pytest.MonkeyPatch) -> None:
+    good = {"ParallelGCThreads": "1", "ConcGCThreads": "1", "CICompilerCount": "2"}
+    monkeypatch.setattr(jvm, "thread_caps", lambda: dict(good))
+    jvm.check_threads(1)
+    monkeypatch.setattr(jvm, "thread_caps", lambda: {**good, "ParallelGCThreads": "13"})
+    jvm.check_threads(None)  # all cores: nothing to check
+    with pytest.raises(RuntimeError, match="thread options are"):
+        jvm.check_threads(1)
+
+
 def test_start_once_starts_once_per_owner(fake_jvm: dict[str, object]) -> None:
     calls: list[str] = []
 
@@ -48,6 +70,16 @@ def test_start_once_refuses_a_foreign_jvm(fake_jvm: dict[str, object]) -> None:
     with pytest.raises(RuntimeError, match="already running"):
         jvm.start_once("arcadedb", lambda: None)
     assert jvm.owner() is None
+
+
+def test_start_once_checks_thread_caps_when_single_threaded(
+    fake_jvm: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checked: list[int | None] = []
+    monkeypatch.setattr(jvm, "check_threads", checked.append)
+    monkeypatch.setenv(jvm.THREADS_ENV, "1")
+    jvm.start_once("arcadedb", lambda: fake_jvm.update(started=True))
+    assert checked == [1]
 
 
 def test_start_once_checks_the_heap_cap(fake_jvm: dict[str, object]) -> None:
