@@ -50,10 +50,13 @@ def dataset_key(selection: str) -> str:
 
 
 def _write_references(selection: str, snb_ds: Dataset, ga_ds: Dataset) -> None:
-    """Write `references/<item_id>-<scale>.json` for every item of the selection into its dataset dir."""
+    """Write `references/<item_id>-<scale>.json` for every reference the selection's items use (`reference_items`).
+
+    An item that shares another item's references (`Query.same_as`) uses that item's file, written once.
+    """
     sel = catalog.selection(selection)
     graph = snb.SnbGraph.from_dataset(snb_ds)
-    for item in catalog.items(selection):
+    for item in catalog.reference_items(selection):
         if isinstance(item, catalog.Query):
             bindings = snb_suite.bindings(item.id, graph, sel.bindings)
             answers: list[Any] = [snb_suite.reference(item.id, graph, b) for b in bindings]

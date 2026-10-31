@@ -335,3 +335,12 @@ def test_cli_report_rejects_bad_usage(results: Results, tmp_path: Path) -> None:
     assert runner.invoke(app, ["report", "--format", "summary", "--in", str(tmp_path / "none.json")]).exit_code == 2
     missing = runner.invoke(app, ["report", "--format", "readme", "--in", str(path), *write])
     assert missing.exit_code == 2
+
+
+def test_load_rows_name_the_rdf_store_and_follow_the_graph_loads() -> None:
+    from graph_bench.report import ranking
+
+    assert ranking.title("load_snb") == "LDBC SNB"
+    assert ranking.title("load_snb_rdf") == "LDBC SNB (RDF)"
+    order = sorted(["load_snb_rdf", "load_graphalytics", "load_snb"], key=ranking._benchmark_key)
+    assert order == ["load_snb", "load_graphalytics", "load_snb_rdf"]

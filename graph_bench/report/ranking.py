@@ -12,16 +12,27 @@ from dataclasses import dataclass
 
 from graph_bench.databases import display_name
 from graph_bench.results import Entry, Results
-from graph_bench.suites.catalog import ITEMS
-from graph_bench.types import CATEGORY_ORDER, Category
+from graph_bench.suites.catalog import ITEMS, load_benchmark
+from graph_bench.types import CATEGORY_ORDER, MODEL_STORE, Category
 
 SCALE_ORDER: tuple[str, ...] = ("small", "medium", "large")
 
 DATASET_NAMES: dict[str, str] = {"snb": "LDBC SNB", "graphalytics": "Graphalytics"}
 
+# How a store other than the property graph is named after its dataset in the Load table.
+STORE_NAMES: dict[str, str] = {"rdf": "RDF"}
+
 _ITEM_ORDER = {item.id: i for i, item in enumerate(ITEMS)}
 _TITLES = {item.id: item.title for item in ITEMS}
-_DATASETS = list(dict.fromkeys(item.dataset for item in ITEMS))
+# Load benchmark -> (dataset, store), in catalog order: a dataset's graph load, then its RDF load after them all.
+_LOADS = {
+    load_benchmark(dataset, store): (dataset, store)
+    for dataset, store in sorted(
+        dict.fromkeys((item.dataset, MODEL_STORE[item.model]) for item in ITEMS),
+        key=lambda key: key[1] != "graph",
+    )
+}
+_LOAD_ORDER = list(_LOADS)
 
 LOAD_PREFIX = "load_"
 
@@ -75,7 +86,12 @@ def speed(entry: Entry, mode: str) -> float | None:
 
 
 def title(benchmark: str) -> str:
-    """The row label of a benchmark: the catalog title, the dataset name for a load, else the id."""
+    """The row label of a benchmark: the catalog title; for a load the dataset name, with the store if not the
+    property graph ("LDBC SNB (RDF)"); else the id."""
+    if benchmark in _LOADS:
+        dataset, store = _LOADS[benchmark]
+        name = DATASET_NAMES.get(dataset, dataset)
+        return name if store == "graph" else f"{name} ({STORE_NAMES.get(store, store)})"
     if benchmark.startswith(LOAD_PREFIX):
         dataset = benchmark.removeprefix(LOAD_PREFIX)
         return DATASET_NAMES.get(dataset, dataset)
@@ -92,8 +108,7 @@ def _category_key(category: str) -> int:
 
 def _benchmark_key(benchmark: str) -> tuple[int, str]:
     if benchmark.startswith(LOAD_PREFIX):
-        dataset = benchmark.removeprefix(LOAD_PREFIX)
-        return (_DATASETS.index(dataset) if dataset in _DATASETS else len(_DATASETS), benchmark)
+        return (_LOAD_ORDER.index(benchmark) if benchmark in _LOADS else len(_LOAD_ORDER), benchmark)
     return (_ITEM_ORDER.get(benchmark, len(_ITEM_ORDER)), benchmark)
 
 

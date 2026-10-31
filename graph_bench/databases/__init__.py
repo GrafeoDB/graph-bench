@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 KNOWN: tuple[str, ...] = ("grafeo", "ladybug", "neug", "falkordb", "turingdb")
 
 MODELS: dict[str, frozenset[Model]] = {
-    "grafeo": frozenset({"property_graph"}),
+    "grafeo": frozenset({"property_graph", "sql_pgq", "rdf"}),
     "ladybug": frozenset({"property_graph"}),
     "neug": frozenset({"property_graph"}),
     "falkordb": frozenset({"property_graph"}),

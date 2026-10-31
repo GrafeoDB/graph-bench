@@ -2,8 +2,9 @@
 
 `graph-bench codspeed` starts these processes with the environment each database needs (`process_env`) and
 reads the JSON lines they write to `--gb-out`. Test ids equal `graph-bench list` exactly:
-`benches/test_<category>.py::test_<item>[<db>-<scale>]` and `benches/test_load.py::test_load_<dataset>[...]`.
-Cases run grouped by dataset, the load test first, so each dataset is loaded once per session.
+`benches/test_<category>.py::test_<item>[<db>-<scale>]` and `benches/test_load.py::test_load_<dataset>[...]`
+(`test_load_<dataset>_rdf` for the RDF store). Cases run grouped by dataset and store, the load test first, so each
+(dataset, store) is loaded once per session.
 
 Running it by hand: pass `-o addopts=` (or `--no-cov`), as `graph-bench codspeed` does. Otherwise pyproject's
 test-suite addopts (`--cov ... --cov-fail-under=88`) apply, which fail the run and distort the timings. Also set
@@ -16,7 +17,7 @@ from typing import Any
 
 import pytest
 
-from benches._cases import Bench, LoadCase
+from benches._cases import Bench, LoadCase, case_key
 from graph_bench.runner.worker import DEFAULT_CASE_TIMEOUT_S, parse_budget
 from graph_bench.suites import catalog
 from graph_bench.suites.catalog import Case
@@ -85,12 +86,12 @@ def pytest_sessionstart(session: pytest.Session) -> None:
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     bench = metafunc.config.stash[_BENCH]
     item = getattr(metafunc.function, "gb_item", None)
-    dataset = getattr(metafunc.function, "gb_dataset", None)
+    load = getattr(metafunc.function, "gb_load", None)
     params: list[Case] | list[LoadCase]
     if item is not None:
         params = bench.cases(item)
-    elif dataset is not None:
-        params = bench.loads(dataset)
+    elif load is not None:
+        params = bench.loads(load)
     else:
         return
     ids = [catalog.param_id(p.db, p.scale, p.threads) for p in params]
@@ -98,11 +99,10 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
 
 
 def _order(item: pytest.Item) -> tuple[Any, ...]:
-    """Group by dataset, load first; keep pytest's order otherwise (the sort is stable)."""
+    """Group by dataset and store, load first; keep pytest's order otherwise (the sort is stable)."""
     case = item.callspec.params["gb_case"]  # type: ignore[attr-defined]
-    if isinstance(case, LoadCase):
-        return (case.dataset, case.scale, case.threads is None, 0)
-    return (case.item.dataset, case.scale, case.threads is None, 1)
+    dataset, store, scale, threads = case.key if isinstance(case, LoadCase) else case_key(case)
+    return (dataset, store, scale, threads is None, 0 if isinstance(case, LoadCase) else 1)
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:

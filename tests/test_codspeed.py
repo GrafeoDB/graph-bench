@@ -323,14 +323,14 @@ def test_codspeed_rerun_when_the_last_case_hangs(
     """The last case hangs, so nothing is left unrecorded; the passed cases still get a relaunch to be measured."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("GRAPH_BENCH_DATA_DIR", str(push_data_dir))
-    monkeypatch.setenv("GRAPH_BENCH_FAKE", "hang:snb_ic13")
+    monkeypatch.setenv("GRAPH_BENCH_FAKE", "hang:snb_rdf_is6")
     launches: list[tuple[list[str], dict[str, str]]] = []
     monkeypatch.setattr(supervisor, "_launch", _without_codspeed(launches))
     out = tmp_path / "out"
     results = supervisor.run_codspeed("push", ["fake"], out, workdir=tmp_path / "work", case_timeout_s=3)
 
     lines = [json.loads(line) for line in (out / "raw" / "fake-1" / "pytest.jsonl").read_text("utf-8").splitlines()]
-    hung = _id("snb_ic13")
+    hung = _id("snb_rdf_is6")  # the last case: the RDF store is loaded and run last
     second = next(i for i, line in enumerate(lines) if i > 0 and line["kind"] == "database")
     first_starts = [line["id"] for line in lines[:second] if line["kind"] == "start"]
     assert first_starts[-1] == hung  # the last case of the first process

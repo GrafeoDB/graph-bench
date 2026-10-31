@@ -34,11 +34,13 @@ embedded wheel is unusable on the benchmark platforms, as server-only databases 
 The results are a capability matrix covering everything Grafeo does: one column per database, an overview with
 one row per category, and one detail table per category with one row per benchmark. There is never one combined
 score across categories. Each benchmark belongs to one data model (property graph, SQL/PGQ or RDF), which
-decides the databases that take part; the others get ⊘.
+decides the databases that take part; the others get ⊘. Property graph and SQL/PGQ queries read the same loaded
+property graph; RDF queries read the dataset's RDF triples (`graph_bench/datasets/rdf.py`), a load of its own, so
+the Load table has a separate row for it.
 
 | Category | Benchmarks | Databases | Status |
 | --- | --- | --- | --- |
-| Load | bulk load per dataset (SNB, Graphalytics), each database's fastest documented bulk path | all | implemented |
+| Load | bulk load per dataset (SNB, Graphalytics, SNB as RDF triples), each database's fastest documented bulk path | all | implemented |
 | Load (query language) | bulk load through the query language (`LOAD CSV`, `COPY` from a query) | databases with a query-language loader | planned |
 | Batch writes | batch insert, update, delete, upsert | property graph | planned |
 | Scans | label scan, property filter, aggregation, order and limit | property graph | planned |
@@ -48,8 +50,8 @@ decides the databases that take part; the others get ⊘.
 | Algorithms | Graphalytics BFS, WCC, PageRank, then CDLP, LCC, SSSP, Louvain, betweenness | databases with native algorithms | BFS, WCC, PR implemented |
 | Vector search | kNN, batch kNN, recall@k, filtered kNN | databases with vector indexes | planned |
 | Hybrid | graph then vector, vector then graph | databases with both | planned |
-| RDF/SPARQL | Berlin SPARQL Benchmark (BSBM) | Grafeo, Oxigraph | planned |
-| SQL/PGQ | SNB queries in SQL/PGQ, DuckPGQ's published queries | Grafeo, DuckDB + DuckPGQ | planned |
+| RDF/SPARQL | SNB IS1, IS4, IS6 in SPARQL, then the Berlin SPARQL Benchmark (BSBM) | Grafeo, Oxigraph | SNB implemented, BSBM planned |
+| SQL/PGQ | SNB queries in SQL/PGQ, DuckPGQ's published queries | Grafeo, DuckDB + DuckPGQ | SNB IS1, IS4, IS6, IC13 implemented |
 | Crash and restore | on disk: reopen, crash mid-transaction, rollback, snapshot isolation, torn WAL tail, backup and restore | all | planned |
 | Deriva workload | a simulated multi-repo roundtrip using deriva's pipeline patterns | property graph | planned |
 | Project suites | each project's own published queries, as written | the owning database and any that can run them | planned |

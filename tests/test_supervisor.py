@@ -349,10 +349,12 @@ def test_supervisor_load_crash_is_not_retried(bench_env: pytest.MonkeyPatch, tmp
     load_id = catalog.load_id("snb", "fake", "small", 1)
     assert entries[load_id].status == "failed"
     assert "exited with code 3" in (entries[load_id].error or "")
+    # The RDF store is a load of its own: the graph load's crash leaves it and its cases alone.
+    assert entries[catalog.load_id("snb", "fake", "small", 1, "rdf")].status == "ok"
     for entry in entries.values():
         if entry.id == load_id:
             continue
-        if entry.benchmark.startswith("snb_"):
+        if entry.benchmark.startswith("snb_") and entry.model != "rdf":
             assert entry.status == "failed", entry
             assert entry.error == f"load failed: {load_id}"
         else:
@@ -411,12 +413,15 @@ def test_missing_driver_marks_failed(bench_env: pytest.MonkeyPatch, tmp_path: Pa
     entries = _by_id(results)
     assert set(entries) == _expected_ids("ghost") | _expected_ids("ghost_rdf")
     for entry in entries.values():
-        if entry.database == "ghost":
+        if entry.database == "ghost" and entry.model != "property_graph":
+            assert (entry.status, entry.error) == ("not_supported", f"model {entry.model} not supported"), entry
+        elif entry.database == "ghost" or entry.model == "rdf":
             assert entry.status == "failed", entry
             assert entry.error is not None and entry.error.startswith("not installed: ")
             assert "no_such_module" in entry.error
         else:
             assert entry.status == "not_supported", entry
+    assert entries[catalog.load_id("snb", "ghost_rdf", "small", 1, "rdf")].status == "failed"
     assert results.databases == {}
 
 

@@ -11,6 +11,11 @@ benchmark moves to `legacy/` untouched and is deleted once the new comparison re
   falkordblite, NeuG, ArcadeDB, Neo4j Community, DuckDB + DuckPGQ, Oxigraph, HelixDB). Grafeo, LadybugDB, NeuG and
   FalkorDB are implemented, on Load (SNB, Graphalytics), Complex queries (SNB IS1 to IS7, IC2, IC6), Hops (IC13) and
   Algorithms (Graphalytics BFS, WCC, PageRank). See the README for the categories and their status.
+- **Data models**: a database declares one dialect per model it serves, and the harness routes each query by
+  its model (`Database.dialects`, `query_model`). SQL/PGQ (SNB IS1, IS4, IS6, IC13 in standard SQL/PGQ) and
+  RDF/SPARQL (SNB IS1, IS4, IS6 in SPARQL over a shared RDF mapping of the CSVs) reuse the SNB references.
+  Property graph and SQL/PGQ read one loaded graph; RDF has its own load and Load row (`load_snb_rdf`). Grafeo
+  runs all three models.
 - **One process per database**: `graph-bench bench` runs one worker process per database, one after another, and
   writes `results.json` (schema in the design spec) with the machine, the Grafeo build and each database's
   version, process kind, storage and thread setting.

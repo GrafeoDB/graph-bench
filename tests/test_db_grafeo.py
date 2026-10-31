@@ -10,6 +10,7 @@ import pytest
 pytest.importorskip("grafeo")
 
 from graph_bench.databases import get_database
+from graph_bench.datasets import cache, rdf
 from graph_bench.runner.supervisor import run_bench
 from graph_bench.types import Model
 
@@ -51,3 +52,40 @@ def test_grafeo_single_thread_env() -> None:
     cls = get_database("grafeo")
     assert cls.process_env(1) == {"RAYON_NUM_THREADS": "1"}
     assert cls.process_env(None) == {}
+
+
+def test_grafeo_graph_store_is_the_named_graph_sql_pgq_reads(
+    push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The graph load names its graph after the dataset, so `GRAPH_TABLE (snb ...)` reads the loaded data.
+
+    The query uses a graph pattern WHERE, a form Grafeo's SQL/PGQ parser accepts today, only to check the routing;
+    the benchmark texts use the element pattern WHERE (see docs/known-disagreements.md).
+    """
+    monkeypatch.setenv("GRAPH_BENCH_DATA_DIR", str(push_data_dir))
+    db = get_database("grafeo")(tmp_path, 1)
+    try:
+        db.load_store("graph", cache.prepare("push")[("snb", "small")])
+        text = "SELECT * FROM GRAPH_TABLE (snb MATCH (n:Person) WHERE n.id = $id COLUMNS (n.firstName AS f))"
+        assert db.query_model("sql_pgq", text, {"id": "person_0"}) == [("Emily",)]
+        assert db.query_model(
+            "property_graph", "MATCH (n:Person {id: $id}) RETURN n.firstName", {"id": "person_0"}
+        ) == [("Emily",)]
+    finally:
+        db.close()
+
+
+def test_grafeo_rdf_store_is_separate(push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The RDF load fills the RDF store of a fresh instance; SPARQL reads it, typed by the mapping."""
+    monkeypatch.setenv("GRAPH_BENCH_DATA_DIR", str(push_data_dir))
+    ds = cache.prepare("push")[("snb", "small")]
+    db = get_database("grafeo")(tmp_path, 1)
+    try:
+        db.load_store("rdf", ds)
+        assert db.counts() == (ds.node_count, ds.edge_count)
+        text = rdf.PREFIXES + "SELECT ?b WHERE { VALUES ?id { $id } ?n v:id ?id ; v:birthday ?b }"
+        [(birthday,)] = db.query_model("rdf", text, {"id": "person_0"})
+        assert isinstance(birthday, int)
+        assert db.query("MATCH (n) RETURN count(n)", {}) == [(0,)]  # the property graph stays empty
+    finally:
+        db.close()

@@ -58,7 +58,7 @@ from graph_bench.results import Entry, GrafeoSource, Machine, Reference, Results
 from graph_bench.runner.worker import DEFAULT_CASE_TIMEOUT_S, reference_kind
 from graph_bench.suites import catalog
 from graph_bench.suites.catalog import Selection
-from graph_bench.types import Category, Model, Timing
+from graph_bench.types import MODEL_STORE, Category, Model, Store, Timing
 
 RESULTS_FILE = "results.json"
 GRAFEO_FILE = Path(".graph-bench") / "grafeo.json"
@@ -101,6 +101,7 @@ class _Meta:
     supported: bool
     reference: Reference | None
     load: bool = False
+    store: Store = "graph"
 
     def entry(self, bench_id: str, **fields: Any) -> Entry:
         reference = fields.pop("reference", None) or self.reference
@@ -134,16 +135,18 @@ def _expected(sel: Selection, db: str, threads: int | None) -> dict[str, _Meta]:
                 item.dataset,
                 supported=item.model in models,
                 reference=reference_kind(item),
+                store=MODEL_STORE[item.model],
             )
     if "load" in sel.categories:
         for item in catalog.items(sel.name):
             if item.model in models:
+                store = MODEL_STORE[item.model]
                 for scale in sel.scales:
-                    load_id = catalog.load_id(item.dataset, db, scale, threads)
+                    load_id = catalog.load_id(item.dataset, db, scale, threads, store)
                     load = _Meta(
                         "load",
                         item.model,
-                        f"load_{item.dataset}",
+                        catalog.load_benchmark(item.dataset, store),
                         db,
                         scale,
                         threads,
@@ -151,6 +154,7 @@ def _expected(sel: Selection, db: str, threads: int | None) -> dict[str, _Meta]:
                         supported=True,
                         reference=None,
                         load=True,
+                        store=store,
                     )
                     meta.setdefault(load_id, load)
     return meta
@@ -521,7 +525,7 @@ class _Run:
         self.record(failed.entry(pending, status=status, error=error))
         if failed.load:
             for bench_id, m in meta.items():
-                same_data = (m.dataset, m.scale) == (failed.dataset, failed.scale)
+                same_data = (m.dataset, m.store, m.scale) == (failed.dataset, failed.store, failed.scale)
                 if not m.load and same_data and bench_id not in self.recorded:
                     self.record(m.entry(bench_id, status="failed", error=f"load failed: {pending}"))
         return True

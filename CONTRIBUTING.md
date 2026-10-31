@@ -100,9 +100,19 @@ class MyDatabase(Database):
 - Load with the database's fastest documented bulk path, CSV parsing included.
 - `query()` returns the rows as Python tuples of scalars. Materializing them is part of the timed region;
   canonicalizing them is not.
-- Queries use the shared openCypher text (`dialect = "cypher"`). Where the database needs another text, give it
-  its own `dialect` and add that key to the query's `text` mapping in `graph_bench/suites/snb.py`, with the
-  same meaning and the same answer.
+- Queries use their model's shared standard text: openCypher for the property graph (`graph_bench/suites/snb.py`),
+  SQL/PGQ (`snb_sql.py`) and SPARQL (`snb_rdf.py`). Where the database needs another text, give it its own
+  `dialect` and add that key to the query's `text` mapping, with the same meaning and the same answer, and the
+  reason in a comment; a query without that key falls back to its model's standard text.
+- A database with more than one model sets `dialects` (model to dialect, e.g. Grafeo's
+  `{"property_graph": "cypher", "sql_pgq": "sql_pgq", "rdf": "sparql"}`) and overrides `query_model(model, text,
+  params)` to send each model to its query interface. Property graph and SQL/PGQ queries read the graph store, RDF
+  queries the RDF store (`types.MODEL_STORE`); the worker loads each store into its own instance with
+  `load_store(store, dataset)`, which a database with an RDF store besides its graph overrides. A single-model
+  database implements only `load` and `query`.
+- An RDF database loads the triples of `graph_bench.datasets.rdf.triples(dataset)` (the shared mapping), binds
+  query parameters with `rdf.bind`, converts result literals with `rdf.python_value` and counts with
+  `rdf.COUNT_NODES` and `rdf.COUNT_EDGES`.
 - `counts()` checks the load: the worker calls it right after each timed load, outside the clock, and a
   mismatch with the dataset's node and edge counts makes the load ≠. Count with a documented query (e.g. Cypher
   `MATCH (n) RETURN count(n)` and `MATCH ()-[r]->() RETURN count(r)`). Without it (the default raises

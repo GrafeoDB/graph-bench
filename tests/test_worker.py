@@ -26,7 +26,12 @@ def _id(item_id: str, db: str = "fake") -> str:
 
 
 def run_worker(
-    out: Path, data_dir: Path, *args: str, db: str = "fake", fake: str = ""
+    out: Path,
+    data_dir: Path,
+    *args: str,
+    db: str = "fake",
+    fake: str = "",
+    env: Mapping[str, str] | None = None,
 ) -> tuple[Lines, subprocess.CompletedProcess[str]]:
     """Run the worker on the push selection; return its JSON lines and the finished process."""
     env = {
@@ -34,6 +39,7 @@ def run_worker(
         "GRAPH_BENCH_EXTRA_DATABASES": EXTRA,
         "GRAPH_BENCH_DATA_DIR": str(data_dir),
         "GRAPH_BENCH_FAKE": fake,
+        **(env or {}),
     }
     argv = [sys.executable, "-m", "graph_bench.runner.worker", "--db", db, "--selection", "push"]
     argv += ["--threads", "1", "--workdir", str(out.parent / "work"), "--out", str(out), *args]
@@ -118,13 +124,40 @@ def test_worker_marks_not_supported(standard: tuple[Lines, Path]) -> None:
 
 
 def test_worker_marks_unsupported_model(push_data_dir: Path, tmp_path: Path) -> None:
+    """An RDF-only database: its RDF cases run on its own RDF load, every other case is ⊘ without a start line."""
     lines, proc = run_worker(tmp_path / "rdf.jsonl", push_data_dir, db="fake_rdf")
     assert proc.returncode == 0, proc.stderr
     assert lines[0]["kind"] == "database"
     entries = _entries(lines)
-    assert set(entries) == {c.bench_id for c in catalog.cases("push", ["fake_rdf"])}
-    assert all(e["status"] == "not_supported" for e in entries.values())
-    assert not [line for line in lines if line["kind"] == "start"]
+    rdf_load = catalog.load_id("snb", "fake_rdf", "small", 1, "rdf")
+    assert catalog.load_ids("push", ["fake_rdf"]) == [rdf_load]
+    assert set(entries) == {c.bench_id for c in catalog.cases("push", ["fake_rdf"])} | {rdf_load}
+    models = {c.bench_id: c.item.model for c in catalog.cases("push", ["fake_rdf"])}
+    started = {line["id"] for line in lines if line["kind"] == "start"}
+    assert started == {i for i, model in models.items() if model == "rdf"} | {rdf_load}
+    for bench_id, entry in entries.items():
+        if bench_id in started:
+            assert (entry["status"], entry["answer"]) == ("ok", "agree"), entry
+        else:
+            assert (entry["status"], entry["error"]) == ("not_supported", f"model {models[bench_id]} not supported")
+
+
+def test_worker_routes_each_model_to_its_store(push_data_dir: Path, tmp_path: Path) -> None:
+    """The multi-model fake answers only when a case runs in its model's dialect on the store its model reads;
+    each (dataset, store) is loaded once, the RDF store separately."""
+    trace = tmp_path / "trace.txt"
+    env_trace = {"GRAPH_BENCH_FAKE_TRACE": str(trace)}
+    lines, proc = run_worker(tmp_path / "multi.jsonl", push_data_dir, env=env_trace)
+    assert proc.returncode == 0, proc.stderr
+    entries = _entries(lines)
+    by_model = {c.item.model for c in catalog.cases("push", ["fake"])}
+    assert by_model == {"property_graph", "sql_pgq", "rdf"}
+    for case in catalog.cases("push", ["fake"]):
+        assert (entries[case.bench_id]["status"], entries[case.bench_id]["answer"]) == ("ok", "agree"), case.bench_id
+    rdf_load = entries[catalog.load_id("snb", "fake", "small", 1, "rdf")]
+    assert (rdf_load["status"], rdf_load["answer"]) == ("ok", "agree")
+    loads = trace.read_text(encoding="utf-8").splitlines().count("load")
+    assert loads == catalog.selection("push").load_iterations * 3  # snb graph, snb RDF, graphalytics graph
 
 
 def test_worker_skips_ids(standard: tuple[Lines, Path]) -> None:

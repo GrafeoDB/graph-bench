@@ -42,7 +42,7 @@ from graph_bench.runner.timing import measure
 from graph_bench.suites import Algorithm, Query, catalog
 from graph_bench.suites.catalog import Case, Selection
 from graph_bench.suites.graphalytics import min_member
-from graph_bench.types import AnswerVerdict, Status
+from graph_bench.types import MODEL_STORE, AnswerVerdict, Status, Store
 
 DEFAULT_CASE_TIMEOUT_S = 600.0
 
@@ -55,12 +55,16 @@ def reference_kind(item: Query | Algorithm) -> Reference:
 
 
 def make_run(db: Database, item: Query | Algorithm, bindings: list[dict[str, Any]]) -> Callable[[], list[Any]]:
-    """The timed function: run the item once per binding and return the raw per-binding results."""
+    """The timed function: run the item once per binding and return the raw per-binding results.
+
+    A query runs in its model's dialect (`Database.dialect_for`) through `Database.query_model`.
+    """
     if isinstance(item, Algorithm):
         name = item.name
         return lambda: [db.algorithm(name, binding) for binding in bindings]
-    text = item.text_for(db.dialect)
-    return lambda: [db.query(text, binding) for binding in bindings]
+    model = item.model
+    text = item.text_for(db.dialect_for(model))
+    return lambda: [db.query_model(model, text, binding) for binding in bindings]
 
 
 def canonical_answers(item: Query | Algorithm, raw: list[Any]) -> list[Any]:
@@ -157,10 +161,15 @@ def remove(path: Path | None) -> None:
 
 
 def fresh_instance(
-    db_cls: type[Database], dataset: Dataset, workdir: Path, threads: int | None, i: int
+    db_cls: type[Database], dataset: Dataset, workdir: Path, threads: int | None, i: int, store: Store = "graph"
 ) -> tuple[Database, Path]:
-    """A new instance in an empty directory `workdir/<dataset>-<scale>-<i>`, for the i-th load of a dataset."""
-    db_dir = workdir / f"{dataset.name}-{dataset.scale}-{i}"
+    """A new instance in an empty directory, for the i-th load of a dataset into `store`.
+
+    The directory is `workdir/<dataset>-<scale>-<i>` for the graph store, `workdir/<dataset>-rdf-<scale>-<i>` for
+    the RDF store.
+    """
+    name = dataset.name if store == "graph" else f"{dataset.name}-{store}"
+    db_dir = workdir / f"{name}-{dataset.scale}-{i}"
     remove(db_dir)
     db_dir.mkdir(parents=True)
     return db_cls(db_dir, threads), db_dir
@@ -245,11 +254,13 @@ def load(
     progress: Callable[[], None] = lambda: None,
     *,
     check: bool = False,
+    store: Store = "graph",
 ) -> Loaded:
-    """Load `iterations` times, each into a fresh instance in a fresh directory; keep the last one.
+    """Load `dataset` into `store` `iterations` times, each into a fresh instance in a fresh directory; keep the last.
 
-    `progress` is called after each load, outside its clock. With `check`, each loaded instance's node and edge
-    counts are checked right after its load, outside the clock too (`LoadCheck`).
+    The clock covers `Database.load_store` alone. `progress` is called after each load, outside its clock. With
+    `check`, each loaded instance's node and edge counts are checked right after its load, outside the clock too
+    (`LoadCheck`).
     """
     times: list[int] = []
     counted = LoadCheck()
@@ -258,11 +269,11 @@ def load(
         if previous is not None:
             previous[0].close()
             remove(previous[1])
-        db, db_dir = fresh_instance(db_cls, dataset, workdir, threads, i)
+        db, db_dir = fresh_instance(db_cls, dataset, workdir, threads, i, store)
         previous = (db, db_dir)
         start = time.perf_counter_ns()
         try:
-            db.load(dataset)
+            db.load_store(store, dataset)
         except BaseException:
             db.close()
             remove(db_dir)
@@ -379,24 +390,24 @@ def run(
         emit = emitter(fh)
         emit(database_line(db_cls, workdir, threads))
 
-        # Every (dataset, scale) with a supported item gets a load, as in `catalog.load_ids`.
-        groups: dict[tuple[str, str], list[Case]] = {}
+        # Every (dataset, store, scale) with a supported item gets a load, as in `catalog.load_ids`.
+        groups: dict[tuple[str, Store, str], list[Case]] = {}
         if threads in sel.threads:
-            for item in catalog.items(sel.name):
-                if item.model in db_cls.models:
-                    for scale in sel.scales:
-                        groups.setdefault((item.dataset, scale), [])
+            for dataset, store in catalog.load_keys(sel.name, db_cls.models):
+                for scale in sel.scales:
+                    groups[(dataset, store, scale)] = []
         for case in catalog.cases(sel.name, [db_name]):
             if case.threads != threads or case.bench_id in skip:
                 continue
-            if case.item.model in db_cls.models:
-                groups[(case.item.dataset, case.scale)].append(case)
+            model = case.item.model
+            if model in db_cls.models:
+                groups[(case.item.dataset, MODEL_STORE[model], case.scale)].append(case)
             else:
-                emit(case_entry(case, status="not_supported", error=f"model {case.item.model} not supported"))
+                emit(case_entry(case, status="not_supported", error=f"model {model} not supported"))
 
-        load_ids: dict[tuple[str, str], str] = {}
+        load_ids: dict[tuple[str, Store, str], str] = {}
         if "load" in sel.categories:
-            load_ids = {key: catalog.load_id(key[0], db_name, key[1], threads) for key in groups}
+            load_ids = {key: catalog.load_id(key[0], db_name, key[2], threads, key[1]) for key in groups}
         reported = {key: load_id for key, load_id in load_ids.items() if load_id not in skip}
         needed = [key for key in sorted(groups) if groups[key] or key in reported]
         if not needed:
@@ -405,15 +416,17 @@ def run(
         base = cache.data_dir() / cache.dataset_key(sel.name)
         setup_error = prepare_environment(db_cls)
         for key in needed:
-            data = datasets[key]
+            dataset, store, scale = key
+            data = datasets[(dataset, scale)]
             _run_dataset(
-                db_cls, data, groups[key], reported.get(key), threads, workdir, base, settings, emit, setup_error
+                db_cls, data, store, groups[key], reported.get(key), threads, workdir, base, settings, emit, setup_error
             )
 
 
 def _run_dataset(
     db_cls: type[Database],
     dataset: Dataset,
+    store: Store,
     cases: list[Case],
     load_id: str | None,
     threads: int | None,
@@ -423,7 +436,10 @@ def _run_dataset(
     emit: Emit,
     setup_error: str | None = None,
 ) -> None:
-    """Load the dataset and run its cases; with `setup_error` (from `prepare_environment`) the load fails with it."""
+    """Load the dataset into `store` and run the cases that read it.
+
+    With `setup_error` (from `prepare_environment`) the load fails with it.
+    """
     if load_id is not None:
         emit({"kind": "start", "id": load_id})
     loaded: Loaded | None = None
@@ -433,7 +449,9 @@ def _run_dataset(
             progress = {"kind": "progress", "id": load_id}
             iterations = settings.selection.load_iterations
             check = load_id is not None
-            loaded = load(db_cls, dataset, workdir, threads, iterations, lambda: emit(progress), check=check)
+            loaded = load(
+                db_cls, dataset, workdir, threads, iterations, lambda: emit(progress), check=check, store=store
+            )
         except Exception as exc:
             text = message(exc)
     if loaded is None:  # `text` holds the setup or load error
