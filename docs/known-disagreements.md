@@ -205,3 +205,55 @@ load entry has no answer, so there is no `- id:` line.
   with a checkpoint (visible in the engine log), and each in-memory database also keeps a temp directory.
   Wrapping the COPY statements in one transaction did not make the load measurably faster.
 - Cause: NeuG engine (checkpoint per statement), not measured further.
+
+## FalkorDB: IC13 does not run (shortestPath is limited to WITH or RETURN, and to directed)
+
+- id: falkordb/snb_ic13
+- Query: `snb_ic13` (IC13 shortest path), the shared openCypher text, no FalkorDB override.
+- Dataset: `snb-small`.
+- FalkorDB 4.22.1 (falkordblite 0.11.0) answer: none. Every binding fails with `ResponseError: FalkorDB currently
+  only supports shortestPaths in WITH or RETURN clauses`, so the entry is `failed` (✗). The query is
+  `OPTIONAL MATCH path = shortestPath((p1)-[:KNOWS*]-(p2))`, undirected, as the standard text needs: moving the
+  call into `WITH` instead fails with "FalkorDB does not currently support undirected shortestPath traversals".
+- Reference answer: `[[1]]` for the first binding; -1 for an unreachable pair and 0 for the same person.
+- Cause: FalkorDB engine (openCypher coverage). KNOWS is stored once per pair, so a directed form is not the same
+  question. No rewrite is used: a database that cannot run the standard text gets the marker (FAIRNESS.md).
+
+## FalkorDB: no BFS with levels (not available)
+
+- id: falkordb/graphalytics_bfs
+- Query: `graphalytics_bfs` (vertex depths from a source).
+- Dataset: `graphalytics-small`.
+- FalkorDB answer: none, the entry is `not_supported` (⊘). The documented procedure `algo.BFS(start, max_depth,
+  relationship)` yields only `nodes` and `edges` in breadth-first order and no depth per node
+  (https://docs.falkordb.com/algorithms/bfs.html). No other documented procedure gives levels from a source; a
+  `shortestPath` per target vertex would be a different, much slower computation and is not used.
+- Cause: FalkorDB feature gap.
+
+## FalkorDB: PageRank parameters are fixed (answer agrees)
+
+`algo.pageRank(label, relationship)` takes no damping, iteration or tolerance argument and its docs list none
+(https://docs.falkordb.com/algorithms/pagerank.html), so the adapter passes only `'V'` and `'E'`. The answer is
+within `LDBC_EPS` (1e-4) of the reference on `graphalytics-small`; if a larger graph leaves the epsilon the entry
+becomes ≠ and belongs here. No `- id:` line: it agrees today.
+
+## FalkorDB: threads are not configurable (note)
+
+`THREAD_COUNT` and `OMP_THREAD_COUNT` are module load arguments only (https://docs.falkordb.com/configuration.html)
+and falkordblite starts the module with none, so the server uses the core count, while every other database runs
+single-threaded where it can. The results record `threads_configurable=False`. The server is also a separate
+process (`local process`), so its memory is not under the harness's per-process caps.
+
+## FalkorDB: slow point lookups and IC6 under the 10x budget rule (not allowlisted)
+
+The answers agree with the references. In a `bench --selection push --db grafeo,falkordb` run on Linux (Docker,
+ubuntu:24.04) these are marked `timeout` (⏱) by the budget rule (slower than 10x the mean of the 3 fastest other
+databases), not by a hang. They carry no `- id:` line because the adapter test runs FalkorDB alone, where no
+budget applies and they must agree.
+
+- Queries and medians (10 bindings): `snb_is1` 4.4 ms (Grafeo 0.20 ms), `snb_is2` 5.7 ms (0.47 ms), `snb_is5`
+  7.2 ms (0.16 ms), `snb_is6` 56 ms (0.24 ms), `snb_ic6` 290 ms (25 ms). Every FalkorDB call is a Redis
+  round trip over a unix socket with the query parsed and planned by the module, which sets a floor of a few
+  milliseconds per call.
+- Cause: FalkorDB engine and the out-of-process server (per-call overhead); `snb_is6` and `snb_ic6` also include
+  variable-length traversals. The adapter uses the `id` indexes it creates in the load and no query cache.

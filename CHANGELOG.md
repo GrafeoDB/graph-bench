@@ -8,8 +8,8 @@ benchmark moves to `legacy/` untouched and is deleted once the new comparison re
 ### Added
 
 - **Embedded comparison**: ten embedded databases are planned (Grafeo, LadybugDB, TuringDB, FalkorDB through
-  falkordblite, NeuG, ArcadeDB, Neo4j Community, DuckDB + DuckPGQ, Oxigraph, HelixDB). Grafeo, LadybugDB and NeuG are
-  implemented, on Load (SNB, Graphalytics), Complex queries (SNB IS1 to IS7, IC2, IC6), Hops (IC13) and
+  falkordblite, NeuG, ArcadeDB, Neo4j Community, DuckDB + DuckPGQ, Oxigraph, HelixDB). Grafeo, LadybugDB, NeuG and
+  FalkorDB are implemented, on Load (SNB, Graphalytics), Complex queries (SNB IS1 to IS7, IC2, IC6), Hops (IC13) and
   Algorithms (Graphalytics BFS, WCC, PageRank). See the README for the categories and their status.
 - **One process per database**: `graph-bench bench` runs one worker process per database, one after another, and
   writes `results.json` (schema in the design spec) with the machine, the Grafeo build and each database's

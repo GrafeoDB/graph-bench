@@ -34,7 +34,9 @@ Repository = "https://github.com/GrafeoDB/graph-bench"
 grafeo = ["grafeo>=0.6.0,<0.7"]
 ladybug = ["ladybug>=0.22.1"]
 neug = ["neug>=0.3.0"]
-embedded = ["graph-bench[grafeo,ladybug,neug]"]
+# The wheel is manylinux_2_38 only (glibc 2.38 or newer), so the extra is empty elsewhere.
+falkordb = ["falkordblite>=0.11.0; sys_platform == 'linux'"]
+embedded = ["graph-bench[grafeo,ladybug,neug,falkordb]"]
 bench = ["pytest>=9.0.2", "pytest-codspeed>=5.0.3"]
 dev = [
     "pytest>=9.0.2",
@@ -71,6 +73,7 @@ markers = [
     "grafeo: requires Grafeo",
     "ladybug: requires LadybugDB",
     "neug: requires NeuG",
+    "falkordb: requires FalkorDB (falkordblite, Linux only)",
     "slow: slow tests",
 ]
 
@@ -83,6 +86,7 @@ omit = [
     "graph_bench/databases/grafeo.py",
     "graph_bench/databases/ladybug.py",
     "graph_bench/databases/neug.py",
+    "graph_bench/databases/falkordb.py",
 ]
 
 [tool.coverage.report]
