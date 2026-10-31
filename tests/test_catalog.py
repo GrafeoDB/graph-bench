@@ -63,7 +63,10 @@ def test_limited_queries_have_total_order() -> None:
     limited = [q for q in QUERIES if "LIMIT" in q.text["cypher"]]
     assert limited
     for q in limited:
-        for text in q.text.values():
+        for dialect, text in q.text.items():
+            if dialect == "helix":  # the name of a DSL builder, not query text
+                assert text == q.id
+                continue
             assert "ORDER BY" in text, q.id
             assert pattern.search(text), q.id
 

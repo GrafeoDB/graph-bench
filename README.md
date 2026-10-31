@@ -23,11 +23,12 @@ README at each Grafeo release. The rules every database is measured under are in
 | Neo4j Community | Maven jars through JPype | in-process (JVM) | planned |
 | DuckDB + DuckPGQ | `duckdb` | in-process | planned |
 | Oxigraph | `pyoxigraph` | in-process | planned |
-| HelixDB | `helix-db` + `helix-db-embedded` | in-process (embedded mode) | planned |
+| HelixDB | `helix-db` + `helix-db-embedded` | in-process (embedded mode) | implemented |
 
 Neo4j is measured as Community only: the Enterprise terms restrict publishing benchmarks. The JVM databases
-fetch their jars and a Temurin 21 JRE into the data cache; nothing is committed. HelixDB is deferred if its
-embedded wheel is unusable on the benchmark platforms, as server-only databases are not part of the run.
+fetch their jars and a Temurin 21 JRE into the data cache; nothing is committed. HelixDB has no query text in
+its Python SDK, so its queries are builders written with its Python DSL; the ones the DSL cannot express are
+marked not available (see `docs/known-disagreements.md`).
 
 ## The matrix
 

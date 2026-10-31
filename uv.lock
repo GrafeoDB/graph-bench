@@ -500,6 +500,8 @@ dev = [
 embedded = [
     { name = "falkordblite", marker = "sys_platform == 'linux'" },
     { name = "grafeo" },
+    { name = "helix-db" },
+    { name = "helix-db-embedded" },
     { name = "ladybug" },
     { name = "neug" },
     { name = "pyarrow", marker = "sys_platform == 'linux'" },
@@ -510,6 +512,10 @@ falkordb = [
 ]
 grafeo = [
     { name = "grafeo" },
+]
+helixdb = [
+    { name = "helix-db" },
+    { name = "helix-db-embedded" },
 ]
 ladybug = [
     { name = "ladybug" },
@@ -526,7 +532,9 @@ turingdb = [
 requires-dist = [
     { name = "falkordblite", marker = "sys_platform == 'linux' and extra == 'falkordb'", specifier = ">=0.11.0" },
     { name = "grafeo", marker = "extra == 'grafeo'", specifier = ">=0.6.0,<0.7" },
-    { name = "graph-bench", extras = ["grafeo", "ladybug", "neug", "falkordb", "turingdb"], marker = "extra == 'embedded'" },
+    { name = "graph-bench", extras = ["grafeo", "ladybug", "neug", "falkordb", "turingdb", "helixdb"], marker = "extra == 'embedded'" },
+    { name = "helix-db", marker = "extra == 'helixdb'", specifier = ">=0.3.4" },
+    { name = "helix-db-embedded", marker = "extra == 'helixdb'", specifier = ">=0.3.3" },
     { name = "ladybug", marker = "extra == 'ladybug'", specifier = ">=0.22.1" },
     { name = "networkx", specifier = ">=3.0" },
     { name = "neug", marker = "extra == 'neug'", specifier = ">=0.3.0" },
@@ -546,7 +554,7 @@ requires-dist = [
     { name = "ty", marker = "extra == 'dev'", specifier = ">=0.0.15" },
     { name = "typer", specifier = ">=0.15.0" },
 ]
-provides-extras = ["grafeo", "ladybug", "neug", "falkordb", "turingdb", "embedded", "bench", "dev"]
+provides-extras = ["grafeo", "ladybug", "neug", "falkordb", "turingdb", "helixdb", "embedded", "bench", "dev"]
 
 [[package]]
 name = "h11"
@@ -555,6 +563,29 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/01/ee/02a2c011bdab74c6fb3c75474d40b3052059d95df7e73351460c8588d963/h11-0.16.0.tar.gz", hash = "sha256:4e35b956cf45792e4caa5885e69fba00bdbc6ffafbfa020300e549b208ee5ff1", size = 101250, upload-time = "2025-04-24T03:35:25.427Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/04/4b/29cac41a4d98d144bf5f6d33995617b185d14b22401f75ca86f384e87ff1/h11-0.16.0-py3-none-any.whl", hash = "sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86", size = 37515, upload-time = "2025-04-24T03:35:24.344Z" },
+]
+
+[[package]]
+name = "helix-db"
+version = "0.3.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/6d/b2/bcd1a8ad58a540a6311a5c2fb00d494b5c28fbb356981bd175952dbc9e47/helix_db-0.3.4.tar.gz", hash = "sha256:1d17e14a899d4970b9097971bc6e1ec408765d64406035d4d94b2ac19b8d04ff", size = 54400, upload-time = "2026-08-11T17:53:35.472Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/75/fa/3c13adcb47daf7b7e6992787048c752c199322010ab653adf4e2904750da/helix_db-0.3.4-py3-none-any.whl", hash = "sha256:6647a0f9fd62e422e1bafdbbe84e3e4a2ef8b8b06ffa20ce61ef6c273c79b51c", size = 44921, upload-time = "2026-08-11T17:53:34.322Z" },
+]
+
+[[package]]
+name = "helix-db-embedded"
+version = "0.3.3"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cd/33/3354e836e682ce1dbcef10a705788e236c1ad76441bfe69f9f79d1affbac/helix_db_embedded-0.3.3-py3-none-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl", hash = "sha256:1d75273189a4f6c18424bc356f6ce3184c3dcf9ac9f2c01530f695cc8cc09949", size = 49517407, upload-time = "2026-08-11T17:47:31.176Z" },
+    { url = "https://files.pythonhosted.org/packages/64/f6/eb4c1d4fb2afb3af2de2d2f56301a9958620344d4512cba9b81f35e57546/helix_db_embedded-0.3.3-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:494fa8049f0ec1d5d2448c2298a6d9748a3e7c827268d7c735d82e70d5d8bb34", size = 26542277, upload-time = "2026-08-11T17:47:46.614Z" },
+    { url = "https://files.pythonhosted.org/packages/76/5b/d94468736e30caf4cfca4a9ece2ff94abf9b330f86971fd0983ed02a3620/helix_db_embedded-0.3.3-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:64068ac6335500a072fb137b4401026be0f159892483b7c3e2aa2b343587dcef", size = 27319090, upload-time = "2026-08-11T17:47:54.949Z" },
+    { url = "https://files.pythonhosted.org/packages/fe/8f/a2d3a805719959526e1195a6110b85a721a0e399f3f2ceec140624f1ca73/helix_db_embedded-0.3.3-py3-none-win_amd64.whl", hash = "sha256:d423b4b25df6d12bbbabf402080beb5f47d92d78e07a2f55a424fe058e4d0155", size = 26577625, upload-time = "2026-08-11T17:48:06.511Z" },
 ]
 
 [[package]]

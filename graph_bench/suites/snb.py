@@ -116,7 +116,10 @@ OPTIONAL MATCH path = (p1)-[:KNOWS* SHORTEST]-(p2)
 
 
 def _q(qid: str, title: str, text: dict[str, str], *, ordered: bool, category: Category = "complex_queries") -> Query:
-    return Query(qid, title, category, "property_graph", "snb", text, ordered, SNB_EPS)
+    # HelixDB (dialect "helix") has no query text: its SDK builds queries with a Python DSL. Its text for a query is
+    # the name of the builder in `graph_bench.databases.helix_queries` (the query id), which computes the same result
+    # as the openCypher text, or a reason why the DSL cannot.
+    return Query(qid, title, category, "property_graph", "snb", {**text, "helix": qid}, ordered, SNB_EPS)
 
 
 QUERIES: tuple[Query, ...] = (

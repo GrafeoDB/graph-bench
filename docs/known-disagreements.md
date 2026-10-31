@@ -358,3 +358,63 @@ alone, where no budget applies and they must agree.
 - The load clock covers the CSV to Parquet conversion with pyarrow and
   `LOAD PARQUET` (https://docs.turingdb.ai/import_data/parquet). TuringDB's load needs this conversion because it
   has no CSV bulk path for more than a few thousand edges (https://docs.turingdb.ai/import_data/csv).
+
+## HelixDB: IS3, IS7 and IC6 cannot be expressed in the DSL (not available)
+
+- id: helixdb/snb_is3
+- id: helixdb/snb_is7
+- id: helixdb/snb_ic6
+- HelixDB has no query text in its Python SDK (the openCypher form of the server and cloud API has no method in
+  helix-db 0.3.4 and no variable-length paths or `shortestPath`), so each SNB query is a builder written with the
+  documented DSL (`graph_bench/databases/helix_queries.py`) that must compute what the shared openCypher text
+  computes. A query the DSL cannot express is `not_supported` (⊘) with the reason below and is not run in a weaker
+  form; nothing is computed in Python to make up for it.
+- `snb_is3`: `ORDER BY friendshipCreationDate DESC, friendId ASC`. `order_by` / `order_by_multiple` sort a stream
+  by properties of its own elements. The edges carry `creationDate`, the second key is the `id` of the node at the
+  far end of each edge, and `bind` blocks sorting (below), so the two keys cannot be applied together.
+- `snb_is7`: `ORDER BY commentCreationDate DESC, replyAuthorId ASC`, the same limit: the comments carry the first
+  key and the second is the `id` of each comment's author.
+- `snb_ic6`: the ranking `ORDER BY postCount DESC, otherTagName ASC LIMIT 10` over tag groups. `group_count` is
+  a terminal step that returns a list of `{name, count}` objects in name order; `order_by` and `fold` reject it
+  ("order expected stream input") and `limit` after it keeps the first names, not the largest counts.
+- Planner rules that shaped the builders (helix-db-embedded 0.3.3): `order_by`, `repeat` and `value_map` are
+  rejected after `bind` ("planner error: order_by is not supported after bind"). IS2 and IC2 therefore sort and limit
+  first and bind afterwards; IS2 follows the reply chain with 50 `optional` steps (the data's longest chain is 7)
+  instead of `repeat`.
+- Cause: HelixDB DSL (feature coverage), not the adapter. The other seven SNB queries agree with the references.
+
+## HelixDB: no BFS, WCC or PageRank (not available)
+
+- id: helixdb/graphalytics_bfs
+- id: helixdb/graphalytics_wcc
+- id: helixdb/graphalytics_pr
+- All three are `not_supported` (⊘). The query language has no WCC or PageRank, and no BFS levels (`repeat` yields
+  paths, not distances). The Python SDK also has a `NativeGraph` (`Client.graph(GraphSelection(...))`, then
+  `traverse`, `shortest_path`, `louvain_communities`); in a scratch test it gave BFS levels equal to the reference
+  (research-b), but the docs mention only `Client.graph(...)` in one sentence
+  (https://docs.helix-db.com/database/helix-db/start-here/sdk-setup/python-project-setup) and never describe the
+  snapshot or its traversal, so it is not a documented path and the adapter does not use it.
+- Cause: HelixDB (no documented algorithm API).
+
+## HelixDB: loading goes through write_batch chunks (disadvantage)
+
+- HelixDB has no bulk loader (no CSV import): nodes and edges are `add_n` / `add_e` entries of `write_batch`
+  requests (https://docs.helix-db.com/database/helix-db/query-guides/writing-data), 500 entries per request (the
+  docs give no size; a sweep on `snb-small` took 10.2 s at 100, 8.2 s at 500 and 7.8 s at 2000). The internal node
+  ids the batches return are mapped to the CSV ids during the load, and a unique equality index on `id` per label is
+  created and awaited before the data (https://docs.helix-db.com/database/helix-db/query-guides/secondary-indexes);
+  all of it is in the load clock. Cause: HelixDB (no bulk path).
+- No thread setting is documented for the embedded runtime (`threads_configurable=False`); storage is
+  `InMemory` (`in-memory`).
+- IC13 uses `shortest_path(..., max_depth=100, direction=BOTH)`: the shared text is unbounded and the DSL requires
+  a bound. The hop count is the number of nodes of the returned path minus one (`length(path)`), -1 for an empty
+  path; HelixDB computes the path, the adapter counts it. IS2's reply chain is capped at 50 steps and IS4 to IS6 run
+  one source entry per label (Post, Comment) because a source predicate has no label disjunction.
+
+## HelixDB: slow under the 10x budget rule (not allowlisted)
+
+The answers agree with the references. In `bench --selection push --db grafeo,helixdb` (Windows) every query HelixDB runs is
+marked `timeout` (⏱) by the budget rule against Grafeo, not by a hang: 10 bindings take 26 to 39 ms for IS1, IS4,
+IS5 and IS6 (Grafeo 0.2 to 0.3 ms), 99 ms for IC13, 201 ms for IC2 and 239 ms for IS2 (the 50 `optional` steps).
+Load takes 8.3 s (Graphalytics) and 11.6 s (SNB) against 0.09 s and 0.14 s. No `- id:` line: the adapter test runs
+HelixDB alone and it must agree.
