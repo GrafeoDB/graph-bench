@@ -26,6 +26,9 @@ BFS = "CALL bfs('g', {{source: {source}, directed: true}}) RETURN node.id, dista
 # The load check (`counts`): every node and every relationship, over all tables, counted with Cypher.
 COUNT_NODES = "MATCH (n) RETURN count(n)"
 COUNT_EDGES = "MATCH ()-[r]->() RETURN count(r)"
+# Set once `provision` has installed GDS in this process (the worker calls it twice: before the Startup children
+# and in `prepare_environment`).
+_PROVISIONED: list[bool] = []
 
 
 def _path(dataset: Dataset, file: str) -> str:
@@ -43,7 +46,7 @@ class NeugDatabase(Database):
     """An in-memory `neug.Database`, loaded with `COPY FROM` CSV and queried with parameterized Cypher.
 
     Node tables are keyed by their `id` column. Each edge type is one rel table with a `FROM a TO b` pair per
-    EdgeTable. The GDS extension (bundled in the wheel) is installed once per process (`prepare_environment`).
+    EdgeTable. The GDS extension (bundled in the wheel) is installed once per process (`provision`).
     On the graphalytics dataset the load also loads GDS and projects the graph `g`, inside the load clock, like
     LadybugDB's projection: all three algorithms (BFS included) need it, so a GDS failure fails that load (✗).
     """
@@ -58,11 +61,14 @@ class NeugDatabase(Database):
     gds_ready: bool = False
 
     @classmethod
-    def prepare_environment(cls) -> None:
-        """Install the GDS extension on a throwaway in-memory database (it may download, so not in a load clock).
+    def provision(cls) -> None:
+        """Install the GDS extension on a throwaway in-memory database, once per process (it may download, so it is
+        in no clock; `prepare_environment` is this alone).
 
         https://neug.io/docs/extensions/load_gds/
         """
+        if _PROVISIONED:
+            return
         db = neug.Database("", max_thread_num=1)
         conn = db.connect()
         try:
@@ -70,6 +76,7 @@ class NeugDatabase(Database):
         finally:
             conn.close()
             db.close()
+        _PROVISIONED.append(True)
 
     @property
     def _max_thread_num(self) -> int:
@@ -83,10 +90,14 @@ class NeugDatabase(Database):
     def _run(self, text: str) -> None:
         list(self.conn.execute(text))
 
-    def load(self, dataset: Dataset) -> None:
+    def open_empty(self) -> None:
+        """An empty in-memory database and its connection: what `load` does before its first table."""
         # An empty path opens an in-memory database (the `Database` docstring, https://neug.io/docs/reference/python_api/).
         self.db = neug.Database("", max_thread_num=self._max_thread_num)
         self.conn = self.db.connect()
+
+    def load(self, dataset: Dataset) -> None:
+        self.open_empty()
         for table in dataset.nodes:
             self._run(f"CREATE NODE TABLE {table.label}({_columns(table.columns)}, PRIMARY KEY(id))")
         groups: dict[str, list[EdgeTable]] = {}

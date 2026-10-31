@@ -55,6 +55,22 @@ def inline(text: str, params: Mapping[str, Any]) -> str:
     return _PARAM.sub(lambda m: literal(params[m.group(1)]), text)
 
 
+def _start_engine() -> None:
+    """Start the process's engine in a fresh temporary `data_dir`, unless it runs already.
+
+    The directory is removed at process exit and nothing outside it is touched. The worker starts it in
+    `prepare_environment`, untimed; a Startup child (which never prepares) starts it in `open_empty`, timed.
+    """
+    if "client" in _engine:
+        return
+    from turingdb import TuringDB
+
+    root = Path(tempfile.mkdtemp(prefix="graph-bench-turingdb-"))
+    atexit.register(shutil.rmtree, root, ignore_errors=True)
+    _engine["root"] = root
+    _engine["client"] = TuringDB(type="embedded", data_dir=str(root))
+
+
 def _check_type(column_type: str) -> None:
     if column_type not in ("INT64", "DOUBLE", "STRING"):
         raise ValueError(f"unsupported column type {column_type!r} for the TuringDB Parquet load")
@@ -153,23 +169,12 @@ class TuringDatabase(Database):
 
     @classmethod
     def prepare_environment(cls) -> None:
-        """Start the process's engine in a fresh temporary `data_dir`, outside every load clock.
+        """Start the process's engine (`_start_engine`), outside every load clock. `provision` has nothing to do."""
+        cls.provision()
+        _start_engine()
 
-        The directory is removed at process exit and nothing outside it is touched.
-        """
-        if "client" in _engine:
-            return
-        from turingdb import TuringDB
-
-        root = Path(tempfile.mkdtemp(prefix="graph-bench-turingdb-"))
-        atexit.register(shutil.rmtree, root, ignore_errors=True)
-        _engine["root"] = root
-        _engine["client"] = TuringDB(type="embedded", data_dir=str(root))
-
-    def load(self, dataset: Dataset) -> None:
-        # The benchmark paths (worker, CodSpeed session) always call prepare_environment first, so the engine start
-        # is never in a load clock; this lazy start only serves direct use such as the tests.
-        self.prepare_environment()
+    def _new_graph(self) -> None:
+        """Take the process's engine and a new graph name for this instance."""
         self.client = _engine["client"]
         self.graph = f"bench{uuid.uuid4().hex}"
         # LIST GRAPH is the documented way to enumerate graphs; the name must be new (uuid4, and a data_dir of
@@ -177,6 +182,24 @@ class TuringDatabase(Database):
         existing = self.client.query("LIST GRAPH")
         if self.graph in set(existing["graphName"]):
             raise RuntimeError(f"graph {self.graph} already exists")
+
+    def open_empty(self) -> None:
+        """Start the engine when this process has none, then create a new empty graph and select it.
+
+        `CREATE GRAPH <name>` and `set_graph` are the documented way to make a graph and work on it
+        (https://docs.turingdb.ai/graph_dev/create_graph). A load does not call this: `LOAD PARQUET` creates its
+        graph from the files, so the load's first step after the name is writing them.
+        """
+        _start_engine()
+        self._new_graph()
+        self.client.query(f"CREATE GRAPH {self.graph}")
+        self.client.set_graph(self.graph)
+
+    def load(self, dataset: Dataset) -> None:
+        # The benchmark paths (worker, CodSpeed session) always call prepare_environment first, so the engine start
+        # is never in a load clock; this lazy start only serves direct use such as the tests.
+        self.prepare_environment()
+        self._new_graph()
         self.staging = _engine["root"] / "data" / self.graph
         self._write_parquet(dataset, self.staging)
         self.client.query(f"LOAD PARQUET '{self.graph}'")

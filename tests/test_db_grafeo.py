@@ -11,9 +11,15 @@ pytest.importorskip("grafeo")
 
 from graph_bench.databases import get_database
 from graph_bench.datasets import cache, rdf
-from graph_bench.runner.supervisor import run_bench
+from graph_bench.results import Results
 from graph_bench.types import Model
-from tests.conftest import not_yet_implemented, resources_off, warn_if_fixed
+from tests.conftest import (
+    assert_loads_agree,
+    assert_startup_agrees,
+    not_yet_implemented,
+    run_push,
+    warn_if_fixed,
+)
 
 # The worker's model gate error, exactly: f"model {case.item.model} not supported".
 MODEL_GATE = re.compile(f"model ({'|'.join(get_args(Model))}) not supported")
@@ -21,16 +27,14 @@ MODEL_GATE = re.compile(f"model ({'|'.join(get_args(Model))}) not supported")
 pytestmark = pytest.mark.grafeo
 
 
-def test_grafeo_push_agrees(
-    push_data_dir: Path,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    known_disagreements: Callable[[str], set[str]],
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("GRAPH_BENCH_DATA_DIR", str(push_data_dir))
-    resources_off(monkeypatch)  # Task 4 turns them on with test_<db>_resources_ok
-    results = run_bench("push", ["grafeo"], tmp_path / "out", workdir=tmp_path / "work", case_timeout_s=60)
+@pytest.fixture(scope="module")
+def push(push_data_dir: Path, tmp_path_factory: pytest.TempPathFactory) -> Results:
+    """One push run of grafeo, shared by the push, startup and load tests."""
+    return run_push("grafeo", tmp_path_factory.mktemp("push-grafeo"), push_data_dir, 60)
+
+
+def test_grafeo_push_agrees(push: Results, known_disagreements: Callable[[str], set[str]]) -> None:
+    results = push
     known = known_disagreements("grafeo")
     entries = [e for e in results.entries if e.database == "grafeo"]
     assert entries
@@ -49,6 +53,16 @@ def test_grafeo_push_agrees(
             failing.append(f"    detail={entry.detail}")
     print("\n".join(failing))
     assert not failing, "\n".join(failing)
+
+
+def test_grafeo_startup_agrees(push: Results) -> None:
+    """The Startup row: every child opens an empty database and answers the probe as expected."""
+    assert_startup_agrees(push, "grafeo")
+
+
+def test_grafeo_load_unchanged(push: Results) -> None:
+    """The loads still load the whole dataset (their counts agree) with `open_empty` split out."""
+    assert_loads_agree(push, "grafeo")
 
 
 def test_grafeo_single_thread_env() -> None:

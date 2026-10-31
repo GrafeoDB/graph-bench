@@ -79,11 +79,15 @@ class FalkorDatabase(Database):
             f"CREATE (a)-[e:{table.type}]->(b){tail}"
         )
 
-    def load(self, dataset: Dataset) -> None:
+    def open_empty(self) -> None:
+        """Start the falkordblite server and select the graph: what `load` does before its first index."""
         # No path: a temporary directory. An empty `save` removes the periodic RDB snapshots, so the data stays in
         # memory only (https://docs.falkordb.com/operations/durability.html, the `save ""` development setting).
         self.server = FalkorDB(None, serverconfig={"save": ""})
         self.graph = self.server.select_graph(GRAPH)
+
+    def load(self, dataset: Dataset) -> None:
+        self.open_empty()
         for table in dataset.nodes:
             self.graph.query(f"CREATE INDEX FOR (n:{table.label}) ON (n.id)")
         for table in dataset.nodes:

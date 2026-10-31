@@ -18,9 +18,15 @@ import pytest
 pytest.importorskip("arcadedb_embedded")
 
 from graph_bench.databases import get_database
-from graph_bench.runner.supervisor import run_bench
+from graph_bench.results import Results
 from graph_bench.types import Model
-from tests.conftest import not_yet_implemented, resources_off, warn_if_fixed
+from tests.conftest import (
+    assert_loads_agree,
+    assert_startup_agrees,
+    not_yet_implemented,
+    run_push,
+    warn_if_fixed,
+)
 
 # The worker's model gate error, exactly: f"model {case.item.model} not supported".
 MODEL_GATE = re.compile(f"model ({'|'.join(get_args(Model))}) not supported")
@@ -28,16 +34,20 @@ MODEL_GATE = re.compile(f"model ({'|'.join(get_args(Model))}) not supported")
 pytestmark = pytest.mark.arcadedb
 
 
-def test_arcadedb_push_agrees(
-    push_data_dir: Path,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    known_disagreements: Callable[[str], set[str]],
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("GRAPH_BENCH_DATA_DIR", str(push_data_dir))
-    resources_off(monkeypatch)  # Task 4 turns them on with test_<db>_resources_ok
-    results = run_bench("push", ["arcadedb"], tmp_path / "out", workdir=tmp_path / "work", case_timeout_s=120)
+@pytest.fixture(scope="module")
+def push_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The push run's working directory (its `out` and `work` are inside)."""
+    return tmp_path_factory.mktemp("push-arcadedb")
+
+
+@pytest.fixture(scope="module")
+def push(push_data_dir: Path, push_root: Path) -> Results:
+    """One push run of arcadedb, shared by the push, startup and load tests."""
+    return run_push("arcadedb", push_root, push_data_dir, 120)
+
+
+def test_arcadedb_push_agrees(push: Results, push_root: Path, known_disagreements: Callable[[str], set[str]]) -> None:
+    results = push
     known = known_disagreements("arcadedb")
     entries = [e for e in results.entries if e.database == "arcadedb"]
     assert entries
@@ -56,10 +66,20 @@ def test_arcadedb_push_agrees(
     print("\n".join(failing))
     assert not failing, "\n".join(failing)
     # The engine log goes to a per-process temporary directory, not to ./log in the working directory.
-    assert not (tmp_path / "log").exists()
+    assert not (push_root / "log").exists()
     info = results.databases["arcadedb"]
     assert info.java is not None
     assert info.storage == "on-disk"
+
+
+def test_arcadedb_startup_agrees(push: Results) -> None:
+    """The Startup row: every child opens an empty database and answers the probe as expected."""
+    assert_startup_agrees(push, "arcadedb")
+
+
+def test_arcadedb_load_unchanged(push: Results) -> None:
+    """The loads still load the whole dataset (their counts agree) with `open_empty` split out."""
+    assert_loads_agree(push, "arcadedb")
 
 
 def test_arcadedb_info_and_env(tmp_path: Path) -> None:

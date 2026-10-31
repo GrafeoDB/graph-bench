@@ -160,8 +160,11 @@ class ArcadeDatabase(Database):
         Then create and drop one empty database, once per process: the engine's one-time start (its classes and
         its polyglot engine, about 0.25 s) belongs to the JVM start, which is not timed (fairness rule 2), not to
         the first load. It holds no data and runs no load, so no load path is warmed up; other adapters likewise
-        open a throwaway database here (NeuG, LadybugDB).
+        open a throwaway database here (Neo4j). `provision` has nothing to do (the wheel bundles the JRE and the
+        engine jars). The Startup row's `open_empty` runs without this warm start, so its time includes the
+        engine's one-time start.
         """
+        cls.provision()
         jvm.start_once(cls.name, _start)
         if _ENGINE.get("ready"):
             return
@@ -197,12 +200,19 @@ class ArcadeDatabase(Database):
         if wrong:
             raise RuntimeError(f"the JVM lacks the single-thread options (set {JVM_ARGS_ENV}); got {wrong}")
 
-    def load(self, dataset: Dataset) -> None:
-        # The benchmark paths (worker, CodSpeed session) call prepare_environment first, so the JVM start is never in
-        # a load clock; this lazy start only serves direct use such as the tests.
-        self.prepare_environment()
+    def open_empty(self) -> None:
+        """Start the JVM when this process has none, check its thread options, and create the empty database in
+        `workdir/db`: in a prepared process (a load), only the check and `create_database`."""
+        jvm.start_once(self.name, _start)
         self._check_threads()
         self.db = adb.create_database(str(self.workdir / "db"))
+
+    def load(self, dataset: Dataset) -> None:
+        # The benchmark paths (worker, CodSpeed session) call prepare_environment first, so the JVM start is never in
+        # a load clock; this lazy start only serves direct use such as the tests. `open_empty` then finds the JVM
+        # started (`start_once` returns at once) and creates the database.
+        self.prepare_environment()
+        self.open_empty()
         schema = self.db.schema
         groups: dict[str, list[EdgeTable]] = {}
         for edge in dataset.edges:

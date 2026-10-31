@@ -219,6 +219,17 @@ def snb_ic13(b: Mapping[str, Any]) -> tuple[QueryRequest, Rows]:
     return _request(_IC13, b, a=person1, b=person2, p=path), rows
 
 
+def startup_probe(b: Mapping[str, Any]) -> tuple[QueryRequest, Rows]:
+    """The Startup probe (`suites.startup.PROBE["helix"]`): the number of nodes, `MATCH (n) RETURN count(n)`, with
+    the `count` step over all nodes (https://docs.helix-db.com/database/helix-db/query-guides/projections)."""
+    request = read_batch().var_as("nodes", g().n(NodeRef.all()).count()).returning(["nodes"]).to_query_request()
+
+    def rows(result: Mapping[str, Any]) -> list[tuple[Any, ...]]:
+        return [(result["nodes"],)]
+
+    return request, rows
+
+
 def _unsupported_order(query: str, detail: str) -> str:
     return (
         f"{query}: the shared text's ORDER BY {detail}. The DSL's order_by sorts a stream by the properties of its "
@@ -244,4 +255,5 @@ BUILDERS: dict[str, Builder | str] = {
         "group_count is a terminal step whose result is a map that order_by and limit cannot rank by count"
     ),
     "snb_ic13": snb_ic13,
+    "startup_probe": startup_probe,
 }

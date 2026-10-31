@@ -254,6 +254,29 @@ not a disagreement, so there is no `- id:` line.
   Wrapping the COPY statements in one transaction did not make the load measurably faster.
 - Cause: NeuG engine (checkpoint per statement), not measured further.
 
+## NeuG: count over an empty database returns no row (Startup)
+
+- id: neug/startup
+- Benchmark: `startup` (the Startup row's probe `MATCH (n) RETURN count(n) AS nodes`, `suites/startup.py`), on
+  the empty database `open_empty` opens: `neug.Database("", max_thread_num=...)` and `connect()`, no table yet.
+- NeuG 0.3.0 answer: no row (`[]`), at the first child, so the entry is ≠ with no timing (the first child's time
+  is in `preflight_ns`). `MATCH (n) RETURN count(*)` gives no row as well, while `RETURN 1` gives `[(1,)]`.
+- Reference answer: `[[0]]`. In openCypher an aggregation without grouping keys returns exactly one row, also over
+  an empty match; the other seven property-graph databases answer `[[0]]` on their empty databases, LadybugDB (the
+  other Kuzu-derived engine) included.
+- Once any node table exists (`CREATE NODE TABLE P(id INT64, PRIMARY KEY(id))`, still without data), NeuG answers
+  `[(0,)]`, so the loaded cases are not affected. The probe is not changed for NeuG (a case that cannot run the
+  shared text keeps its marker).
+- Cause: NeuG engine (planner: a pattern over no node table yields no aggregate row). Reproduction:
+
+  ```python
+  import neug
+
+  db = neug.Database("", max_thread_num=1)
+  conn = db.connect()
+  print(list(conn.execute("MATCH (n) RETURN count(n)")))  # [], expected [[0]]
+  ```
+
 ## FalkorDB: no install on glibc older than 2.38 (the CI runner)
 
 - Package: falkordblite 0.11.0 (FalkorDB 4.22.1). Its PyPI wheels are `manylinux_2_38_x86_64` and
@@ -290,6 +313,15 @@ becomes ≠ and belongs here. No `- id:` line: it agrees today.
 and falkordblite starts the module with none, so the server uses the core count, while every other database runs
 single-threaded where it can. The results record `threads_configurable=False`. The server is also a separate
 process (`local process`), so its memory is not under the harness's per-process caps.
+
+## FalkorDB: Startup starts a redis-server per child (note)
+
+The Startup time covers falkordblite starting its `redis-server` (with `save ""`, as in a load) and selecting the
+graph; the probe on the not yet existing graph answers `[[0]]`. That redis-server daemonizes and leaves the child's
+process tree: a child run by hand leaves it running after the child exits (re-parented to init), so the harness
+kills it with the child (`kill_tree`, which finds it through the Linux child subreaper), whether the child
+answered or timed out. `test_falkordb_startup_leaves_no_redis_server` and
+`test_falkordb_startup_timeout_kills_the_redis_server` check both on Linux.
 
 ## FalkorDB: slow point lookups and IC6 under the 10x budget rule (not allowlisted)
 
@@ -373,6 +405,11 @@ alone, where no budget applies and they must agree.
   `prepare_environment` (outside every load clock; `data_dir` is a fresh temporary directory removed at exit) and
   gives each load a graph of its own (uuid4 name). TuringDB has no `DROP GRAPH`, so loaded graphs stay in that
   directory until the process exits.
+- Startup: a startup child has no engine yet, so its time covers the engine start (in a fresh temporary `data_dir`)
+  and a new empty graph made with `CREATE GRAPH` and `set_graph`
+  (https://docs.turingdb.ai/graph_dev/create_graph). The engine runs in the child's process ("no daemon"), so it
+  ends with the child; a child killed at its timeout leaves its temporary `data_dir` behind (its exit hook does not
+  run).
 - There is no in-memory mode: the graph is on disk (`storage="on-disk"`), and no thread setting is exposed
   (`threads_configurable=False`).
 - The load clock covers the CSV to Parquet conversion with pyarrow and
@@ -536,6 +573,10 @@ at depth 0, the reference's definition. No `- id:` line.
 - The JVM starts once per process in `prepare_environment`, outside every clock, followed by creating and dropping
   one empty database (the engine's one-time start, about 0.25 s). Every load is in the load clock from
   `create_database` on: schema, unique `id` indexes, vertices and edges.
+- Startup: each startup child starts its own JVM (no warm start), so the Startup time includes the JVM start and
+  the engine's one-time start (its classes and its polyglot engine) before `create_database` on the child's workdir
+  and the probe. The JVM thread caps and the single-thread engine settings apply as in a load (the child inherits
+  `process_env(threads)`, and `open_empty` checks them).
 - Logging: the engine's built-in configuration writes `./log/arcadedb.log` into the working directory; the adapter
   passes `java.util.logging.config.file` with the same configuration and the file in a per-process temporary
   directory, removed at exit.
@@ -678,7 +719,15 @@ Measured on Windows (one thread, push data, three loads per dataset in one proce
   ship.
 - JVM start: once per process in `prepare_environment`, outside every clock. It then opens and shuts down one
   empty DBMS (class loading and GDS registration, about 10 s cold), so the first load does not carry them. It holds
-  no data and runs no query. Fetching (SHA-256 checked) and extracting the tarball and the JRE also happen there.
+  no data and runs no query. Fetching (SHA-256 checked) and extracting the tarball and the JRE happen in
+  `provision`, which `prepare_environment` calls first; it runs once per process (a second call hashes nothing).
+- Startup: each startup child starts its own JVM and opens an empty DBMS on its workdir with the same builder
+  settings as a load (page cache, GDS plugin directory, procedure allowlist), so the Startup time includes the JVM
+  start, class loading and GDS registration: GDS is part of the benchmark's configuration, and every load's DBMS
+  registers it too. The shared JVM thread caps apply (the child inherits `process_env(threads)`, and the start is
+  checked like a load's). Nothing is fetched or extracted in a child: `provision` ran untimed in the worker before,
+  and a missing file fails the entry with "not provisioned: <path>". Measured on Windows: about 8 s per child once
+  the files are in the OS cache, 17 s for a cold first child.
 - Versions: Neo4j Community 2026.10.1 (the latest stable release, `<release>` in Maven Central's
   `org.neo4j:neo4j` metadata) on Temurin 21.0.13+9. Neo4j 2026.10 supports Java 21 and 25, and its class files are
   Java 21.

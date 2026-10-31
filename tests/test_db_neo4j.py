@@ -25,9 +25,15 @@ pytest.importorskip("jpype")
 from graph_bench.databases import get_database, jvm
 from graph_bench.databases import neo4j as neo
 from graph_bench.datasets.schema import Column, Dataset, EdgeTable, NodeTable
-from graph_bench.runner.supervisor import run_bench
+from graph_bench.results import Results
 from graph_bench.types import Model
-from tests.conftest import not_yet_implemented, resources_off, warn_if_fixed
+from tests.conftest import (
+    assert_loads_agree,
+    assert_startup_agrees,
+    not_yet_implemented,
+    run_push,
+    warn_if_fixed,
+)
 
 # The worker's model gate error, exactly: f"model {case.item.model} not supported".
 MODEL_GATE = re.compile(f"model ({'|'.join(get_args(Model))}) not supported")
@@ -45,17 +51,20 @@ def shared_downloads(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
     yield SHARED_DOWNLOADS
 
 
-def test_neo4j_push_agrees(
-    push_data_dir: Path,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    shared_downloads: str,
-    known_disagreements: Callable[[str], set[str]],
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("GRAPH_BENCH_DATA_DIR", str(push_data_dir))
-    resources_off(monkeypatch)  # Task 4 turns them on with test_<db>_resources_ok
-    results = run_bench("push", ["neo4j"], tmp_path / "out", workdir=tmp_path / "work", case_timeout_s=300)
+@pytest.fixture(scope="module")
+def push_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The push run's working directory (its `out` and `work` are inside)."""
+    return tmp_path_factory.mktemp("push-neo4j")
+
+
+@pytest.fixture(scope="module")
+def push(push_data_dir: Path, push_root: Path) -> Results:
+    """One push run of neo4j, shared by the push, startup and load tests."""
+    return run_push("neo4j", push_root, push_data_dir, 300, env={jvm.DOWNLOADS_ENV: SHARED_DOWNLOADS})
+
+
+def test_neo4j_push_agrees(push: Results, push_root: Path, known_disagreements: Callable[[str], set[str]]) -> None:
+    results = push
     known = known_disagreements("neo4j")
     entries = [e for e in results.entries if e.database == "neo4j"]
     assert entries
@@ -74,11 +83,21 @@ def test_neo4j_push_agrees(
     print("\n".join(failing))
     assert not failing, "\n".join(failing)
     # Nothing lands in the working directory (the importer's report file, Neo4j's logs).
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["out", "work"]
+    assert sorted(p.name for p in push_root.iterdir()) == ["out", "work"]
     info = results.databases["neo4j"]
     assert info.java == f"Temurin {neo.JRE_VERSION}"
     assert info.storage == "on-disk"
     assert info.version == neo.NEO4J_VERSION
+
+
+def test_neo4j_startup_agrees(push: Results) -> None:
+    """The Startup row: every child opens an empty database and answers the probe as expected."""
+    assert_startup_agrees(push, "neo4j")
+
+
+def test_neo4j_load_unchanged(push: Results) -> None:
+    """The loads still load the whole dataset (their counts agree) with `open_empty` split out."""
+    assert_loads_agree(push, "neo4j")
 
 
 def test_neo4j_info_and_env(tmp_path: Path) -> None:
@@ -288,11 +307,70 @@ def test_prepare_environment_returns_at_once_when_ready(monkeypatch: pytest.Monk
     def forbidden(*args: object, **kwargs: object) -> None:
         raise AssertionError("called after the process was prepared")
 
-    monkeypatch.setattr(neo, "_STATE", {"ready": True})
+    monkeypatch.setattr(neo, "_STATE", {"provisioned": True, "ready": True})
     monkeypatch.setattr(neo, "install", forbidden)
     monkeypatch.setattr(jvm, "fetch", forbidden)
     monkeypatch.setattr(jvm, "start_once", forbidden)
     neo.Neo4jDatabase.prepare_environment()
+
+
+def test_neo4j_provision_once_per_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`provision` runs `install` (fetch, SHA-256, extraction) once: the worker's second call (through
+    `prepare_environment`) hashes nothing again. It starts no JVM."""
+    calls: list[str] = []
+
+    def forbidden(*args: object, **kwargs: object) -> None:
+        raise AssertionError("provision started the JVM")
+
+    monkeypatch.setattr(neo, "_STATE", {})
+    monkeypatch.setattr(neo, "install", lambda: calls.append("install"))
+    monkeypatch.setattr(jvm, "start_once", forbidden)
+    neo.Neo4jDatabase.provision()
+    neo.Neo4jDatabase.provision()
+    assert calls == ["install"]
+    assert neo._STATE == {"provisioned": True}
+
+
+def test_neo4j_open_empty_refuses_a_missing_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without the provisioned files `open_empty` raises "not provisioned: <path>"; it fetches and starts nothing."""
+
+    def forbidden(*args: object, **kwargs: object) -> None:
+        raise AssertionError("open_empty fetched, installed or started something")
+
+    monkeypatch.setattr(neo, "install_root", lambda: tmp_path / "unpacked")
+    monkeypatch.setattr(neo, "install", forbidden)
+    monkeypatch.setattr(jvm, "fetch", forbidden)
+    monkeypatch.setattr(jvm, "start_once", forbidden)
+    db = neo.Neo4jDatabase(tmp_path, 1)
+    with pytest.raises(RuntimeError, match=r"^not provisioned: .*unpacked"):
+        db.open_empty()
+    db.close()
+
+
+def test_neo4j_open_empty_never_fetches(tmp_path: Path, shared_downloads: str) -> None:
+    """The Startup child's own code (`startup.measure_start`) with `jvm.fetch`, `install` and `extract` replaced by
+    functions that raise: it opens the empty DBMS (JVM, GDS registration) and answers the probe, so it fetches,
+    hashes and extracts nothing. Provisioning runs here first, untimed, as the worker does."""
+    neo.Neo4jDatabase.provision()
+    script = """
+        import json
+        from pathlib import Path
+        from graph_bench.databases import jvm
+        from graph_bench.databases import neo4j as neo
+        from graph_bench.runner import startup
+
+        def forbidden(*args, **kwargs):
+            raise AssertionError("the startup child fetched or installed")
+
+        jvm.fetch = neo.install = neo.extract = forbidden
+        Path("w").mkdir()
+        elapsed, rows = startup.measure_start("neo4j", 1, Path("w"))
+        assert elapsed > 0
+        print(json.dumps(rows))
+    """
+    done = _run(script, tmp_path, get_database("neo4j").process_env(1))
+    assert done.returncode == 0, (done.stdout + done.stderr)[-3000:]
+    assert done.stdout.strip().splitlines()[-1] == "[[0]]"
 
 
 def test_admin_env_drops_the_callers_jvm_options(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

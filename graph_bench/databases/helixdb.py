@@ -68,8 +68,13 @@ class HelixDatabase(Database):
                 raise RuntimeError(f"index build did not finish: {status}")
             time.sleep(0.01)
 
-    def load(self, dataset: Dataset) -> None:
+    def open_empty(self) -> None:
+        """An empty embedded in-memory database: what `load` does before its first index."""
+        # https://docs.helix-db.com/database/helix-db/start-here/local-development/embedded-database
         self.client = Client.embedded(InMemory("bench"))
+
+    def load(self, dataset: Dataset) -> None:
+        self.open_empty()
         # A unique equality index on `id` per label, created before the data (the lookups of every query use it),
         # and awaited: the load clock covers the index being ready.
         # https://docs.helix-db.com/database/helix-db/query-guides/secondary-indexes
