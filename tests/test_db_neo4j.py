@@ -208,10 +208,6 @@ def test_neo4j_load_algorithms_and_jvm(push_data_dir: Path, tmp_path: Path, shar
         from graph_bench.datasets import cache
         cls = get_database("neo4j")
         cls.prepare_environment()
-        calls = []
-        jvm.fetch = lambda *a, **k: calls.append("fetch")
-        neo.install = lambda: calls.append("install")
-        jvm.start_once = lambda *a, **k: calls.append("start_once")
         cls.prepare_environment()  # once per process: a second call does nothing
         assert jvm.owner() == "neo4j"
         assert jvm.effective_heap_flag() == jvm.HEAP_FLAG
@@ -221,6 +217,10 @@ def test_neo4j_load_algorithms_and_jvm(push_data_dir: Path, tmp_path: Path, shar
             raise AssertionError("a second JVM database started in the same process")
         except RuntimeError as exc:
             assert "needs a process of its own" in str(exc)
+        calls = []
+        jvm.fetch = lambda *a, **k: calls.append("fetch")
+        neo.install = lambda: calls.append("install")
+        jvm.start_once = lambda *a, **k: calls.append("start_once")
         data = cache.prepare("push")
         ga, snb = data[("graphalytics", "small")], data[("snb", "small")]
         for i in range(2):  # the GDS projection is dropped with its instance, so a second load can project again

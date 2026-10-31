@@ -614,8 +614,10 @@ Measured on Windows (one thread, push data, three loads per dataset in one proce
   relationships on Linux, where `LOAD CSV` took 17 s. So the importer is the faster path at scale and the slower one
   on the push data.
 - Opening a DBMS costs about 2.1 s even for an empty store.
-- In the push bench the loads took 12.2 s (Graphalytics) and 9.5 s (SNB), against Grafeo's 0.12 s and 0.16 s.
-  Loads are exempt from the budget rule.
+- In `bench --selection push --db grafeo,neo4j` (Windows, after the fix that keeps the download check out of the
+  load) the loads took 9.0 s (Graphalytics) and 7.7 s (SNB), against Grafeo's 0.07 s and 0.12 s. Before the fix,
+  each load also re-hashed the cached tarball and JRE (`jvm.fetch`, about 0.2 s). Loads are exempt from the budget
+  rule.
 - This choice is provisional user decision 7.
 
 ## Neo4j: threads, memory, storage and the JVM start (notes)
