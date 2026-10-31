@@ -45,6 +45,10 @@ MATCH (m {{id: $messageId}})
 WHERE m:Post OR m:Comment
 RETURN m.creationDate AS messageCreationDate, {_CONTENT} AS messageContent"""
 
+# NeuG (dialect "neug") reuses the two LadybugDB texts below, and only these: its parser rejects `WHERE m:Post OR
+# m:Comment` (IS4) and `shortestPath(...)` (IC13). A multi-label pattern `(m:Post:Comment)` means "either label" in
+# NeuG as well (https://neug.io/docs/cypher_manual/query_clauses/match_clause/), and `[:KNOWS* SHORTEST]` is its
+# shortest-path form, so both keep the meaning of the shared text.
 _IS4_LADYBUG = f"""\
 MATCH (m:Post:Comment {{id: $messageId}})
 RETURN m.creationDate AS messageCreationDate, {_CONTENT} AS messageContent"""
@@ -112,21 +116,32 @@ OPTIONAL MATCH path = (p1)-[:KNOWS* SHORTEST]-(p2)
 
 
 def _q(qid: str, title: str, text: dict[str, str], *, ordered: bool, category: Category = "complex_queries") -> Query:
-    return Query(qid, title, category, "property_graph", "snb", text, ordered, SNB_EPS)
+    # HelixDB (dialect "helix") has no query text: its SDK builds queries with a Python DSL. Its text for a query is
+    # the name of the builder in `graph_bench.databases.helix_queries` (the query id), which computes the same result
+    # as the openCypher text, or a reason why the DSL cannot.
+    return Query(qid, title, category, "property_graph", "snb", {**text, "helix": qid}, ordered, SNB_EPS)
 
 
 QUERIES: tuple[Query, ...] = (
     _q("snb_is1", "IS1 person profile", {"cypher": _IS1}, ordered=False),
     _q("snb_is2", "IS2 recent messages of a person", {"cypher": _IS2}, ordered=True),
     _q("snb_is3", "IS3 friends of a person", {"cypher": _IS3}, ordered=True),
-    _q("snb_is4", "IS4 message content", {"cypher": _IS4, "ladybug": _IS4_LADYBUG}, ordered=False),
+    _q(
+        "snb_is4", "IS4 message content", {"cypher": _IS4, "ladybug": _IS4_LADYBUG, "neug": _IS4_LADYBUG}, ordered=False
+    ),
     _q("snb_is5", "IS5 message creator", {"cypher": _IS5}, ordered=False),
     _q("snb_is6", "IS6 forum of a message", {"cypher": _IS6, "ladybug": _IS6_LADYBUG}, ordered=False),
     # The ORDER BY of IS7 leaves ties (same author, same day), so rows are compared as a multiset.
     _q("snb_is7", "IS7 replies of a message", {"cypher": _IS7}, ordered=False),
     _q("snb_ic2", "IC2 recent messages by friends", {"cypher": _IC2}, ordered=True),
     _q("snb_ic6", "IC6 tag co-occurrence", {"cypher": _IC6}, ordered=True),
-    _q("snb_ic13", "IC13 shortest path", {"cypher": _IC13, "ladybug": _IC13_LADYBUG}, ordered=False, category="hops"),
+    _q(
+        "snb_ic13",
+        "IC13 shortest path",
+        {"cypher": _IC13, "ladybug": _IC13_LADYBUG, "neug": _IC13_LADYBUG},
+        ordered=False,
+        category="hops",
+    ),
 )
 
 _BY_ID = {q.id: q for q in QUERIES}
@@ -344,10 +359,19 @@ def _ic6_bindings(g: SnbGraph, n: int) -> list[dict[str, Any]]:
 
 
 def _ic13_bindings(g: SnbGraph, n: int) -> list[dict[str, Any]]:
-    persons = sorted(g.nodes["Person"])
+    """Pairs of persons with friends half the id-sorted list apart, plus LDBC IC13's two edge cases.
+
+    The LDBC definition returns -1 when no path exists and 0 when person1 = person2, so the last bindings are a
+    person and a person without friends (when the data has one) and a person with itself.
+    """
+    persons = _with_friends(g)
+    lonely = sorted(p for p in g.nodes["Person"] if not _friends(g, p))
+    extra = [{"person1Id": persons[0], "person2Id": lonely[0]}] if lonely else []
+    extra.append({"person1Id": persons[len(persons) // 2], "person2Id": persons[len(persons) // 2]})
     half = len(persons) // 2
-    starts = _spread(range(len(persons)), n)
-    return [{"person1Id": persons[i], "person2Id": persons[(i + half) % len(persons)]} for i in starts]
+    starts = _spread(range(len(persons)), max(n - len(extra), 0))
+    pairs = [{"person1Id": persons[i], "person2Id": persons[(i + half) % len(persons)]} for i in starts]
+    return pairs + extra
 
 
 def bindings(query_id: str, graph: SnbGraph, n: int) -> list[dict[str, Any]]:

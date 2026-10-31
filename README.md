@@ -12,44 +12,51 @@ README at each Grafeo release. The rules every database is measured under are in
 
 ## Databases
 
-| Database | Package | Process | Status |
-| --- | --- | --- | --- |
-| Grafeo | `grafeo` | in-process | implemented |
-| LadybugDB | `real_ladybug` | in-process | implemented |
-| TuringDB | `turingdb` (embedded mode) | in-process | planned |
-| FalkorDB | `falkordblite` | local process (a Redis server subprocess) | planned |
-| NeuG | `neug` | in-process | planned |
-| ArcadeDB | `arcadedb-embedded` | in-process (JVM) | planned |
-| Neo4j Community | Maven jars through JPype | in-process (JVM) | planned |
-| DuckDB + DuckPGQ | `duckdb` | in-process | planned |
-| Oxigraph | `pyoxigraph` | in-process | planned |
-| HelixDB | `helix-db` + `helix-db-embedded` | in-process (embedded mode) | planned |
+| Database | Package | Process | Status | Licence |
+| --- | --- | --- | --- | --- |
+| Grafeo | `grafeo` | in-process | implemented | Apache-2.0 |
+| LadybugDB | `ladybug` | in-process | implemented | MIT |
+| TuringDB | `turingdb` (embedded mode, Linux only) | in-process | implemented | BSL 1.1 (Community Edition) |
+| FalkorDB | `falkordblite` (Linux only) | local process (a Redis server subprocess) | implemented | SSPL v1 (FalkorDB engine); BSD (falkordblite wrapper) |
+| NeuG | `neug` | in-process | implemented | Apache-2.0 |
+| ArcadeDB | `arcadedb-embedded` (bundles its JRE) | in-process (JVM), on disk | implemented | Apache-2.0 |
+| Neo4j Community | `JPype1` (the Community tarball and a Temurin 21 JRE are downloaded) | in-process (JVM), on disk | implemented | GPLv3 (Neo4j Community and GDS Community) |
+| DuckDB + DuckPGQ | `duckdb` (+ the `duckpgq` community extension) | in-process | implemented | MIT (DuckDB and duckpgq) |
+| Oxigraph | `pyoxigraph` | in-process | implemented | MIT OR Apache-2.0 |
+| HelixDB | `helix-db` + `helix-db-embedded` | in-process (embedded mode) | implemented | Apache-2.0 (engine and embedded runtime); Python SDK MIT |
 
-Neo4j is measured as Community only: the Enterprise terms restrict publishing benchmarks. The JVM databases
-fetch their jars and a Temurin 21 JRE into the data cache; nothing is committed. HelixDB is deferred if its
-embedded wheel is unusable on the benchmark platforms, as server-only databases are not part of the run.
+graph-bench downloads each database at run time and redistributes none of them.
+
+Neo4j is measured as Community only: the Enterprise terms restrict publishing benchmarks. Neo4j fetches its
+Community tarball and a Temurin 21 JRE into the data cache (SHA-256 checked, about 690 MB with the extracted
+copies); nothing is committed. Its algorithms use GDS Community from the same tarball. ArcadeDB's wheel bundles
+its own JRE. Both JVM databases get the same heap cap (see FAIRNESS.md). HelixDB has no query text in its Python
+SDK, so its queries are builders written with its Python DSL; the ones the DSL cannot express are marked not
+available (see `docs/known-disagreements.md`).
 
 ## The matrix
 
 The results are a capability matrix covering everything Grafeo does: one column per database, an overview with
 one row per category, and one detail table per category with one row per benchmark. There is never one combined
 score across categories. Each benchmark belongs to one data model (property graph, SQL/PGQ or RDF), which
-decides the databases that take part; the others get ⊘.
+decides the databases that take part; the others get ⊘. Property graph and SQL/PGQ queries read the same loaded
+property graph; RDF queries read the dataset's RDF triples (`graph_bench/datasets/rdf.py`), a load of its own, so
+the Load table has a separate row for it (⊘ for a database without RDF, as a load its models do not reach).
 
 | Category | Benchmarks | Databases | Status |
 | --- | --- | --- | --- |
-| Load | bulk load per dataset (SNB, Graphalytics), each database's fastest documented bulk path | all | implemented |
+| Load | bulk load per dataset (SNB, Graphalytics, SNB as RDF triples), each database's fastest documented bulk path | all | implemented |
 | Load (query language) | bulk load through the query language (`LOAD CSV`, `COPY` from a query) | databases with a query-language loader | planned |
 | Batch writes | batch insert, update, delete, upsert | property graph | planned |
 | Scans | label scan, property filter, aggregation, order and limit | property graph | planned |
 | Hops | 1, 2 and 3 hop expansion, variable-length paths, shortest path | property graph | IC13 implemented, the rest planned |
 | Pattern matching | triangles, cycles, multi-pattern joins | property graph | planned |
 | Complex queries | LDBC SNB Interactive short reads IS1 to IS7 and complex reads | property graph | IS1 to IS7, IC2, IC6 implemented |
-| Algorithms | Graphalytics BFS, WCC, PageRank, then CDLP, LCC, SSSP, Louvain, betweenness | databases with native algorithms | BFS, WCC, PR implemented |
+| Algorithms | Graphalytics BFS, WCC, PageRank, then CDLP, LCC, SSSP, Louvain, betweenness | databases with native algorithms and a property graph or SQL/PGQ model | BFS, WCC, PR implemented |
 | Vector search | kNN, batch kNN, recall@k, filtered kNN | databases with vector indexes | planned |
 | Hybrid | graph then vector, vector then graph | databases with both | planned |
-| RDF/SPARQL | Berlin SPARQL Benchmark (BSBM) | Grafeo, Oxigraph | planned |
-| SQL/PGQ | SNB queries in SQL/PGQ, DuckPGQ's published queries | Grafeo, DuckDB + DuckPGQ | planned |
+| RDF/SPARQL | SNB IS1, IS4, IS6 in SPARQL, then the Berlin SPARQL Benchmark (BSBM) | Grafeo, Oxigraph | SNB implemented, BSBM planned |
+| SQL/PGQ | SNB queries in SQL/PGQ, DuckPGQ's published queries | Grafeo, DuckDB + DuckPGQ | SNB IS1, IS4, IS6, IC13 implemented |
 | Crash and restore | on disk: reopen, crash mid-transaction, rollback, snapshot isolation, torn WAL tail, backup and restore | all | planned |
 | Deriva workload | a simulated multi-repo roundtrip using deriva's pipeline patterns | property graph | planned |
 | Project suites | each project's own published queries, as written | the owning database and any that can run them | planned |
@@ -73,7 +80,9 @@ CodSpeed records a benchmark as measured or skipped, so each marker maps to a fi
 Every benchmark first runs once, untimed: the preflight. The answer check and the time budget apply there, so a
 wrong or too slow result never reaches CodSpeed as a speed. One exception: a ⏱ assigned only by the final budget
 rule, applied after every database has run, comes after CodSpeed has measured the case. CodSpeed then shows that
-case as measured, while results.json and the matrix show ⏱. A ⏱ from the in-run cutoff is never measured.
+case as measured, while results.json and the matrix show ⏱. A ⏱ from the in-run cutoff is never measured. The
+same holds for a load: its node and edge count check runs after CodSpeed timed it, so a load with ≠ shows as
+measured in CodSpeed.
 
 ## Running it
 
@@ -126,23 +135,34 @@ median rank. It names no other database; this README names them all. At each Gra
 checklist runs, locally:
 
 ```bash
-uv run --no-sync graph-bench setup --grafeo path/to/grafeo.whl
+uv run --no-sync graph-bench setup --grafeo path/to/grafeo.whl --grafeo-sha <commit>
 uv run --no-sync graph-bench bench --selection full --out out
 uv run --no-sync graph-bench report --format summary --in out/results.json
 ```
 
-and commits the block on grafeo's release branch. No automation writes to grafeo.
+and commits the block on grafeo's release branch. No automation writes to grafeo. `--grafeo-sha` records the
+grafeo commit the wheel was built from, since a wheel does not name it and local builds of a release branch share
+one version string.
 
 ### CI
 
 - `.github/workflows/ci.yml`: lint and the test suite on Python 3.12 and 3.13, including the adapter tests
   against Grafeo and LadybugDB from PyPI.
 - `.github/workflows/bench.yml`: graph-bench's own CodSpeed project, separate from grafeo's CodSpeed benchmarks,
-  which it does not replace. It builds grafeo `main` from source and runs the `push` selection on CodSpeed's
-  macro runners in wall-time mode on every push to `main`, daily and on demand. The daily run also runs `full`
-  with `graph-bench bench` and opens a pull request on `bot/results` that updates the section below. Needs the
+  which it does not replace. It measures the newest stable release of every database from PyPI, grafeo
+  included (grafeo's own CodSpeed suite covers `main`): after the locked `uv sync` it upgrades the database
+  packages (`graph-bench packages`) without touching `uv.lock`, and the job log lists the installed versions.
+  It runs the `push` selection on CodSpeed's
+  Graviton macro runner (`codspeed-macro-arm64-graviton-ubuntu-22-04`, arm64) in wall-time mode on every push to `main`, daily and on demand. The daily run also runs `full`
+  with `graph-bench bench` and opens a pull request on `bot/results` that updates the section below. The databases install one at a time
+  (`.github/scripts/install-databases.sh`), so a package without a build for the runner does not stop the job: FalkorDB
+  has no arm64 build for glibc 2.35 (falkordblite ships `manylinux_2_38` wheels only), so its cases show ✗ (not
+  installed). Needs the
   CodSpeed app on graph-bench and codspeed-macro runners enabled for the org; authentication uses GitHub OIDC
   (no token secret).
+- `.github/workflows/pins.yml`: weekly (and on demand), checks for a newer stable Neo4j Community release and a
+  newer Temurin JRE of the Java major Neo4j requires, and opens a pull request on `bot/pins` that updates
+  `graph_bench/databases/pins.py` (URLs and SHA-256 from the vendors' published checksums).
 
 ## Results
 

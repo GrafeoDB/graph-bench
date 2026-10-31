@@ -9,17 +9,20 @@ imports a driver) and which environment its worker needs. It then starts the wor
 lines from its `--out` file as they arrive and records each entry.
 
 `case_timeout_s` bounds silence; the worker reports progress after every run. The worker writes a `progress`
-line after a case's preflight, after each warm-up and timed run, and after each load iteration, so the worker is
-killed only when one single run (or startup step) stays silent for `case_timeout_s`; a whole case may take
-longer. The same value goes to the worker as `--case-timeout`, the preflight budget of a case without an in-run
-budget. Before the worker's first `start` line (startup, driver import, dataset checks) the limit is at least
-`STARTUP_TIMEOUT_S`.
+line after a case's preflight call, after each warm-up and timed run, and after each load iteration, so the
+worker is killed only when one single run (or startup step, or harness step) stays silent for `case_timeout_s`;
+a whole case may take longer. The same value goes to the worker as `--case-timeout`, the preflight budget of a
+case without an in-run budget. Before the worker's first `start` line (startup, driver import, dataset checks)
+the limit is at least `STARTUP_TIMEOUT_S`.
 
-Time budgets (spec rule 8, order independent): a case gets an in-run `--budget` only when at least 3 earlier
-databases have an ok/agree preflight for it: 30x the mean of their 3 fastest, a runaway guard on first (cold)
-runs. The supervisor enforces it too: a worker silent for longer than that budget after the case's `start`
-line is killed and the case becomes `timeout` ("too slow: cut off at ..."). At the end `apply_budget_rule`
-compares every entry with the other databases only, at 10x on the final timings; that decides the marker.
+Time budgets (spec rule 8): a case gets an in-run `--budget` only when at least 3 earlier databases have an
+ok/agree preflight for it: 30x the mean of their 3 fastest, a runaway guard on first (cold) runs. This cutoff
+depends on which databases ran earlier. The supervisor enforces it too: it arms the cutoff on the case's `run`
+line, which the worker writes immediately before the preflight's database call, and disarms it on the next line
+(the `progress` line right after the call). A worker silent for longer than the budget in that window is killed
+and the case becomes `timeout` ("too slow: cut off at ..."); harness work (reference loading, the answer check)
+is outside the window. At the end `apply_budget_rule` compares every entry with the other databases only, at
+10x on the final timings; that decides the marker, and that final rule does not depend on the run order.
 
 Resume rule: when a worker exits non-zero or is killed for silence, the last `start` id without an entry
 becomes `failed` ("worker exited with code <n>") or `timeout`. When that id is a load, every not yet recorded
@@ -27,7 +30,8 @@ case of that dataset becomes `failed` ("load failed: <load id>") too, so a broke
 worker then starts with `--skip` for every recorded id. Without an open `start` id, every unrecorded id gets
 the failure and the database is done; so every restart records at least one id and the loop ends. With
 `Runner.rerun_passed` (CodSpeed), a killed or crashed process is relaunched even when every id is recorded, as
-long as a passed id is not retired, so CodSpeed measures the passed cases again (see `_Run._again`).
+long as a passed id is not retired, so CodSpeed measures the passed cases again (see `_Run._again`); pytest's
+normal exit code 1 with an open id (a harness bug) is not such a crash.
 """
 
 import importlib.metadata
@@ -54,13 +58,19 @@ from graph_bench.results import Entry, GrafeoSource, Machine, Reference, Results
 from graph_bench.runner.worker import DEFAULT_CASE_TIMEOUT_S, reference_kind
 from graph_bench.suites import catalog
 from graph_bench.suites.catalog import Selection
-from graph_bench.types import Category, Model, Timing
+from graph_bench.types import Category, Model, Store, Timing
 
 RESULTS_FILE = "results.json"
 GRAFEO_FILE = Path(".graph-bench") / "grafeo.json"
 STARTUP_TIMEOUT_S = 120.0
+# pytest's exit code when its session ended normally with failed tests; pytest-codspeed then kept its measurements.
+PYTEST_TESTS_FAILED = 1
 BUDGET_FACTOR = 10
 IN_RUN_FACTOR = 30
+# The in-run guard never cuts a case off below this: it exists to stop runaways, and a cold first run (a JVM
+# compiling a new query, a planner's first plan) can take tens of ms where the timed median is within budget. The
+# final 10x rule on medians decides the marker; the floor only bounds what a runaway costs.
+IN_RUN_FLOOR_S = 10.0
 _POLL_S = 0.05
 _ROOT = Path(__file__).resolve().parents[2]
 
@@ -75,6 +85,11 @@ except Exception as exc:
     doc = {"error": str(exc) or type(exc).__name__}
 print(json.dumps(doc))
 """
+
+
+def _platform_label() -> str:
+    """The platform a missing package is reported against, e.g. "linux/aarch64"."""
+    return f"{sys.platform}/{platform.machine().lower()}"
 
 
 def _tag(threads: int | None) -> str:
@@ -95,6 +110,7 @@ class _Meta:
     supported: bool
     reference: Reference | None
     load: bool = False
+    store: Store = "graph"
 
     def entry(self, bench_id: str, **fields: Any) -> Entry:
         reference = fields.pop("reference", None) or self.reference
@@ -126,33 +142,36 @@ def _expected(sel: Selection, db: str, threads: int | None) -> dict[str, _Meta]:
                 case.scale,
                 threads,
                 item.dataset,
-                supported=item.model in models,
+                supported=item.supported_by(models),
                 reference=reference_kind(item),
+                store=item.store,
             )
     if "load" in sel.categories:
-        for item in catalog.items(sel.name):
-            if item.model in models:
-                for scale in sel.scales:
-                    load_id = catalog.load_id(item.dataset, db, scale, threads)
-                    load = _Meta(
-                        "load",
-                        item.model,
-                        f"load_{item.dataset}",
-                        db,
-                        scale,
-                        threads,
-                        item.dataset,
-                        supported=True,
-                        reference=None,
-                        load=True,
-                    )
-                    meta.setdefault(load_id, load)
+        reached = set(catalog.load_keys(sel.name, models))
+        for (dataset, store), model in catalog.all_load_keys(sel.name).items():
+            for scale in sel.scales:
+                load_id = catalog.load_id(dataset, db, scale, threads, store)
+                meta[load_id] = _Meta(
+                    "load",
+                    model,
+                    catalog.load_benchmark(dataset, store),
+                    db,
+                    scale,
+                    threads,
+                    dataset,
+                    supported=(dataset, store) in reached,
+                    reference=None,
+                    load=True,
+                    store=store,
+                )
     return meta
 
 
 def _passed(entry: Entry) -> bool:
-    """A result CodSpeed measures: ok/agree, or ok for a load (which has no answer check)."""
-    return entry.status == "ok" and (entry.answer == "agree" or entry.category == "load")
+    """A result CodSpeed measures: ok/agree, or for a load ok and not ≠ (a load without `counts` is unchecked)."""
+    if entry.status != "ok":
+        return False
+    return entry.answer == "agree" or (entry.category == "load" and entry.answer == "unchecked")
 
 
 def _top3_mean(values: Sequence[float]) -> float:
@@ -161,7 +180,8 @@ def _top3_mean(values: Sequence[float]) -> float:
 
 
 def _budgets(entries: Sequence[Entry], db: str, meta: dict[str, _Meta]) -> dict[str, float]:
-    """Seconds per case: 30x the mean of the 3 smallest `preflight_ns` among earlier databases' ok/agree entries.
+    """Seconds per case: 30x the mean of the 3 smallest `preflight_ns` among earlier databases' ok/agree entries,
+    and at least `IN_RUN_FLOOR_S`.
 
     This in-run cutoff is a runaway guard on first (cold) runs; `apply_budget_rule` at 10x on the final timings
     decides the marker. Only cases with at least 3 such entries get a budget, so the in-run budget never depends
@@ -175,7 +195,7 @@ def _budgets(entries: Sequence[Entry], db: str, meta: dict[str, _Meta]) -> dict[
     for bench_id, m in meta.items():
         values = found.get((m.benchmark, m.scale, m.threads))
         if values and len(values) >= 3 and not m.load:
-            budgets[bench_id] = IN_RUN_FACTOR * _top3_mean(values) / 1e9
+            budgets[bench_id] = max(IN_RUN_FACTOR * _top3_mean(values) / 1e9, IN_RUN_FLOOR_S)
     return budgets
 
 
@@ -184,14 +204,14 @@ def apply_budget_rule(results: Results) -> None:
 
     A benchmark is an item at one scale and thread setting, across databases. Each entry's budget is 10x the
     mean of the 3 fastest other databases' ok/agree values for it (of all others if fewer than 3); with no
-    other such database no budget applies. The entry itself never counts, so the outcome does not depend on
-    order. Speed is `timing.median_ns` in bench mode and `preflight_ns` in codspeed mode. The timing of a
-    marked entry is kept.
+    other such database no budget applies. Loads (category "load") are exempt, as entries and as
+    yardsticks. The entry itself never counts, so the outcome does not depend on order. Speed is
+    `timing.median_ns` in bench mode and `preflight_ns` in codspeed mode. The timing of a marked entry is kept.
     """
     groups: dict[tuple[str, str, int | None], list[tuple[Entry, float]]] = {}
     for e in results.entries:
-        if e.status != "ok" or e.answer != "agree":
-            continue
+        if e.status != "ok" or e.answer != "agree" or e.category == "load":
+            continue  # a load is exempt: it has no budget and is not a yardstick (as in the in-run `m.load` rule)
         speed = (e.timing.median_ns if e.timing is not None else None) if results.mode == "bench" else e.preflight_ns
         if speed is not None:
             groups.setdefault((e.benchmark, e.scale, e.threads), []).append((e, float(speed)))
@@ -232,8 +252,13 @@ def grafeo_source() -> GrafeoSource:
     if GRAFEO_FILE.is_file():
         doc = json.loads(GRAFEO_FILE.read_text(encoding="utf-8"))
         if doc.get("version") == version:
-            return {"version": version, "source": doc.get("source", "unknown"), "sha": doc.get("sha")}
-    return {"version": version, "source": "pypi", "sha": None}
+            return {
+                "version": version,
+                "source": doc.get("source", "unknown"),
+                "sha": doc.get("sha"),
+                "git_sha": doc.get("git_sha"),
+            }
+    return {"version": version, "source": "pypi", "sha": None, "git_sha": None}
 
 
 def _native_cpu_name() -> str | None:
@@ -425,7 +450,8 @@ class _Run:
     def _not_installed(self, meta: dict[str, _Meta], error: str) -> None:
         for bench_id, m in meta.items():
             if m.supported:
-                self.record(m.entry(bench_id, status="failed", error=f"not installed: {error}"))
+                reason = f"not installed: {error} (the package is missing or has no build for {_platform_label()})"
+                self.record(m.entry(bench_id, status="failed", error=reason))
             else:
                 self.record(m.entry(bench_id, status="not_supported", error=f"model {m.model} not supported"))
 
@@ -461,13 +487,16 @@ class _Run:
         """Whether to relaunch after a hung or crashed attempt that `_settle` let continue.
 
         While ids are unrecorded, always. With `rerun_passed`, also when every id is recorded but a passed one
-        is not retired: the killed process took its CodSpeed measurements with it (e.g. its last case hung), so
-        the relaunch measures them again. Each such attempt retired its killed id, and a clean exit never gets
-        here (`_settle` returns False), so the loop ends.
+        is not retired, and only when the process was killed or crashed: it took its CodSpeed measurements with
+        it (e.g. its last case hung), so the relaunch measures them again. Exit code 1 (`PYTEST_TESTS_FAILED`)
+        with an open id is a harness bug in a session that ended normally, so the measurements were kept and
+        nothing is relaunched; the open id is already `failed`. Each relaunching attempt retired its killed id,
+        and a clean exit never gets here (`_settle` returns False), so the loop ends.
         """
         if any(i not in self.recorded for i in meta):
             return True
-        if not self.runner.rerun_passed or not (attempt.hung or attempt.code):
+        lost = attempt.hung or attempt.code not in (0, PYTEST_TESTS_FAILED)
+        if not self.runner.rerun_passed or not lost:
             return False
         return any(i not in self.retired and _passed(e) for i, e in self.recorded.items() if i in meta)
 
@@ -475,7 +504,7 @@ class _Run:
         """The ids a (re)launch must not run: every recorded id, or with `rerun_passed` only the marked ones.
 
         pytest-codspeed writes its measurements when the session ends, so a killed pytest loses all of them;
-        the relaunch runs the passed cases (ok/agree, or ok for a load) again so CodSpeed measures them. Their
+        the relaunch runs the passed cases (`_passed`) again so CodSpeed measures them. Their
         first entry stays (`record` keeps one per id). An id that was running when a process was killed or
         crashed is retired: never run again, so every relaunch still makes progress.
         """
@@ -489,7 +518,8 @@ class _Run:
             budget = f"{attempt.cutoff_s:.3g}"
             status, error = (
                 "timeout",
-                f"too slow: cut off at {budget} s ({IN_RUN_FACTOR}x the top-3 average of earlier databases)",
+                f"too slow: cut off at {budget} s ({IN_RUN_FACTOR}x the top-3 average of earlier databases, "
+                f"at least {IN_RUN_FLOOR_S:g} s)",
             )
         elif attempt.hung:
             status, error = "timeout", f"no output for {attempt.silence_s:g} s"
@@ -510,7 +540,7 @@ class _Run:
         self.record(failed.entry(pending, status=status, error=error))
         if failed.load:
             for bench_id, m in meta.items():
-                same_data = (m.dataset, m.scale) == (failed.dataset, failed.scale)
+                same_data = (m.dataset, m.store, m.scale) == (failed.dataset, failed.store, failed.scale)
                 if not m.load and same_data and bench_id not in self.recorded:
                     self.record(m.entry(bench_id, status="failed", error=f"load failed: {pending}"))
         return True
@@ -557,11 +587,12 @@ class _Run:
     ) -> _Attempt:
         """Read the worker's new lines until it exits or stays silent too long.
 
-        Silence is limited to `case_timeout_s`, and right after the `start` line of a case with an in-run budget
-        (its preflight) to that budget: a preflight beyond it is cut off there instead of running to its end.
+        Silence is limited to `case_timeout_s`, and right after the `run` line of a case with an in-run budget
+        (its preflight's database call) to that budget, until the next line: a preflight call beyond it is cut
+        off there instead of running to its end.
         """
         started = False
-        cutoff: float | None = None  # the in-run budget of the case whose `start` line came last
+        cutoff: float | None = None  # the in-run budget of the case whose `run` line is the last line
         buffer = b""
         last = time.monotonic()
         while True:
@@ -576,9 +607,9 @@ class _Run:
             buffer += chunk
             *lines, buffer = buffer.split(b"\n")
             for line in lines:
-                is_start = self._line(line, attempt, db, meta)
-                started |= is_start
-                cutoff = budgets.get(attempt.pending or "") if is_start else None
+                kind = self._line(line, attempt, db, meta)
+                started |= kind == "start"
+                cutoff = budgets.get(attempt.pending or "") if kind == "run" else None
             if lines:
                 last = time.monotonic()
             if code is not None:
@@ -594,21 +625,21 @@ class _Run:
                 return attempt
             time.sleep(_POLL_S)
 
-    def _line(self, raw: bytes, attempt: _Attempt, db: str, meta: dict[str, _Meta]) -> bool:
-        """Handle one worker line; whether it was a `start` line.
+    def _line(self, raw: bytes, attempt: _Attempt, db: str, meta: dict[str, _Meta]) -> str | None:
+        """Handle one worker line; its kind, or None for an unreadable line.
 
-        Every line resets the silence timer in `_follow`; that is all a `progress` line does.
+        Every line resets the silence timer in `_follow`; that is all a `progress` line does, and a `run` line
+        also arms the in-run cutoff there.
         """
         try:
             line = json.loads(raw)
         except ValueError:
-            return False  # the end of a line a killed worker left unfinished
+            return None  # the end of a line a killed worker left unfinished
         kind = line.pop("kind", None)
         if kind == "database":
             self.results.databases[db] = DatabaseInfo(**line)
         elif kind == "start":
             attempt.pending = line["id"]
-            return True
         elif kind == "entry":
             bench_id = line.pop("id")
             if attempt.pending == bench_id:
@@ -616,7 +647,7 @@ class _Run:
             timing = line.pop("timing", None)
             entry = meta[bench_id].entry(bench_id, timing=Timing(**timing) if timing else None, **line)
             self.record(entry)
-        return False
+        return kind
 
 
 def run_bench(

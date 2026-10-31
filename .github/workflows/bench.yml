@@ -2,7 +2,9 @@
 # Needs the CodSpeed app on graph-bench and codspeed-macro runners enabled for the org; authentication uses
 # GitHub OIDC (no token secret).
 #
-# Both jobs measure grafeo `main`, built from source (graph-bench setup --grafeo grafeo), never the PyPI release.
+# Both jobs measure the newest stable release of every database from PyPI, grafeo included: after `uv sync --frozen`
+# they install the database packages (graph-bench packages) one at a time, leaving uv.lock alone. Grafeo's own
+# CodSpeed suite covers grafeo main. `graph-bench setup --grafeo <path>` stays a local option.
 #   codspeed: the push selection under CodSpeed in wall-time mode, on every push to main, daily and on demand.
 #   readme:   the full selection with `graph-bench bench`, daily and on demand; it regenerates the README's
 #             results section and opens a pull request on the branch bot/results.
@@ -18,43 +20,35 @@ on:
 permissions:
   contents: read
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
   codspeed:
     name: CodSpeed (push selection)
     # Needs the CodSpeed app on graph-bench and codspeed-macro runners enabled for the org; authentication uses
-    # GitHub OIDC (no token secret), hence id-token: write.
-    runs-on: codspeed-macro
+    # GitHub OIDC (no token secret), hence id-token: write. The explicit Graviton (arm64, Ubuntu 22.04) label is
+    # the macro runner the plain `codspeed-macro` used to alias; the dataset cache key carries runner.arch.
+    runs-on: codspeed-macro-arm64-graviton-ubuntu-22-04
     permissions:
       contents: read
       id-token: write
     steps:
       - uses: actions/checkout@v7
-      - name: Check out grafeo main
-        uses: actions/checkout@v7
-        with:
-          repository: GrafeoDB/grafeo
-          ref: main
-          path: grafeo
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: grafeo
       - uses: astral-sh/setup-uv@v10.3.3
         with:
           python-version: "3.13"
-      - run: uv sync --frozen --extra embedded --extra bench
-      - name: Build and install grafeo main
-        run: uv run --no-sync graph-bench setup --grafeo grafeo
+      - run: uv sync --frozen --extra bench
+      - name: Install the databases at their newest stable releases
+        # The lockfile keeps the repo reproducible; a benchmark run measures the databases as released today
+        # (grafeo from PyPI too). One package at a time, so a package with no build for this runner (falkordblite
+        # needs glibc 2.38, Ubuntu 22.04 has 2.35) does not stop the job: it is logged and its database shows as
+        # failed. uv never picks a pre-release here, and uv.lock is not touched.
+        run: bash .github/scripts/install-databases.sh
       - name: Dataset cache key
         id: data-key
         run: echo "key=$(uv run --no-sync graph-bench data key --selection push)" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@v6
         with:
           path: ~/.cache/graph-bench
-          key: graph-bench-data-${{ steps.data-key.outputs.key }}
+          key: graph-bench-data-${{ runner.arch }}-${{ steps.data-key.outputs.key }}
       - run: uv run --no-sync graph-bench data prepare --selection push
       - name: Benchmark plan
         run: uv run --no-sync graph-bench list --selection push
@@ -73,36 +67,30 @@ jobs:
   readme:
     name: README results (full selection)
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    # Needs codspeed-macro runners enabled for the org (no CodSpeed upload, so no token).
-    runs-on: codspeed-macro
+    # Needs codspeed-macro runners enabled for the org (no CodSpeed upload, so no token). Same runner as above.
+    runs-on: codspeed-macro-arm64-graviton-ubuntu-22-04
     permissions:
       contents: write
       pull-requests: write
     steps:
       - uses: actions/checkout@v7
-      - name: Check out grafeo main
-        uses: actions/checkout@v7
-        with:
-          repository: GrafeoDB/grafeo
-          ref: main
-          path: grafeo
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: grafeo
       - uses: astral-sh/setup-uv@v10.3.3
         with:
           python-version: "3.13"
-      - run: uv sync --frozen --extra embedded --extra bench
-      - name: Build and install grafeo main
-        run: uv run --no-sync graph-bench setup --grafeo grafeo
+      - run: uv sync --frozen --extra bench
+      - name: Install the databases at their newest stable releases
+        # The lockfile keeps the repo reproducible; a benchmark run measures the databases as released today
+        # (grafeo from PyPI too). One package at a time, so a package with no build for this runner (falkordblite
+        # needs glibc 2.38, Ubuntu 22.04 has 2.35) does not stop the job: it is logged and its database shows as
+        # failed. uv never picks a pre-release here, and uv.lock is not touched.
+        run: bash .github/scripts/install-databases.sh
       - name: Dataset cache key
         id: data-key
         run: echo "key=$(uv run --no-sync graph-bench data key --selection full)" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@v6
         with:
           path: ~/.cache/graph-bench
-          key: graph-bench-data-${{ steps.data-key.outputs.key }}
+          key: graph-bench-data-${{ runner.arch }}-${{ steps.data-key.outputs.key }}
       - run: uv run --no-sync graph-bench data prepare --selection full
       - name: Benchmark plan
         run: uv run --no-sync graph-bench list --selection full
@@ -123,7 +111,7 @@ jobs:
           commit-message: Update benchmark results
           body: |
             The results section of README.md, regenerated by the scheduled `full` run
-            (`graph-bench bench --selection full`) against grafeo `main` built from source.
+            (`graph-bench bench --selection full`) against the newest stable release of each database.
             The run's results.json is attached to the workflow run as the artifact `results-full`.
           add-paths: README.md
           delete-branch: true

@@ -33,12 +33,16 @@ venv/
 # ── Testing & coverage ───────────────────────────────────────────────
 .pytest_cache/
 .coverage
+.coverage.*
+.cache-*/
 htmlcov/
 .tox/
 .nox/
 
 # ── Embedded database data ───────────────────────────────────────────
 data/
+# ArcadeDB's default engine log directory (the adapter moves it to a temporary directory; this is a safety net)
+log/
 
 # ── Results ───────────────────────────────────────────────────────────
 results/*

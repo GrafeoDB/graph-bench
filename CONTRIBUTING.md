@@ -83,6 +83,10 @@ class MyDatabase(Database):
         """Run one query and return its rows as tuples of scalars."""
         ...
 
+    def counts(self) -> tuple[int, int]:
+        """The number of nodes and edges loaded, counted through the database's own query interface; untimed."""
+        ...
+
     def algorithm(self, name: str, params: Mapping[str, Any]) -> dict[Any, Any]:
         """Native "bfs", "wcc" or "pr": vertex id -> value. Leave it out (NotSupported) without a native one."""
         raise NotSupported(name)
@@ -96,9 +100,29 @@ class MyDatabase(Database):
 - Load with the database's fastest documented bulk path, CSV parsing included.
 - `query()` returns the rows as Python tuples of scalars. Materializing them is part of the timed region;
   canonicalizing them is not.
-- Queries use the shared openCypher text (`dialect = "cypher"`). Where the database needs another text, give it
-  its own `dialect` and add that key to the query's `text` mapping in `graph_bench/suites/snb.py`, with the
-  same meaning and the same answer.
+- Queries use their model's shared standard text: openCypher for the property graph (`graph_bench/suites/snb.py`),
+  SQL/PGQ (`snb_sql.py`) and SPARQL (`snb_rdf.py`). Where the database needs another text, give it its own
+  `dialect` and add that key to the query's `text` mapping, with the same meaning and the same answer, and the
+  reason in a comment; a query without that key falls back to its model's standard text.
+- A database with more than one model sets `dialects` (model to dialect, e.g. Grafeo's
+  `{"property_graph": "cypher", "sql_pgq": "sql_pgq", "rdf": "sparql"}`) and overrides `query_model(model, text,
+  params)` to send each model to its query interface. Property graph and SQL/PGQ queries read the graph store, RDF
+  queries the RDF store (`types.MODEL_STORE`); the worker loads each store into its own instance with
+  `load_store(store, dataset)`, which a database with an RDF store besides its graph overrides. A single-model
+  database implements only `load` and `query`.
+- An RDF database loads the dataset's N-Triples file, `graph_bench.datasets.rdf.ntriples_path(dataset)`, with
+  its own documented file loader (e.g. Oxigraph `Store.bulk_load(path=..., format=RdfFormat.N_TRIPLES)`). The file
+  holds the shared mapping and is written untimed when the data is prepared, so only the loader is in the load
+  clock. It binds query parameters with `rdf.bind`, converts result literals with `rdf.python_value` and counts
+  with `rdf.COUNT_NODES` and `rdf.COUNT_EDGES`.
+- Which items a database runs follows from its `models` (`item.supported_by(models)` in
+  `graph_bench/suites/__init__.py`): a query needs its own model; a Graphalytics algorithm needs a property graph
+  or SQL/PGQ model, so an SQL/PGQ-only database gets the Graphalytics load and its `algorithm()` is called. A case
+  or a load its models do not reach is ⊘ ("model <m> not supported").
+- `counts()` checks the load: the worker calls it right after each timed load, outside the clock, and a
+  mismatch with the dataset's node and edge counts makes the load ≠. Count with a documented query (e.g. Cypher
+  `MATCH (n) RETURN count(n)` and `MATCH ()-[r]->() RETURN count(r)`). Without it (the default raises
+  `NotSupported`) the load stays unchecked.
 - Raise `NotSupported` for a capability the database lacks; the case is reported as ⊘.
 - Add the package as an optional extra in `pyproject.toml` (and to `embedded` when it installs from PyPI on
   Linux, macOS and Windows), then run `uv lock`.
@@ -119,8 +143,8 @@ A database outside this repository can be tried without registering it:
 
 Add `tests/test_db_<name>.py` following `tests/test_db_ladybug.py`: `pytest.importorskip` the driver, run
 `run_bench("push", ["<name>"], ...)` on the `push_data_dir` fixture, and require every entry to be `ok` with an
-`agree` answer (loads have no answer), except `not_supported` entries and the ids recorded for the database in
-`docs/known-disagreements.md`. Add a test of the thread settings (`process_env`, `info().threads_note`).
+`agree` answer (for a load, its node and edge counts), except the worker's model gate (`not_supported` with
+exactly "model <model> not supported") and the ids recorded for the database in `docs/known-disagreements.md`. Add a test of the thread settings (`process_env`, `info().threads_note`).
 
 ### 4. Record disagreements
 

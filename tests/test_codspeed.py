@@ -19,7 +19,7 @@ from graph_bench.suites import catalog
 from graph_bench.suites.catalog import Case
 
 ROOT = Path(__file__).resolve().parents[1]
-EXTRA = "fake=tests.fakes:FakeDatabase,fake2=tests.fakes:FakeDatabase2"
+EXTRA = "fake=tests.fakes:FakeDatabase,fake2=tests.fakes:FakeDatabase2,fake_rdf=tests.fakes:FakeRdfDatabase"
 
 
 def _id(item_id: str, db: str = "fake") -> str:
@@ -71,10 +71,16 @@ def _without_codspeed(launches: list[tuple[list[str], dict[str, str]]]) -> Any:
 def codspeed_run(
     push_data_dir: Path, tmp_path_factory: pytest.TempPathFactory
 ) -> tuple[Results, list[tuple[list[str], dict[str, str]]], Path]:
-    """`graph-bench codspeed --selection push --db fake,fake2`, with CODSPEED_PROFILE_FOLDER set."""
+    """`graph-bench codspeed --selection push --db fake,fake2`, with CODSPEED_PROFILE_FOLDER set.
+
+    The final 10x rule is switched off: here it would compare single cold preflights of two fakes, which can
+    differ by 10x at random. `test_budget_rule_is_order_independent` (test_supervisor.py) covers it in codspeed
+    mode.
+    """
     root = tmp_path_factory.mktemp("codspeed")
     launches: list[tuple[list[str], dict[str, str]]] = []
     with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(supervisor, "BUDGET_FACTOR", 1e9)
         mp.setenv("GRAPH_BENCH_DATA_DIR", str(push_data_dir))
         mp.setenv("GRAPH_BENCH_FAKE", "")
         mp.setenv("GRAPH_BENCH_FAKE2", "wrong:snb_is5")
@@ -200,6 +206,79 @@ def test_codspeed_environment_failure_fails_the_loads(push_data_dir: Path, tmp_p
         assert (entries[_id(item)]["status"], entries[_id(item)]["error"]) == ("failed", f"load failed: {error}")
 
 
+def _junit_outcomes(junit: Path) -> dict[str, tuple[str, str]]:
+    outcomes: dict[str, tuple[str, str]] = {}
+    for case in ET.parse(junit).getroot().iter("testcase"):
+        name = case.get("name", "")
+        for kind in ("skipped", "failure", "error"):
+            node = case.find(kind)
+            if node is not None:
+                outcomes[name] = (kind, node.get("message", "").removeprefix("Failed: "))
+                break
+        else:
+            outcomes[name] = ("passed", "")
+    return outcomes
+
+
+def test_codspeed_load_count_mismatch_is_a_wrong_answer(push_data_dir: Path, tmp_path: Path) -> None:
+    junit = tmp_path / "junit.xml"
+    out = tmp_path / "gb.jsonl"
+    args = ["--db", "fake", "--selection", "push", "--gb-out", str(out), f"--junitxml={junit}"]
+    args += ["-k", "test_load_snb or test_snb_is4"]
+    proc = _pytest(args, _env(push_data_dir, "short:count_snb"))
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    outcomes = _junit_outcomes(junit)
+    kind, reason = outcomes["test_load_snb[fake-small]"]
+    assert kind == "failure"
+    assert reason.startswith("wrong answer: loaded "), reason
+    assert outcomes["test_snb_is4[fake-small]"] == ("passed", "")  # it runs on the instance the load test kept
+
+    lines = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
+    entries = {line["id"]: line for line in lines if line["kind"] == "entry"}
+    load = entries[catalog.load_id("snb", "fake", "small", 1)]
+    assert (load["status"], load["answer"]) == ("ok", "disagree")
+    assert load["detail"].startswith("loaded ") and load["load_ns"] > 0
+
+
+def _codspeed_run(tmp_path: Path) -> tuple[supervisor._Run, dict[str, supervisor._Meta]]:
+    sel = catalog.selection("push")
+    results = Results(
+        graph_bench_commit="x",
+        grafeo={"version": None, "source": "pypi", "sha": None},
+        machine={"cpu": "c", "cores": 1, "os": "o"},
+        selection="push",
+        mode="codspeed",
+        started_at="t",
+        databases={},
+    )
+    return supervisor._Run(sel, tmp_path, tmp_path, 5.0, results, supervisor.PYTEST), supervisor._expected(
+        sel, "fake", 1
+    )
+
+
+def test_codspeed_rerun_skips_a_load_with_wrong_counts(tmp_path: Path) -> None:
+    run, meta = _codspeed_run(tmp_path)
+    good, bad = catalog.load_id("graphalytics", "fake", "small", 1), catalog.load_id("snb", "fake", "small", 1)
+    run.record(meta[good].entry(good, status="ok", answer="agree", load_ns=1))
+    run.record(meta[bad].entry(bad, status="ok", answer="disagree", load_ns=1))
+    assert run._skip(meta) == [bad]
+
+
+@pytest.mark.parametrize(("code", "relaunch"), [(1, False), (3, True)])
+def test_codspeed_rerun_only_after_a_lost_session(tmp_path: Path, code: int, relaunch: bool) -> None:
+    """Exit code 1 with an open id is a harness bug in a session that ended normally: CodSpeed kept its
+    measurements, so nothing is relaunched. Another code (a crash) lost them: the passed ids run again."""
+    run, meta = _codspeed_run(tmp_path)
+    pending = _id("snb_is4")
+    for bench_id, m in meta.items():
+        if bench_id != pending:
+            run.record(m.entry(bench_id, status="ok", answer="agree"))
+    attempt = supervisor._Attempt(code=code, pending=pending)
+    assert run._settle(attempt, meta)
+    assert (run.recorded[pending].status, run.recorded[pending].error) == ("failed", f"pytest exited with code {code}")
+    assert run._again(attempt, meta) is relaunch
+
+
 def test_codspeed_rerun_remeasures_passed_cases(
     push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -244,14 +323,14 @@ def test_codspeed_rerun_when_the_last_case_hangs(
     """The last case hangs, so nothing is left unrecorded; the passed cases still get a relaunch to be measured."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("GRAPH_BENCH_DATA_DIR", str(push_data_dir))
-    monkeypatch.setenv("GRAPH_BENCH_FAKE", "hang:snb_ic13")
+    monkeypatch.setenv("GRAPH_BENCH_FAKE", "hang:snb_rdf_is6")
     launches: list[tuple[list[str], dict[str, str]]] = []
     monkeypatch.setattr(supervisor, "_launch", _without_codspeed(launches))
     out = tmp_path / "out"
     results = supervisor.run_codspeed("push", ["fake"], out, workdir=tmp_path / "work", case_timeout_s=3)
 
     lines = [json.loads(line) for line in (out / "raw" / "fake-1" / "pytest.jsonl").read_text("utf-8").splitlines()]
-    hung = _id("snb_ic13")
+    hung = _id("snb_rdf_is6")  # the last case: the RDF store is loaded and run last
     second = next(i for i, line in enumerate(lines) if i > 0 and line["kind"] == "database")
     first_starts = [line["id"] for line in lines[:second] if line["kind"] == "start"]
     assert first_starts[-1] == hung  # the last case of the first process
@@ -334,3 +413,23 @@ def test_codspeed_rejects_unknown_db_before_install(monkeypatch: pytest.MonkeyPa
     )
     assert result.exit_code == 2
     assert "nope" in result.output
+
+
+def test_codspeed_reports_unreached_loads_as_not_available(push_data_dir: Path, tmp_path: Path) -> None:
+    """An RDF-only database: the graph loads are skipped as ⊘ with the model gate's error, its RDF load and RDF
+    cases pass, and the ids equal `graph-bench list`."""
+    out = tmp_path / "rdf.jsonl"
+    proc = _pytest(["--db", "fake_rdf", "--selection", "push", "--gb-out", str(out), "-rs"], _env(push_data_dir))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    lines = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
+    entries = {line["id"]: line for line in lines if line["kind"] == "entry"}
+    assert set(entries) == _expected_ids("fake_rdf")
+    for dataset in ("snb", "graphalytics"):
+        load = entries[catalog.load_id(dataset, "fake_rdf", "small", 1)]
+        assert (load["status"], load["error"]) == ("not_supported", "model property_graph not supported")
+    assert "not available: model property_graph not supported" in proc.stdout
+    rdf_load = entries[catalog.load_id("snb", "fake_rdf", "small", 1, "rdf")]
+    assert (rdf_load["status"], rdf_load["answer"]) == ("ok", "agree")
+    for case in catalog.cases("push", ["fake_rdf"]):
+        if case.item.model == "rdf":
+            assert (entries[case.bench_id]["status"], entries[case.bench_id]["answer"]) == ("ok", "agree")

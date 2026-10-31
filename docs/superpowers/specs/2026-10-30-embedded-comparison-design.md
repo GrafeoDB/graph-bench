@@ -13,7 +13,7 @@ The new code fully replaces the current benchmark. The current code moves to `le
 | Database | Package | Process | Notes |
 |---|---|---|---|
 | Grafeo | `grafeo` | in-process | query executor is single-threaded until parallel queries land (0.6.4); only rayon parts (vector batch, clustering, folds) are parallel, set with `RAYON_NUM_THREADS` |
-| LadybugDB | `real_ladybug` | in-process | `max_num_threads`, `buffer_pool_size`; ALGO extension for algorithms |
+| LadybugDB | `ladybug` | in-process | `max_num_threads`, `buffer_pool_size`; ALGO extension for algorithms |
 | TuringDB | `turingdb` | in-process | new adapter for `TuringDB(type="embedded", data_dir=...)`; HTTP adapter is not comparable |
 | FalkorDB | `falkordblite` | local process | runs a Redis server subprocess, reported as "local process" |
 | NeuG | `neug` 0.3.0 | in-process | |
@@ -45,7 +45,7 @@ Each benchmark belongs to one category and one data model (property graph, SQL/P
 | Hops | 1, 2, 3 hop expansion, variable-length paths, shortest path [IC13] | property graph DBs |
 | Pattern matching | triangles, cycles, multi-pattern joins | property graph DBs |
 | Complex queries | LDBC SNB Interactive short reads IS1-7 and complex reads [IS1-7, IC2, IC6] | property graph DBs |
-| Algorithms | Graphalytics BFS, WCC, PR [these three], then CDLP, LCC, SSSP, Louvain, betweenness | DBs with native algorithms |
+| Algorithms | Graphalytics BFS, WCC, PR [these three], then CDLP, LCC, SSSP, Louvain, betweenness | DBs with native algorithms and a model that reads a property graph (property graph or SQL/PGQ); RDF-only DBs get ⊘ |
 | Vector search | kNN, batch kNN, recall@k, filtered kNN | DBs with vector indexes |
 | Hybrid | graph then vector, vector then graph | DBs with both |
 | RDF/SPARQL | Berlin SPARQL Benchmark (BSBM) | Grafeo, Oxigraph |
@@ -86,9 +86,9 @@ These go into FAIRNESS.md, which is trimmed to embedded use.
 6. Queries return scalar values only (no node or edge objects) and order fully, with tie-breakers, whenever they use `LIMIT`.
 7. PageRank is compared at convergence (damping 0.85), with the LDBC relative epsilon of 0.0001.
 8. The time budget per benchmark is 10x the average median of the 3 fastest *other* databases with correct answers (the average over those available if fewer than 3; no budget when no other database has a correct result). This final rule, on medians, decides the ⏱ marker.
-   - **During a run, a runaway guard:** databases run one after another. Once at least 3 earlier databases have correct times, a later database's preflight, its first (cold) run, is cut off at 30x the average of their 3 fastest preflights: the supervisor kills the worker as soon as the preflight runs past that budget and records ⏱ with "too slow: cut off at <b> s (30x the top-3 average of earlier databases)". The cutoff only stops runaway cases early; because it measures cold first runs, it is set well above the final rule. Before 3 earlier results exist, only a hard cap applies (`--case-timeout`, default 600 s, measured as silence: the worker reports progress after every run).
-   - **After the run:** the 10x rule is applied over all results, each entry against the other databases. Any benchmark beyond its budget becomes ⏱, so the run order never decides the marker.
-   - Loads are timed but not answer-checked and are exempt from this rule; a node and edge count check is planned with the next adapters.
+   - **During a run, a runaway guard:** databases run one after another. Once at least 3 earlier databases have correct times, a later database's preflight, its first (cold) run, is cut off at 30x the average of their 3 fastest preflights, and never below 10 s: the supervisor kills the worker as soon as the preflight's database call runs past that budget and records ⏱ with "too slow: cut off at <b> s (30x the top-3 average of earlier databases, at least 10 s)". The floor exists because a cold first run (a JVM compiling a new query, a first plan) can take tens of milliseconds where the timed median is within budget; it was added after a full run in which Neo4j, run last, had most of its small-scale cases cut off at 30 to 260 ms although their medians were within the final rule. The window is the database call alone: the worker writes a `run` line immediately before the call and a `progress` line immediately after it, and the supervisor arms the cutoff on the first and disarms it on the second, so reference loading and the answer check never count. The cutoff only stops runaway cases early; because it measures cold first runs, it is set well above the final rule. It depends on which databases ran earlier, so a ⏱ from the cutoff can depend on the run order. Before 3 earlier results exist, only a hard cap applies (`--case-timeout`, default 600 s, measured as silence: the worker reports progress after every run).
+   - **After the run:** the 10x rule is applied over all results, each entry against the other databases. Any benchmark beyond its budget becomes ⏱. The run order never decides a ⏱ from this final rule (unlike the in-run cutoff above).
+   - Loads are exempt from this rule. They are count-checked: right after each timed load, outside the clock, the worker calls the adapter's optional `counts()` (the number of nodes and edges loaded, counted through the database's own query interface, e.g. a Cypher count over all nodes and over all relationships) and compares it with the dataset's `node_count` and `edge_count` in schema.json. A mismatch gives the load answer `disagree` (≠) with a detail like "loaded 4177 nodes, 37000 edges; expected 4177 nodes, 37860 edges"; an adapter without `counts()` (it raises `NotSupported`) leaves the load `unchecked`; an error while counting makes the load entry `failed` (✗), while its cases still run on the loaded instance.
 
 ## Datasets
 
@@ -104,7 +104,7 @@ These go into FAIRNESS.md, which is trimmed to embedded use.
 
 | Command | Purpose |
 |---|---|
-| `graph-bench setup --grafeo <wheel-or-checkout>` | installs a grafeo wheel, or builds one from a checkout with maturin; writes `.graph-bench/grafeo.json` (version, wheel sha256, git sha). `GRAPH_BENCH_GRAFEO=<path>` does the same at the start of `bench`/`codspeed` |
+| `graph-bench setup --grafeo <wheel-or-checkout>` | installs a grafeo wheel, or builds one from a checkout with maturin; writes `.graph-bench/grafeo.json` (version, wheel sha256, git sha: a checkout's commit, or `--grafeo-sha <commit>` for a wheel, which records no commit). `GRAPH_BENCH_GRAFEO=<path>` does the same at the start of `bench`/`codspeed` |
 | `graph-bench data prepare --selection S` / `data key --selection S` | generate or download datasets, JRE, jars; print the cache key |
 | `graph-bench list --selection S` | stable, sorted plan: one benchmark id per line |
 | `graph-bench bench --selection S [--db a,b] [--grafeo PATH] --out DIR` | local and pre-release run: one worker process per database, writes `DIR/results.json` |
@@ -160,15 +160,17 @@ grafeo's README never names other graph databases unless the user decides on tha
 
 - One row per matrix category where Grafeo has at least one benchmark, in the matrix's category order.
 - "DBs" counts the databases with at least one correct result in that row.
-- "Grafeo fastest" is `k / n`: n is the number of benchmarks where Grafeo's answer agreed, ⏱ included (a load, which has no answer check, counts when it completed), and k the number where Grafeo has the lowest median time.
+- "Grafeo fastest" is `k / n`: n is the number of benchmarks where Grafeo's answer agreed, ⏱ included (a load counts when it completed and its count check did not disagree; an entry that failed after its answer agreed does not count), and k the number where Grafeo has the lowest median time.
 - "Median rank" is Grafeo's median position over those benchmarks.
 - When Grafeo itself has a marker, a line under the table names the benchmark and the marker, e.g. `Grafeo: ≠ on snb_ic6`, so Grafeo's own gaps are never hidden. The legend line `⊘ not available · ✗ failing · ≠ wrong answer · ⏱ beyond 10x the top-3 average` is added only when such a line exists.
 
 ## CI and publishing
 
-- **graph-bench workflow:** runs on `codspeed-macro` runners in wall-time mode, on push, on a schedule and on demand.
+- **graph-bench workflow:** runs on CodSpeed's Graviton macro runner (`codspeed-macro-arm64-graviton-ubuntu-22-04`: arm64, Ubuntu 22.04, glibc 2.35; the user's choice, 2026-10-31) in wall-time mode, on push, on a schedule and on demand.
 - **Separate CodSpeed project:** graph-bench's CodSpeed results are their own project, owned by the graph-bench repo. They sit next to grafeo's existing CodSpeed benchmarks, which keep finding grafeo regressions on releases, and never replace or feed them.
-- **Grafeo build:** the workflow measures grafeo main built from source. This is the user's choice: main only, not the PyPI release.
+- **Grafeo build:** the workflow measures the latest PyPI release of grafeo, like every other database; grafeo's own CodSpeed suite covers main. This is the user's choice (2026-10-31). `setup --grafeo <path>` stays a local option.
+- **Database versions:** before each benchmark run the workflow syncs the non-database extras from the lock, then installs each database package of the `embedded` extra on its own at its newest stable release (`graph-bench packages`, `.github/scripts/install-databases.sh`), without changing uv.lock. A package with no installable build for the runner is logged with the installer's reason and does not stop the job; its database then shows as failed ("not installed") for every case, since vendors fix their own platform gaps. FalkorDB is the one such gap on this runner: falkordblite 0.11.0 ships only `manylinux_2_38` wheels and the runner has glibc 2.35. Neo4j's Temurin JRE is pinned for linux x86_64, linux aarch64 and windows amd64. The test CI stays on the lock.
+- **Pins:** `pins.yml` checks weekly for a newer stable Neo4j Community release and a newer Temurin JRE of the Java major Neo4j requires, and opens a pull request on `bot/pins` that updates `graph_bench/databases/pins.py`.
 - **graph-bench README:** a scheduled `full` run regenerates its results section and opens a bot PR.
 - **grafeo README:** at each grafeo release (from 0.6.1), the pre-release checklist runs `setup --grafeo <wheel>`, `bench --selection full` and `report --format summary` locally, and commits the block on grafeo's release branch. No automation writes to grafeo.
 - **Workflow switch-on:** the grafeo-side workflow trigger is gone; the graph-bench workflow is enabled once the adapters and the answer check have settled.

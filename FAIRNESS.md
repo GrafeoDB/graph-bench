@@ -12,15 +12,28 @@ benchmark, servers included, is kept in [legacy/](legacy/README.md).
 1. **Each database runs in its own process.** A Python process can host only one JVM, and separate processes
    keep allocators and caches from interfering. `graph-bench bench` starts one worker per database;
    `graph-bench codspeed` starts one `pytest benches --codspeed` process per database.
-2. **JVM databases get the same warm-up as the others**, and JVM startup is not timed. A memory cap shared by
-   every database is planned: it arrives with the JVM adapters (ArcadeDB, Neo4j Community), none of which
-   exists yet.
+2. **JVM databases get the same warm-up as the others**, and JVM startup is not timed: each JVM database starts
+   its process's JVM once, before any timed load (`prepare_environment`), and one JVM database runs per process.
+   Every JVM database gets the same maximum heap, `-Xmx4g` (`MAX_HEAP` in `graph_bench/databases/jvm.py`),
+   checked after the JVM starts. Without a cap the JVM would take a quarter of the machine's RAM; 4 GiB is
+   ArcadeDB's own default and leaves room on a 16 GB CI runner for off-heap memory and the harness. The native
+   databases have no runtime memory cap to set.
 3. **Every database runs single-threaded.** A database whose thread count can't be set is marked as such, and
    each database's `threads_note` in results.json says how the setting was applied:
    - Grafeo: `RAYON_NUM_THREADS=1` in its worker, note "single-threaded executor". Grafeo's query executor is
      single-threaded until parallel queries land in grafeo 0.6.4; only its rayon parts (vector batch,
      clustering, folds) are parallel, and the variable sets those to one thread.
    - LadybugDB: `max_num_threads=1`.
+   - JVM databases (ArcadeDB, Neo4j Community): the JVM's own threads are capped too, `-XX:ParallelGCThreads=1`,
+     `-XX:ConcGCThreads=1` (the default collector is kept) and `-XX:CICompilerCount=2`, the lowest HotSpot accepts
+     with tiered compilation, which stays on (one C1 and one C2 compiler thread). The JVM's other service threads
+     are not capped.
+   - ArcadeDB: also its query, scan and async thread pools and the JVM's common fork-join pool set to 1 (the note
+     lists them); its housekeeping threads are not capped.
+   - Neo4j Community: Cypher runs each query on the calling thread (the parallel runtime is Enterprise only); GDS
+     gets `concurrency: 1` and `readConcurrency: 1`, `neo4j-admin database import` gets `--threads=1` and the
+     JVM caps above. Its background threads (page cache flushing, checkpointing, index population) have no
+     documented setting and are not capped.
 
    **Planned with grafeo 0.6.4:** the all-cores runs come back to the `full` selection, reported as a separate
    set of tables, and Grafeo's adapter switches from `RAYON_NUM_THREADS` to the real thread setting 0.6.4
@@ -40,13 +53,17 @@ benchmark, servers included, is kept in [legacy/](legacy/README.md).
    result). This final rule, on medians, decides the ⏱ marker.
    - **During a run, a runaway guard:** databases run one after another. Once at least 3 earlier databases have
      correct times, a later database's preflight, its first (cold) run, is cut off at 30x the average of their
-     3 fastest preflights: the supervisor stops the worker as soon as the preflight runs past that budget, and
-     the case becomes ⏱ ("too slow: cut off at ..."). The cutoff only stops runaway cases early; because it
-     measures cold first runs, it is set well above the final rule. Before 3 earlier results exist, only a hard
+     3 fastest preflights, and never below 10 s (a cold first run, such as a JVM compiling a new query, can take
+     tens of milliseconds where the timed median is within budget): the supervisor stops the worker as soon as the preflight's database call runs past
+     that budget, and the case becomes ⏱ ("too slow: cut off at ..."). Only the database call is timed against
+     the cutoff; graph-bench's own work around it (loading the reference, checking the answer) is not. The
+     cutoff only stops runaway cases early; because it measures cold first runs, it is set well above the final
+     rule. It depends on which databases ran earlier, so a ⏱ from the cutoff can depend on the run order. Before 3 earlier results exist, only a hard
      cap applies (`--case-timeout`, default 600 s, measured as silence: the worker reports progress after every
      run).
    - **After the run:** the 10x rule is applied over all results, each entry against the other databases. Any
-     benchmark beyond its budget becomes ⏱, so the run order never decides the marker.
+     benchmark beyond its budget becomes ⏱. The run order never decides a ⏱ from this final rule (unlike the
+     in-run cutoff above).
 
 ## The preflight
 
@@ -63,8 +80,13 @@ measured, while results.json and the matrix show ⏱. A ⏱ from the in-run cuto
 - **Queries:** the database call plus materializing its result into Python rows. This is identical for every
   database. graph-bench's canonicalization of the rows and the answer check run outside the clock.
 - **Loads:** timed separately, each into a fresh in-memory instance, so no load benefits from an earlier one.
-  Loads are timed but not answer-checked, and the budget rule (rule 8) does not apply to them; a node and edge
-  count check is planned with the next adapters.
+  Loads are count-checked: right after each timed load, outside the clock, the adapter counts the nodes and
+  edges loaded through the database's own query interface (`counts()`, e.g. a Cypher count over all nodes and
+  over all relationships), and graph-bench compares them with the dataset's counts. A mismatch makes the load ≠
+  (wrong answer), e.g. "loaded 4177 nodes, 37000 edges; expected 4177 nodes, 37860 edges"; a database without
+  `counts()` leaves its load unchecked. The budget rule (rule 8) does not apply to loads. In
+  `graph-bench codspeed`, the count check runs after CodSpeed has timed the load, so CodSpeed shows a ≠ load as
+  measured, while results.json and the matrix show ≠.
 
 ## Loading
 
@@ -75,6 +97,12 @@ Load uses each database's **fastest documented bulk path, CSV parsing included**
   (query language), so engine-side load fixes show up there. When Grafeo's native typed loader lands, it
   replaces the batch API for Load.
 - LadybugDB: `COPY ... FROM` the CSV files.
+- ArcadeDB: GraphBatch (`create_vertices`, then `new_edges` from an id to RID map), with the CSVs parsed in
+  Python. Its faster Graph Importer does not honour CSV quotes, which the SNB text columns need (see
+  [docs/known-disagreements.md](docs/known-disagreements.md)).
+- Neo4j Community: `neo4j-admin database import full` (the offline bulk importer) on CSV copies with typed header
+  lines, then the store opened embedded, a unique `id` constraint per label awaited online and, for
+  Graphalytics, the GDS projection; all in the load clock, including the importer's JVM starts.
 
 ## Adapter rules
 
@@ -109,7 +137,10 @@ How each marker shows in CodSpeed is in the [README](README.md#markers).
 
 ## Licensing and process kinds
 
-- **Neo4j** is measured as Neo4j Community only: the Enterprise terms restrict publishing benchmarks.
+- **Neo4j** is measured as Neo4j Community only: the Enterprise terms restrict publishing benchmarks. Neo4j
+  Community is GPLv3; its algorithms use GDS from the Community tarball, whose jar carries GPLv3 (`LICENSE.txt`)
+  and runs as the GDS Community Edition without a licence file. The tarball and the JRE are downloaded into the
+  data cache, never redistributed.
 - **FalkorDB** runs through `falkordblite`, which starts a Redis server subprocess; it is reported as a
   "local process", not in-process.
 

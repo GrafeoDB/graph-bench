@@ -3,7 +3,7 @@
 from collections.abc import Mapping
 from typing import Any, ClassVar
 
-import real_ladybug as lb
+import ladybug as lb
 
 from graph_bench.databases.base import Database, DatabaseInfo, NotSupported
 from graph_bench.datasets.schema import Column, Dataset, EdgeTable
@@ -20,6 +20,9 @@ PAGE_RANK = "CALL page_rank('g', dampingFactor := 0.85, maxIterations := 1000, t
 # with a long diameter could need more of; raised to PageRank's bound so that the result is the converged one.
 WCC = "CALL weakly_connected_components('g', maxIterations := 1000) RETURN node.id, group_id"
 BFS = f"MATCH p = (a:V {{id: $s}})-[:E* SHORTEST 1..{MAX_DEPTH}]->(b:V) RETURN b.id, length(p)"
+# The load check (`counts`): every node and every relationship, over all tables, counted with Cypher.
+COUNT_NODES = "MATCH (n) RETURN count(n)"
+COUNT_EDGES = "MATCH ()-[r]->() RETURN count(r)"
 
 
 def _path(dataset: Dataset, file: str) -> str:
@@ -34,11 +37,12 @@ def _columns(columns: tuple[Column, ...]) -> str:
 
 
 class LadybugDatabase(Database):
-    """An in-memory `real_ladybug.Database`, loaded with `COPY FROM` CSV and queried with parameterized Cypher.
+    """An in-memory `ladybug.Database`, loaded with `COPY FROM` CSV and queried with parameterized Cypher.
 
     Node tables are keyed by their `id` column. Each edge type is one rel table with a `FROM a TO b` pair per
-    EdgeTable. The ALGO extension is installed once per process (`prepare_environment`, outside the load clock);
-    on the graphalytics dataset it is loaded and the graph projected as `g`.
+    EdgeTable. On the graphalytics dataset the graph is projected as `g` in the load. The ALGO extension is
+    installed once per process (`prepare_environment`) and loaded by the first algorithm that needs it, both
+    outside the load clock, so a broken extension fails only those algorithms (✗), not the load or BFS.
     """
 
     name: ClassVar[str] = "ladybug"
@@ -48,14 +52,15 @@ class LadybugDatabase(Database):
 
     db: Any = None
     conn: Any = None
+    projected: bool = False
     algo_loaded: bool = False
 
     @classmethod
     def prepare_environment(cls) -> None:
         """Install the ALGO extension (INSTALL may download it) on a throwaway in-memory database.
 
-        Installing is a one-time download into LadybugDB's extension directory, so it stays out of the load clock;
-        each load still runs `LOAD EXTENSION ALGO`. A failure raises: the loads of this process fail (✗) with it.
+        Installing is a one-time download into LadybugDB's extension directory, so it stays out of the load clock.
+        A failure raises: the loads of this process fail (✗) with it.
         https://docs.ladybugdb.com/get-started/graph-algorithms
         """
         db = lb.Database()
@@ -103,16 +108,19 @@ class LadybugDatabase(Database):
                 options = f"from='{t.src}', to='{t.dst}', HEADER=true"
                 self._run(f"COPY {rel_type} FROM '{_path(dataset, t.file)}' ({options})")
         if dataset.name == "graphalytics":
-            self._load_algo()
+            # A core function, so it works without the ALGO extension.
+            self._run("CALL project_graph('g', ['V'], ['E'])")
+            self.projected = True
 
     def _load_algo(self) -> None:
-        """Load the ALGO extension (installed by `prepare_environment`) and project `g`; a failure fails the load.
+        """Load the ALGO extension (installed by `prepare_environment`) once, before the first PageRank or WCC.
 
+        It runs in the untimed preflight call. A failure raises, so that algorithm is ✗ with LadybugDB's error.
         https://docs.ladybugdb.com/get-started/graph-algorithms
         """
-        self._run("LOAD EXTENSION ALGO")
-        self._run("CALL project_graph('g', ['V'], ['E'])")
-        self.algo_loaded = True
+        if not self.algo_loaded:
+            self._run("LOAD EXTENSION ALGO")
+            self.algo_loaded = True
 
     def query(self, text: str, params: Mapping[str, Any]) -> list[tuple[Any, ...]]:
         result = self.conn.execute(text, parameters=dict(params))
@@ -121,11 +129,19 @@ class LadybugDatabase(Database):
         finally:
             result.close()
 
+    def counts(self) -> tuple[int, int]:
+        """Nodes and edges loaded, counted with `COUNT_NODES` and `COUNT_EDGES` through `execute()`."""
+        nodes = self.query(COUNT_NODES, {})[0][0]
+        edges = self.query(COUNT_EDGES, {})[0][0]
+        return int(nodes), int(edges)
+
     def algorithm(self, name: str, params: Mapping[str, Any]) -> dict[Any, Any]:
         if name not in ("bfs", "wcc", "pr"):
             raise NotSupported(name)
-        if not self.algo_loaded and name != "bfs":
-            raise RuntimeError("the ALGO extension is loaded only for the graphalytics dataset")
+        if name != "bfs":
+            if not self.projected:
+                raise RuntimeError("the graph `g` is projected only for the graphalytics dataset")
+            self._load_algo()
         if name == "pr":
             return dict(self.query(PAGE_RANK, {}))
         if name == "wcc":

@@ -32,8 +32,26 @@ Repository = "https://github.com/GrafeoDB/graph-bench"
 
 [project.optional-dependencies]
 grafeo = ["grafeo>=0.6.0,<0.7"]
-ladybug = ["real_ladybug>=0.15"]
-embedded = ["graph-bench[grafeo,ladybug]"]
+ladybug = ["ladybug>=0.22.1"]
+neug = ["neug>=0.3.0"]
+# The wheel is manylinux_2_38 only (glibc 2.38 or newer), so the extra is empty elsewhere.
+falkordb = ["falkordblite>=0.11.0; sys_platform == 'linux'"]
+# The wheel is Linux only (manylinux_2_35). pyarrow writes the Parquet files `LOAD PARQUET` reads and is not a
+# turingdb dependency.
+turingdb = ["turingdb>=3.0.2; sys_platform == 'linux'", "pyarrow>=15; sys_platform == 'linux'"]
+# helix-db is the pure Python SDK (imported as helixdb); helix-db-embedded carries the native runtime and has wheels
+# for Linux, Windows and macOS.
+helixdb = ["helix-db>=0.3.4", "helix-db-embedded>=0.3.3"]
+# The wheel bundles its JRE and the engine jars, so no Java installation is needed. Its wheels (and JPype's) stop at
+# CPython 3.14, so the extra is empty on 3.15.
+arcadedb = ["arcadedb-embedded>=26.10.2.post1; python_version < '3.15'"]
+# Neo4j Community runs in this process's JVM through JPype; the Neo4j tarball and a Temurin JRE are downloaded into
+# the data cache at run time (`prepare_environment`), not installed. JPype has no CPython 3.15 wheels yet, as above.
+neo4j-embedded = ["JPype1>=1.7.1; python_version < '3.15'"]
+oxigraph = ["pyoxigraph>=0.5.13"]
+# DuckPGQ is a community extension that `INSTALL duckpgq FROM community` downloads at run time, not a wheel.
+duckdb = ["duckdb>=2.0.0"]
+embedded = ["graph-bench[grafeo,ladybug,neug,falkordb,turingdb,helixdb,arcadedb,neo4j-embedded,oxigraph,duckdb]"]
 bench = ["pytest>=9.0.2", "pytest-codspeed>=5.0.3"]
 dev = [
     "pytest>=9.0.2",
@@ -69,6 +87,14 @@ testpaths = ["tests"]
 markers = [
     "grafeo: requires Grafeo",
     "ladybug: requires LadybugDB",
+    "neug: requires NeuG",
+    "falkordb: requires FalkorDB (falkordblite, Linux only)",
+    "turingdb: requires TuringDB (Linux only)",
+    "helixdb: requires HelixDB (helix-db and helix-db-embedded)",
+    "arcadedb: requires ArcadeDB (arcadedb-embedded)",
+    "neo4j: requires Neo4j (JPype1; downloads the Neo4j Community tarball and a Temurin JRE)",
+    "oxigraph: requires Oxigraph (pyoxigraph)",
+    "duckdb: requires DuckDB (duckdb, and the duckpgq extension from the community repository)",
     "slow: slow tests",
 ]
 
@@ -76,10 +102,36 @@ markers = [
 source = ["graph_bench"]
 # The runner tests start the worker as a subprocess; measure it there too.
 patch = ["subprocess"]
-omit = ["*/__init__.py", "graph_bench/databases/grafeo.py", "graph_bench/databases/ladybug.py"]
+omit = [
+    "*/__init__.py",
+    "graph_bench/databases/grafeo.py",
+    "graph_bench/databases/ladybug.py",
+    "graph_bench/databases/neug.py",
+    "graph_bench/databases/falkordb.py",
+    "graph_bench/databases/turingdb.py",
+    "graph_bench/databases/helixdb.py",
+    "graph_bench/databases/helix_queries.py",
+    "graph_bench/databases/duckdb.py",
+    "graph_bench/databases/arcadedb.py",
+    "graph_bench/databases/neo4j.py",
+]
 
 [tool.coverage.report]
 fail_under = 88
+# The same files as `run.omit`: `coverage report` applies its own omit list to files that were never imported.
+omit = [
+    "*/__init__.py",
+    "graph_bench/databases/grafeo.py",
+    "graph_bench/databases/ladybug.py",
+    "graph_bench/databases/neug.py",
+    "graph_bench/databases/falkordb.py",
+    "graph_bench/databases/turingdb.py",
+    "graph_bench/databases/helixdb.py",
+    "graph_bench/databases/helix_queries.py",
+    "graph_bench/databases/duckdb.py",
+    "graph_bench/databases/arcadedb.py",
+    "graph_bench/databases/neo4j.py",
+]
 exclude_lines = [
     "pragma: no cover",
     "if TYPE_CHECKING:",

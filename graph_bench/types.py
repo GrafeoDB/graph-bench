@@ -5,6 +5,17 @@ from typing import Literal
 
 Model = Literal["property_graph", "sql_pgq", "rdf"]
 
+# What a loaded instance holds: a property graph or RDF triples.
+Store = Literal["graph", "rdf"]
+
+# The store each model's queries read. Property graph and SQL/PGQ queries both read a property graph (SQL/PGQ is
+# property graph matching inside SQL), so a database serving both loads a dataset once for them; RDF queries read
+# triples, a separate load (and a separate Load benchmark, `load_<dataset>_rdf`).
+MODEL_STORE: dict[Model, Store] = {"property_graph": "graph", "sql_pgq": "graph", "rdf": "rdf"}
+
+# The dialect of each model's shared, standard query text: every query of the model has a text for it.
+STANDARD_DIALECT: dict[Model, str] = {"property_graph": "cypher", "sql_pgq": "sql_pgq", "rdf": "sparql"}
+
 Category = Literal[
     "load",
     "batch_writes",

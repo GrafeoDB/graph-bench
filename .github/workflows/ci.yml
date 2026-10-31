@@ -1,5 +1,5 @@
 # Lint and the test suite. The adapter tests (tests/test_db_*.py) run the push selection against Grafeo and
-# LadybugDB too, since grafeo and real_ladybug install from PyPI through the `embedded` extra.
+# LadybugDB too, since grafeo and ladybug install from PyPI through the `embedded` extra.
 name: CI
 
 on:

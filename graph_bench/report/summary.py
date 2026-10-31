@@ -16,10 +16,16 @@ GRAFEO = "grafeo"
 
 
 def grafeo_label(results: Results) -> str:
-    """`Grafeo <version> (<sha[:7]>)`, with the install source in place of a missing sha."""
+    """`Grafeo <version> (<sha[:7]>)`, with `-dirty` kept and the install source in place of a missing sha.
+
+    The grafeo commit (`git_sha`) is preferred over a wheel's file SHA-256, which names no commit.
+    """
     version = results.grafeo.get("version") or "unknown"
-    sha = results.grafeo.get("sha")
-    return f"Grafeo {version} ({sha[:7] if sha else results.grafeo.get('source', 'unknown')})"
+    sha = results.grafeo.get("git_sha") or results.grafeo.get("sha")
+    if not sha:
+        return f"Grafeo {version} ({results.grafeo.get('source', 'unknown')})"
+    dirty = "-dirty" if sha.endswith("-dirty") else ""
+    return f"Grafeo {version} ({sha[:7]}{dirty})"
 
 
 def machine_label(results: Results) -> str:
@@ -28,11 +34,14 @@ def machine_label(results: Results) -> str:
 
 
 def _agreed(entry: Entry) -> bool:
-    """Whether an entry counts towards n in "Grafeo fastest k / n": its answer agreed (⏱ included).
+    """Whether an entry counts towards n in "Grafeo fastest k / n": its answer agreed and it is ok or ⏱.
 
-    A load has no answer check, so it counts when it completed.
+    An entry that failed (✗) after its answer agreed does not count. A load counts when it completed and its node
+    and edge count check did not disagree (`unchecked` when the database has no `counts()`).
     """
-    return entry.answer == "agree" or (is_load(entry) and entry.status == "ok")
+    if is_load(entry):
+        return entry.status == "ok" and entry.answer != "disagree"
+    return entry.answer == "agree" and entry.status in ("ok", "timeout")
 
 
 def _median_rank(positions: list[int]) -> str:

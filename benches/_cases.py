@@ -26,6 +26,7 @@ from graph_bench.datasets import cache
 from graph_bench.datasets.schema import Dataset
 from graph_bench.runner.worker import (
     Emit,
+    LoadCheck,
     Loaded,
     Preflight,
     case_entry,
@@ -33,30 +34,43 @@ from graph_bench.runner.worker import (
     emitter,
     fresh_instance,
     load,
+    load_entry,
     message,
     prepare_environment,
     remove,
     start_case,
+    unsupported_load_entry,
 )
 from graph_bench.suites import Algorithm, Query, catalog
 from graph_bench.suites.catalog import Case, Selection
+from graph_bench.types import Store
 
-# (dataset, scale, threads)
-DataKey = tuple[str, str, int | None]
+# (dataset, store, scale, threads)
+DataKey = tuple[str, Store, str, int | None]
 
 
 @dataclass(frozen=True)
 class LoadCase:
-    """One dataset loaded by one database at one scale and thread setting."""
+    """One dataset loaded into one store by one database at one scale and thread setting."""
 
     dataset: str
     db: str
     scale: str
     threads: int | None
+    store: Store = "graph"
 
     @property
     def bench_id(self) -> str:
-        return catalog.load_id(self.dataset, self.db, self.scale, self.threads)
+        return catalog.load_id(self.dataset, self.db, self.scale, self.threads, self.store)
+
+    @property
+    def key(self) -> DataKey:
+        return (self.dataset, self.store, self.scale, self.threads)
+
+
+def case_key(case: Case) -> DataKey:
+    """The loaded instance a case runs on: its dataset in the store its model reads."""
+    return (case.item.dataset, case.item.store, case.scale, case.threads)
 
 
 class LoadFailed(Exception):
@@ -107,12 +121,13 @@ class Bench:
         found = catalog.cases(self.selection.name, [self.db])
         return [c for c in found if c.threads in self.threads and (item is None or c.item.id == item.id)]
 
-    def loads(self, dataset: str | None = None) -> list[LoadCase]:
+    def loads(self, load: tuple[str, Store] | None = None) -> list[LoadCase]:
+        """The planned loads, or those of one (dataset, store)."""
         ids = set(catalog.load_ids(self.selection.name, [self.db]))
-        datasets = sorted({i.dataset for i in catalog.ITEMS}) if dataset is None else [dataset]
+        keys = load_keys() if load is None else [load]
         found = [
-            LoadCase(name, self.db, scale, threads)
-            for name in datasets
+            LoadCase(name, self.db, scale, threads, store)
+            for name, store in keys
             for scale in self.selection.scales
             for threads in self.threads
         ]
@@ -159,7 +174,7 @@ class Bench:
     def dataset(self, key: DataKey) -> Dataset:
         if self._datasets is None:
             self._datasets = cache.prepare(self.selection.name)
-        return self._datasets[(key[0], key[1])]
+        return self._datasets[(key[0], key[2])]
 
     def prepare(self) -> None:
         """Run the database's `prepare_environment` once per session, before the first load; re-raise its error."""
@@ -172,7 +187,7 @@ class Bench:
         return self.budgets.get(bench_id, self.case_timeout_s)
 
     def database(self, key: DataKey) -> Database:
-        """The instance holding dataset `key`, loaded once (untimed) unless the load test left it here."""
+        """The instance holding `key` (a dataset in a store), loaded once (untimed) unless the load test left it."""
         if key in self._failed:
             raise LoadFailed(self._failed[key])
         if self._loaded is not None and self._loaded[0] == key:
@@ -181,7 +196,11 @@ class Bench:
         progress = {"kind": "progress", "id": None}
         try:
             self.prepare()
-            loaded = load(self.db_cls, self.dataset(key), self.workdir, key[2], 1, lambda: self.emit(progress))
+
+            def on_load() -> None:
+                self.emit(progress)
+
+            loaded = load(self.db_cls, self.dataset(key), self.workdir, key[3], 1, on_load, store=key[1])
         except Exception as exc:
             self._failed[key] = _load_error(exc)
             raise LoadFailed(self._failed[key]) from exc
@@ -191,7 +210,7 @@ class Bench:
     def adopt(self, key: DataKey, db: Database, db_dir: Path) -> None:
         """Keep the instance the load test loaded last for the cases of its dataset."""
         self.release()
-        self._loaded = (key, Loaded(db, db_dir, 0))
+        self._loaded = (key, Loaded(db, db_dir, 0, LoadCheck()))
 
     def load_failed(self, key: DataKey, error: str) -> None:
         self._failed[key] = error
@@ -231,13 +250,12 @@ def _outcome(pf: Preflight) -> NoReturn:
 
 def run_case(benchmark: Any, bench: Bench, case: Case) -> None:
     """Preflight the case; benchmark it only when it completed in budget with a correct answer."""
-    model = case.item.model
-    if model not in bench.db_cls.models:
-        error = f"model {model} not supported"
+    if not case.item.supported_by(bench.db_cls.models):
+        error = f"model {case.item.model} not supported"
         bench.emit(case_entry(case, status="not_supported", error=error))
         pytest.skip(f"not available: {error}")
     try:
-        db = bench.database((case.item.dataset, case.scale, case.threads))
+        db = bench.database(case_key(case))
     except LoadFailed as exc:
         bench.emit({"kind": "start", "id": case.bench_id})
         bench.emit(case_entry(case, status="failed", error=f"load failed: {exc}"))
@@ -256,17 +274,25 @@ def run_case(benchmark: Any, bench: Bench, case: Case) -> None:
 
 
 def run_load(benchmark: Any, bench: Bench, lc: LoadCase) -> None:
-    """Load the dataset `load_iterations` times, each into a fresh instance, and keep the last instance.
+    """Load the dataset into the load's store `load_iterations` times, each into a fresh instance; keep the last.
 
-    `load_ns` is the median of the loads this test ran, as the worker reports it; CodSpeed times them too.
+    `load_ns` is the median of the loads this test ran, as the worker reports it; CodSpeed times them too. Each
+    instance's node and edge counts are checked outside the timed target (in the next round's setup, and after the
+    last round), so a ≠ or a counting error is known only after CodSpeed measured the load.
     """
-    key = (lc.dataset, lc.scale, lc.threads)
+    if (lc.dataset, lc.store) not in catalog.load_keys(bench.selection.name, bench.db_cls.models):
+        model = catalog.all_load_keys(bench.selection.name)[(lc.dataset, lc.store)]
+        entry = unsupported_load_entry(lc.bench_id, model)
+        bench.emit(entry)
+        pytest.skip(f"not available: {entry['error']}")
+    key = lc.key
     bench.emit({"kind": "start", "id": lc.bench_id})
     bench.release()
     progress = {"kind": "progress", "id": lc.bench_id}
     instances: list[tuple[Database, Path]] = []
     times: list[int] = []
     datasets: list[Dataset] = []
+    check = LoadCheck()
 
     def drop() -> None:
         while instances:
@@ -276,14 +302,15 @@ def run_load(benchmark: Any, bench: Bench, lc: LoadCase) -> None:
 
     def setup() -> tuple[tuple[Database], dict[str, Any]]:
         if instances:
+            check.add(instances[-1][0], datasets[0])
             bench.emit(progress)
             drop()
-        instances.append(fresh_instance(bench.db_cls, datasets[0], bench.workdir, lc.threads, len(times)))
+        instances.append(fresh_instance(bench.db_cls, datasets[0], bench.workdir, lc.threads, len(times), lc.store))
         return (instances[-1][0],), {}
 
     def target(db: Database) -> None:
         start = time.perf_counter_ns()
-        db.load(datasets[0])
+        db.load_store(lc.store, datasets[0])
         times.append(time.perf_counter_ns() - start)
 
     try:
@@ -296,10 +323,16 @@ def run_load(benchmark: Any, bench: Bench, lc: LoadCase) -> None:
         bench.load_failed(key, error)
         bench.emit({"kind": "entry", "id": lc.bench_id, "status": "failed", "error": error})
         _fail("error: ", error)
+    check.add(instances[-1][0], datasets[0])
     bench.emit(progress)
     db, db_dir = instances.pop()
     bench.adopt(key, db, db_dir)
-    bench.emit({"kind": "entry", "id": lc.bench_id, "status": "ok", "load_ns": int(statistics.median(times))})
+    entry = load_entry(lc.bench_id, int(statistics.median(times)), check)
+    bench.emit(entry)
+    if entry["status"] == "failed":
+        _fail("error: ", entry["error"])
+    if entry["answer"] == "disagree":
+        _fail("wrong answer: ", entry["detail"])
 
 
 def make_test(item: Query | Algorithm) -> Callable[..., None]:
@@ -313,12 +346,17 @@ def make_test(item: Query | Algorithm) -> Callable[..., None]:
     return test
 
 
-def make_load_test(dataset: str) -> Callable[..., None]:
-    """The load test of one dataset, parametrized over its scales and thread settings."""
+def load_keys() -> list[tuple[str, Store]]:
+    """Every (dataset, store) a catalog item reads: one load test each."""
+    return sorted({(item.dataset, item.store) for item in catalog.ITEMS})
+
+
+def make_load_test(dataset: str, store: Store = "graph") -> Callable[..., None]:
+    """The load test of one dataset into one store, parametrized over its scales and thread settings."""
 
     def test(benchmark: Any, graph_bench: Bench, gb_case: LoadCase) -> None:
         run_load(benchmark, graph_bench, gb_case)
 
-    test.__name__ = test.__qualname__ = f"test_load_{dataset}"
-    test.gb_dataset = dataset  # type: ignore[attr-defined]
+    test.__name__ = test.__qualname__ = f"test_{catalog.load_benchmark(dataset, store)}"
+    test.gb_load = (dataset, store)  # type: ignore[attr-defined]
     return test

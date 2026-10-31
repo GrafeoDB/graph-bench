@@ -6,7 +6,7 @@ import networkx
 import pytest
 
 from graph_bench.datasets import cache, graphalytics, snb
-from graph_bench.datasets.schema import Dataset
+from graph_bench.datasets.schema import Dataset, EdgeTable, NodeTable
 
 
 @pytest.fixture(scope="module")
@@ -35,6 +35,18 @@ def test_schema_roundtrip(small: Dataset) -> None:
     assert isinstance(next(iter(small.rows(knows)))["creationDate"], int)
 
 
+def _rows(ds: Dataset, tables: tuple[NodeTable, ...] | tuple[EdgeTable, ...]) -> int:
+    return sum(1 for t in tables for _ in ds.rows(t))
+
+
+def test_expected_counts_match_the_csvs(small: Dataset, tmp_path: Path) -> None:
+    """The node and edge counts a load is checked against are recorded with the CSVs, in schema.json."""
+    assert (small.node_count, small.edge_count) == (_rows(small, small.nodes), _rows(small, small.edges))
+    ga = graphalytics.generate(small, tmp_path / "ga")
+    assert (ga.node_count, ga.edge_count) == (_rows(ga, ga.nodes), _rows(ga, ga.edges))
+    assert Dataset.load(ga.root) == ga
+
+
 def test_edge_tables_split_by_endpoint_labels(small: Dataset) -> None:
     reply = {(e.src, e.dst) for e in small.edges if e.type == "REPLY_OF"}
     assert reply == {("Comment", "Post"), ("Comment", "Comment")}
@@ -44,13 +56,26 @@ def test_edge_tables_split_by_endpoint_labels(small: Dataset) -> None:
 
 def test_snb_graph_view(small: Dataset) -> None:
     g = snb.SnbGraph.from_dataset(small)
-    assert len(g.nodes["Person"]) == 1_000
+    assert len(g.nodes["Person"]) == 1_001  # 1,000 plus the isolated person
     assert sum(len(v) for v in g.out["KNOWS"].values()) == 18_000
     assert sum(len(v) for v in g.incoming["KNOWS"].values()) == 18_000
     dst, props = (
         g.out["KNOWS"]["person_0"][0] if "person_0" in g.out["KNOWS"] else next(iter(g.out["KNOWS"].values()))[0]
     )
     assert dst.startswith("person_") and isinstance(props["creationDate"], int)
+
+
+def test_one_isolated_person(small: Dataset) -> None:
+    """The last person has no edges at all, so IC13 has an unreachable pair; the rest of the data is unchanged."""
+    g = snb.SnbGraph.from_dataset(small)
+    touched = {
+        node
+        for adjacency in (g.out, g.incoming)
+        for edges in adjacency.values()
+        for node in edges
+        if node in g.nodes["Person"]
+    }
+    assert set(g.nodes["Person"]) - touched == {"person_1000"}
 
 
 def test_graphalytics_is_symmetric(small: Dataset, tmp_path: Path) -> None:
@@ -62,7 +87,7 @@ def test_graphalytics_is_symmetric(small: Dataset, tmp_path: Path) -> None:
     assert len(as_set) == len(pairs)
     assert all((b, a) in as_set for a, b in as_set)
     assert all(a != b for a, b in as_set)
-    assert len(list(ga.rows(ga.nodes[0]))) == 1_000
+    assert len(list(ga.rows(ga.nodes[0]))) == 1_001
 
 
 def test_key_changes_with_generator_source(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -73,6 +98,23 @@ def test_key_changes_with_generator_source(monkeypatch: pytest.MonkeyPatch) -> N
     assert cache.dataset_key("push") != cache.dataset_key("full")
 
 
+def test_key_changes_with_pinned_downloads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The Neo4j tarball and Temurin JRE pins (databases/pins.py, no driver imports) are in the key."""
+    before = cache.dataset_key("push")
+    pkg = tmp_path / "graph_bench"
+    for sub in ("datasets", "suites"):
+        shutil.copytree(cache._PKG / sub, pkg / sub, ignore=shutil.ignore_patterns("__pycache__"))
+    (pkg / "databases").mkdir()
+    shutil.copy2(cache._PKG / "answers.py", pkg / "answers.py")
+    shutil.copy2(cache._PKG / "databases" / "pins.py", pkg / "databases" / "pins.py")
+    monkeypatch.setattr(cache, "_PKG", pkg)
+    assert cache.dataset_key("push") == before
+    pins = pkg / "databases" / "pins.py"
+    pins.write_text(pins.read_text(encoding="utf-8").replace("21.0.13", "21.0.14"), encoding="utf-8")
+    assert cache.dataset_key("push") != before
+    assert "jpype" not in (cache._PKG / "databases" / "pins.py").read_text(encoding="utf-8")
+
+
 def test_key_changes_with_answers_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The cached references are canonicalized by answers.py and computed with NetworkX: both are in the key."""
     before = cache.dataset_key("push")
@@ -80,6 +122,8 @@ def test_key_changes_with_answers_source(tmp_path: Path, monkeypatch: pytest.Mon
     for sub in ("datasets", "suites"):
         shutil.copytree(cache._PKG / sub, pkg / sub, ignore=shutil.ignore_patterns("__pycache__"))
     shutil.copy2(cache._PKG / "answers.py", pkg / "answers.py")
+    (pkg / "databases").mkdir()
+    shutil.copy2(cache._PKG / "databases" / "pins.py", pkg / "databases" / "pins.py")
     monkeypatch.setattr(cache, "_PKG", pkg)
     assert cache.dataset_key("push") == before
 

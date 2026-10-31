@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import sys
@@ -13,13 +14,16 @@ SHA = "a" * 40
 
 
 class Recorder:
-    def __init__(self) -> None:
+    def __init__(self, status: str = "") -> None:
         self.commands: list[list[str]] = []
+        self.status = status  # `git status --porcelain` output: empty for a clean checkout
 
     def __call__(self, cmd: list[str]) -> str:
         self.commands.append(cmd)
         if grafeo_setup.VERSION_SCRIPT in cmd:
             return "0.6.0\n"
+        if cmd[:1] == ["git"] and "status" in cmd:
+            return self.status
         if cmd[:1] == ["git"]:
             return SHA + "\n"
         return ""
@@ -89,7 +93,18 @@ def test_install_checkout_builds_then_installs(tmp_path: Path) -> None:
         str(new),
     ]
     assert ["git", "-C", str(src), "rev-parse", "HEAD"] in run.commands
-    assert info == {"version": "0.6.0", "source": str(src), "sha": SHA}
+    assert info == {"version": "0.6.0", "source": str(src), "sha": SHA, "git_sha": SHA}
+
+
+def test_install_dirty_checkout_marks_the_sha(tmp_path: Path) -> None:
+    """Uncommitted changes to tracked files: the sha alone would not identify the build."""
+    state = tmp_path / "state"
+    (state / "wheels").mkdir(parents=True)
+    (state / "wheels" / "grafeo-1.whl").write_bytes(b"x")
+    run = Recorder(status=" M crates/grafeo-engine/src/lib.rs\n")
+    info = install_grafeo(tmp_path, run=run, state_dir=state)
+    assert info["sha"] == SHA + "-dirty"
+    assert ["git", "-C", str(tmp_path), "status", "--porcelain", "--untracked-files=no"] in run.commands
 
 
 def test_checkout_without_nested_bindings_uses_root(tmp_path: Path) -> None:
@@ -121,7 +136,8 @@ def test_writes_state_file(tmp_path: Path) -> None:
     state = tmp_path / "state"
     info = install_grafeo(wheel, run=Recorder(), state_dir=state)
     assert json.loads((state / "grafeo.json").read_text()) == info
-    assert set(info) == {"version", "source", "sha"}
+    assert set(info) == {"version", "source", "sha", "git_sha"}
+    assert info["git_sha"] is None
 
 
 def test_missing_uv_is_a_clear_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -148,7 +164,9 @@ def test_run_decodes_utf8_output_regardless_of_locale() -> None:
 
 def _patch_bench(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
     calls: list[Path] = []
-    monkeypatch.setattr(cli, "install_grafeo", lambda p: calls.append(p) or {"version": "0", "source": "", "sha": ""})
+    monkeypatch.setattr(
+        cli, "install_grafeo", lambda p, **_: calls.append(p) or {"version": "0", "source": "", "sha": ""}
+    )
     monkeypatch.setattr(cli.supervisor, "run_bench", lambda *a, **k: None)
     return calls
 
@@ -190,7 +208,7 @@ def test_bench_without_grafeo_does_not_install(tmp_path: Path, monkeypatch: pyte
 
 def test_setup_command_prints_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     info = {"version": "0.6.0", "source": "s", "sha": "h"}
-    monkeypatch.setattr(cli, "install_grafeo", lambda p: info)
+    monkeypatch.setattr(cli, "install_grafeo", lambda p, **_: info)
     result = CliRunner().invoke(cli.app, ["setup", "--grafeo", str(tmp_path)])
     assert result.exit_code == 0
     assert json.loads(result.output) == info
@@ -209,3 +227,20 @@ def test_bench_validates_before_installing(tmp_path: Path, monkeypatch: pytest.M
     args = ["bench", "--selection", "bogus", "--db", "grafeo", "--out", str(tmp_path), "--grafeo", str(tmp_path)]
     assert CliRunner().invoke(cli.app, args).exit_code != 0
     assert calls == []
+
+
+def test_wheel_records_the_given_git_sha(tmp_path: Path) -> None:
+    """A wheel names no commit, so `--grafeo-sha` is recorded beside the file's SHA-256."""
+    wheel = tmp_path / "g.whl"
+    wheel.write_bytes(b"w")
+    info = install_grafeo(wheel, git_sha="9164e307", run=Recorder(), state_dir=tmp_path / "state")
+    assert info["git_sha"] == "9164e307"
+    assert info["sha"] == hashlib.sha256(b"w").hexdigest()
+
+
+@pytest.mark.parametrize("bad", ["main", "12345", "9164E307", "9164e307 ", "g164e307"])
+def test_git_sha_must_be_a_commit(tmp_path: Path, bad: str) -> None:
+    wheel = tmp_path / "g.whl"
+    wheel.write_bytes(b"w")
+    with pytest.raises(ValueError, match="grafeo-sha"):
+        install_grafeo(wheel, git_sha=bad, run=Recorder(), state_dir=tmp_path / "state")

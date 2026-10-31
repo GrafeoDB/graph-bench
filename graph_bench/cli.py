@@ -2,9 +2,11 @@
 
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
+import tomllib
 from collections.abc import Callable
 from pathlib import Path
 
@@ -28,6 +30,9 @@ app.add_typer(data_app, name="data")
 _SELECTION = typer.Option(..., "--selection", help="Selection name: push or full.")
 _WORKDIR = typer.Option(None, "--workdir", help="Directory for database files; default: a temporary one.")
 _GRAFEO_SOURCE = typer.Option(..., "--grafeo", help="A grafeo .whl file or a grafeo checkout (built with maturin).")
+_GRAFEO_SHA = typer.Option(
+    None, "--grafeo-sha", help="The grafeo commit a wheel was built from, recorded in results.json as git_sha."
+)
 _OUT = typer.Option(..., "--out", help="Output directory for results.json and the raw worker output.")
 _REPORT_IN = typer.Option(..., "--in", help="The results.json to report on.")
 _REPORT_WRITE = typer.Option(
@@ -54,13 +59,13 @@ def _dbs(value: str | None) -> list[str]:
     return [name.strip() for name in value.split(",") if name.strip()]
 
 
-def _install_requested(grafeo: str | None) -> dict[str, str] | None:
+def _install_requested(grafeo: str | None, *, git_sha: str | None = None) -> dict[str, str | None] | None:
     """Install the Grafeo from `--grafeo`, else from GRAPH_BENCH_GRAFEO; None when neither is given."""
     source = grafeo or os.environ.get("GRAPH_BENCH_GRAFEO")
     if not source:
         return None
     try:
-        return install_grafeo(Path(source))
+        return install_grafeo(Path(source), git_sha=git_sha)
     except (ValueError, RuntimeError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(2) from None
@@ -70,6 +75,33 @@ def _install_requested(grafeo: str | None) -> dict[str, str] | None:
 def version() -> None:
     """Print the graph-bench version."""
     typer.echo(__version__)
+
+
+def database_requirements(pyproject: Path) -> list[str]:
+    """The packages of the database extras, version bounds dropped, environment markers kept.
+
+    The extras are the ones the `embedded` extra lists; `uv pip install --upgrade -r` on the result moves each
+    database to its newest stable release (uv never picks a pre-release unless asked) without touching uv.lock.
+    """
+    extras = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["optional-dependencies"]
+    listed = re.search(r"\[([^\]]*)\]", extras["embedded"][0])
+    names = [name.strip() for name in listed.group(1).split(",")] if listed else []
+    requirements: list[str] = []
+    for extra in names:
+        for requirement in extras[extra]:
+            spec, _, marker = requirement.partition(";")
+            package = re.match(r"[A-Za-z0-9._-]+", spec.strip())
+            if package is None:
+                raise ValueError(f"cannot read the requirement {requirement!r}")
+            requirements.append(package.group(0) + (f" ;{marker}" if marker else ""))
+    return requirements
+
+
+@app.command()
+def packages() -> None:
+    """Print the database packages of the `embedded` extra, one requirement per line, without version bounds."""
+    root = Path(__file__).resolve().parent.parent
+    typer.echo("\n".join(database_requirements(root / "pyproject.toml")))
 
 
 @app.command("list")
@@ -91,12 +123,13 @@ def list_benchmarks(
 @app.command()
 def setup(
     grafeo: Path = _GRAFEO_SOURCE,
+    grafeo_sha: str | None = _GRAFEO_SHA,
 ) -> None:
     """Install the Grafeo under test and print what was installed as JSON.
 
     Building a checkout needs a lot of disk: set CARGO_TARGET_DIR to a drive with ~90 GB free.
     """
-    info = _install_requested(str(grafeo))
+    info = _install_requested(str(grafeo), git_sha=grafeo_sha)
     typer.echo(json.dumps(info))
 
 

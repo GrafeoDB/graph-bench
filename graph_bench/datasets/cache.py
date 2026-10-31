@@ -9,15 +9,15 @@ from typing import Any
 
 import networkx
 
-from graph_bench.datasets import graphalytics, snb
+from graph_bench.datasets import graphalytics, rdf, snb
 from graph_bench.datasets.schema import Dataset
 from graph_bench.suites import catalog
 from graph_bench.suites import graphalytics as ga_suite
 from graph_bench.suites import snb as snb_suite
 
 SEED = 42
-# Dataset-to-adapter loading contract; bump when the CSV layout the adapters consume changes.
-BINDINGS = "csv-v1"
+# Dataset-to-adapter loading contract; bump when the CSV layout or the N-Triples file the adapters consume changes.
+BINDINGS = "csv-v1,nt-v1"
 
 _PKG = Path(__file__).resolve().parent.parent
 
@@ -35,6 +35,9 @@ def _read_sources() -> list[str]:
     """
     paths = [p for sub in ("datasets", "suites") for p in sorted((_PKG / sub).glob("*.py"))]
     paths.append(_PKG / "answers.py")
+    # The pinned downloads (Neo4j tarball, Temurin JRE) are cached under the same directory (`~/.cache/graph-bench`),
+    # so a changed pin must change the key too. Read as text: the module has no driver imports.
+    paths.append(_PKG / "databases" / "pins.py")
     return [f"{p.relative_to(_PKG).as_posix()}\n{p.read_text(encoding='utf-8')}" for p in paths]
 
 
@@ -50,10 +53,13 @@ def dataset_key(selection: str) -> str:
 
 
 def _write_references(selection: str, snb_ds: Dataset, ga_ds: Dataset) -> None:
-    """Write `references/<item_id>-<scale>.json` for every item of the selection into its dataset dir."""
+    """Write `references/<item_id>-<scale>.json` for every reference the selection's items use (`reference_items`).
+
+    An item that shares another item's references (`Query.same_as`) uses that item's file, written once.
+    """
     sel = catalog.selection(selection)
     graph = snb.SnbGraph.from_dataset(snb_ds)
-    for item in catalog.items(selection):
+    for item in catalog.reference_items(selection):
         if isinstance(item, catalog.Query):
             bindings = snb_suite.bindings(item.id, graph, sel.bindings)
             answers: list[Any] = [snb_suite.reference(item.id, graph, b) for b in bindings]
@@ -64,6 +70,14 @@ def _write_references(selection: str, snb_ds: Dataset, ga_ds: Dataset) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         doc = catalog.reference_document(item, bindings, answers)
         path.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8", newline="\n")
+
+
+def _write_rdf(selection: str, datasets: tuple[Dataset, ...]) -> None:
+    """Write the N-Triples file (`rdf.write_ntriples`) of every dataset an RDF item of the selection reads."""
+    wanted = {item.dataset for item in catalog.items(selection) if item.store == "rdf"}
+    for ds in datasets:
+        if ds.name in wanted:
+            rdf.write_ntriples(ds)
 
 
 def prepare(selection: str) -> dict[tuple[str, str], Dataset]:
@@ -82,6 +96,7 @@ def prepare(selection: str) -> dict[tuple[str, str], Dataset]:
                     shutil.rmtree(root)
             snb_ds = snb.generate(scale, snb_root, SEED)
             ga_ds = graphalytics.generate(snb_ds, ga_root)
+            _write_rdf(selection, (snb_ds, ga_ds))
             _write_references(selection, snb_ds, ga_ds)
             snb_ds.root.joinpath(".complete").write_text("ok", encoding="utf-8")
             ga_ds.root.joinpath(".complete").write_text("ok", encoding="utf-8")
