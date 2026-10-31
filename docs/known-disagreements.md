@@ -311,11 +311,12 @@ alone, where no budget applies and they must agree.
 
 - The embedded engine starts a process-wide event handler; a second `TuringDB(type="embedded")` in one process
   fails with `Could not initialize system event handler`, also after the first client is deleted (the client has
-  no close method). The worker loads several times per process, so the adapter starts the engine once per process
-  (`data_dir` = `<workdir parent>/turingdb`) and gives each load a graph of its own. TuringDB has no
-  `DROP GRAPH`, so loaded graphs stay in that directory until the worker's base directory is removed.
+  no close method). The worker loads several times per process, so the adapter starts the engine once per process in
+  `prepare_environment` (outside every load clock; `data_dir` is a fresh temporary directory removed at exit) and
+  gives each load a graph of its own (uuid4 name). TuringDB has no `DROP GRAPH`, so loaded graphs stay in that
+  directory until the process exits.
 - There is no in-memory mode: the graph is on disk (`storage="on-disk"`), and no thread setting is exposed
   (`threads_configurable=False`).
-- The load clock covers the engine start (first load only), the CSV to Parquet conversion with pyarrow and
+- The load clock covers the CSV to Parquet conversion with pyarrow and
   `LOAD PARQUET` (https://docs.turingdb.ai/import_data/parquet). TuringDB's load needs this conversion because it
   has no CSV bulk path for more than a few thousand edges (https://docs.turingdb.ai/import_data/csv).

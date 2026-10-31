@@ -1,9 +1,11 @@
-"""TuringDB embedded (Linux only): an on-disk graph under the instance's workdir, loaded from Parquet."""
+"""TuringDB embedded (Linux only): an on-disk graph in a per-process temporary directory, loaded from Parquet."""
 
-import itertools
+import atexit
 import math
 import re
 import shutil
+import tempfile
+import uuid
 from collections.abc import Mapping
 from importlib.metadata import version
 from pathlib import Path
@@ -15,10 +17,10 @@ from graph_bench.types import Model
 
 # TuringDB starts a process-wide event handler per engine, and a second engine in one process fails with "Could not
 # initialize system event handler" (also after the first client is deleted; the client has no close method). The
-# worker loads several times in one process, so the first load starts the engine and every later load of the process
-# reuses it, each in a graph of its own.
+# worker loads several times in one process, so `prepare_environment` (called once per process before any timed
+# load) starts the engine in a temporary `data_dir` of its own, removed at process exit, and every load of the
+# process reuses it, each in a graph of its own.
 _engine: dict[str, Any] = {}
-_graph_ids = itertools.count()
 # The load check (`counts`): a plain count aggregation (https://docs.turingdb.ai/query/cypher_subset lists `count`).
 COUNT_NODES = "MATCH (n) RETURN count(n)"
 COUNT_EDGES = "MATCH ()-[r]->() RETURN count(r)"
@@ -53,6 +55,11 @@ def inline(text: str, params: Mapping[str, Any]) -> str:
     return _PARAM.sub(lambda m: literal(params[m.group(1)]), text)
 
 
+def _check_type(column_type: str) -> None:
+    if column_type not in ("INT64", "DOUBLE", "STRING"):
+        raise ValueError(f"unsupported column type {column_type!r} for the TuringDB Parquet load")
+
+
 def _python(value: Any) -> Any:
     """A DataFrame cell as a Python scalar: numpy scalars to their Python type, missing values to None."""
     item = getattr(value, "item", None)
@@ -64,7 +71,7 @@ def _python(value: Any) -> Any:
 
 
 class TuringDatabase(Database):
-    """An embedded TuringDB instance (`data_dir` = the workdir) holding one graph loaded with `LOAD PARQUET`.
+    """An embedded TuringDB graph (engine `data_dir`: a per-process temporary directory) loaded with `LOAD PARQUET`.
 
     TuringDB's fastest documented bulk path is `LOAD PARQUET '<dir>'` (https://docs.turingdb.ai/import_data/parquet):
     `<data_dir>/data/<dir>/nodes.parquet` with `__id` (INT64, unique), `__labels` (list<string>) and one typed column
@@ -102,6 +109,7 @@ class TuringDatabase(Database):
         rows_by_label = []
         for table in dataset.nodes:
             for col in table.columns:
+                _check_type(col.type)
                 if property_types.setdefault(col.name, col.type) != col.type:
                     raise ValueError(f"property {col.name!r} has different types on different labels")
             rows_by_label.append((table, list(dataset.rows(table))))
@@ -125,6 +133,7 @@ class TuringDatabase(Database):
         edge_types: dict[str, str] = {}
         for edge in dataset.edges:
             for col in edge.columns:
+                _check_type(col.type)
                 if edge_types.setdefault(col.name, col.type) != col.type:
                     raise ValueError(f"edge property {col.name!r} has different types on different edge types")
         edge_columns: dict[str, list[Any]] = {"__source": [], "__target": [], "__type": []}
@@ -142,24 +151,32 @@ class TuringDatabase(Database):
         edges = pa.table({n: pa.array(v, type=edge_schema[n]) for n, v in edge_columns.items()})
         pq.write_table(edges, directory / "edges.parquet")
 
-    def _start(self) -> Any:
-        """The process's engine, started on the first load with its `data_dir` beside the instance's workdir.
+    @classmethod
+    def prepare_environment(cls) -> None:
+        """Start the process's engine in a fresh temporary `data_dir`, outside every load clock.
 
-        The worker removes each instance's workdir after use, but the engine keeps its `data_dir` for the life of
-        the process, so that directory is `<workdir parent>/turingdb` (the same base directory, on the same disk).
+        The directory is removed at process exit and nothing outside it is touched.
         """
-        if "client" not in _engine:
-            from turingdb import TuringDB
+        if "client" in _engine:
+            return
+        from turingdb import TuringDB
 
-            root = self.workdir.parent / "turingdb"
-            root.mkdir(parents=True, exist_ok=True)
-            _engine["root"] = root
-            _engine["client"] = TuringDB(type="embedded", data_dir=str(root))
-        return _engine["client"]
+        root = Path(tempfile.mkdtemp(prefix="graph-bench-turingdb-"))
+        atexit.register(shutil.rmtree, root, ignore_errors=True)
+        _engine["root"] = root
+        _engine["client"] = TuringDB(type="embedded", data_dir=str(root))
 
     def load(self, dataset: Dataset) -> None:
-        self.client = self._start()
-        self.graph = f"bench{next(_graph_ids)}"
+        # The benchmark paths (worker, CodSpeed session) always call prepare_environment first, so the engine start
+        # is never in a load clock; this lazy start only serves direct use such as the tests.
+        self.prepare_environment()
+        self.client = _engine["client"]
+        self.graph = f"bench{uuid.uuid4().hex}"
+        # LIST GRAPH is the documented way to enumerate graphs; the name must be new (uuid4, and a data_dir of
+        # this process only, so it cannot be a graph of an earlier run).
+        existing = self.client.query("LIST GRAPH")
+        if self.graph in set(existing["graphName"]):
+            raise RuntimeError(f"graph {self.graph} already exists")
         self.staging = _engine["root"] / "data" / self.graph
         self._write_parquet(dataset, self.staging)
         self.client.query(f"LOAD PARQUET '{self.graph}'")
