@@ -91,3 +91,6 @@ benchmark moves to `legacy/` untouched and is deleted once the new comparison re
 - **The 0.2.x benchmark** and its unreleased 0.3 work (native and fallback labels, `vector_ann_*`, the Uni-DB
   adapter, the grafeo-server adapter) move to [legacy/](legacy/README.md), together with the server databases
   and the Docker setup. Results measured with it are not comparable with the new comparison.
+- **The README's Latest Results section**, whose broken link was fixed twice: by
+  [@0xdevalias](https://github.com/0xdevalias) in June and again by [@bitsnaps](https://github.com/bitsnaps) in
+  October. 0.3.0 makes sure it never breaks again by deleting it. Thank you both.
