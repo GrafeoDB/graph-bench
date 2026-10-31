@@ -17,6 +17,8 @@ import psutil
 from graph_bench.runner.startup import Child, run_child
 
 MARKER_ENV = "GRAPH_BENCH_TEST_HANG_MARKER"
+# Linux kernel threads are children of kthreadd (pid 2), or pid 0 for kthreadd itself.
+KERNEL_THREAD_PARENTS = frozenset({0, 2})
 _ADAPTERS = {
     "HangingFalkor": ("graph_bench.databases.falkordb", "FalkorDatabase", "falkordb_hang"),
     "HangingTuring": ("graph_bench.databases.turingdb", "TuringDatabase", "turingdb_hang"),
@@ -82,7 +84,10 @@ def hang_until_killed(db: str, workdir: Path, marker: Path, timeout_s: float) ->
             tree[proc.pid] = proc.name()
         for new in processes_running() - before:
             try:
-                tree[new] = psutil.Process(new).name()
+                proc = psutil.Process(new)
+                if proc.ppid() in KERNEL_THREAD_PARENTS:  # a kworker the kernel started meanwhile, not ours
+                    continue
+                tree[new] = proc.name()
             except psutil.Error:
                 continue
     thread.join()
