@@ -24,6 +24,6 @@ Versions were the latest stable on PyPI on 2026-10-31.
 | FalkorDB | [falkordblite has no wheel for glibc older than 2.38 (Ubuntu 22.04)](falkordb.md) | draft, packaging request, reproduced on arm64 | no duplicate found |
 | TuringDB | [openCypher shortestPath pattern does not parse](turingdb.md) | draft, reproduced | no duplicate found |
 | Neo4j | nothing to file | none | n/a |
-| NeuG | nothing to file | none | n/a |
+| NeuG | `MATCH (n) RETURN count(n)` returns no row on a database with no node tables | draft | none |
 | Oxigraph | nothing to file | none | n/a |
 | Grafeo | [tracked in the grafeo repository](grafeo.md) | reference list only | n/a |
