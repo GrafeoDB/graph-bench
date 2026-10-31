@@ -52,6 +52,8 @@ legacy/results/
 # grafeo build/install record and built wheels (graph-bench setup)
 .graph-bench/
 # default output dirs for bench/codspeed runs
+# run logs written next to them (e.g. `graph-bench bench ... > out-push.log`)
+/*.log
 out/
 .codspeed/
 
