@@ -12,15 +12,20 @@ benchmark, servers included, is kept in [legacy/](legacy/README.md).
 1. **Each database runs in its own process.** A Python process can host only one JVM, and separate processes
    keep allocators and caches from interfering. `graph-bench bench` starts one worker per database;
    `graph-bench codspeed` starts one `pytest benches --codspeed` process per database.
-2. **JVM databases get the same warm-up as the others**, and JVM startup is not timed. A memory cap shared by
-   every database is planned: it arrives with the JVM adapters (ArcadeDB, Neo4j Community), none of which
-   exists yet.
+2. **JVM databases get the same warm-up as the others**, and JVM startup is not timed: each JVM database starts
+   its process's JVM once, before any timed load (`prepare_environment`), and one JVM database runs per process.
+   Every JVM database gets the same maximum heap, `-Xmx4g` (`MAX_HEAP` in `graph_bench/databases/jvm.py`),
+   checked after the JVM starts. Without a cap the JVM would take a quarter of the machine's RAM; 4 GiB is
+   ArcadeDB's own default and leaves room on a 16 GB CI runner for off-heap memory and the harness. The native
+   databases have no runtime memory cap to set.
 3. **Every database runs single-threaded.** A database whose thread count can't be set is marked as such, and
    each database's `threads_note` in results.json says how the setting was applied:
    - Grafeo: `RAYON_NUM_THREADS=1` in its worker, note "single-threaded executor". Grafeo's query executor is
      single-threaded until parallel queries land in grafeo 0.6.4; only its rayon parts (vector batch,
      clustering, folds) are parallel, and the variable sets those to one thread.
    - LadybugDB: `max_num_threads=1`.
+   - ArcadeDB: its query, scan and async thread pools and the JVM's common fork-join pool set to 1 (the note lists
+     them). The JVM's own garbage collector and JIT compiler threads keep the JVM defaults.
 
    **Planned with grafeo 0.6.4:** the all-cores runs come back to the `full` selection, reported as a separate
    set of tables, and Grafeo's adapter switches from `RAYON_NUM_THREADS` to the real thread setting 0.6.4
@@ -83,6 +88,9 @@ Load uses each database's **fastest documented bulk path, CSV parsing included**
   (query language), so engine-side load fixes show up there. When Grafeo's native typed loader lands, it
   replaces the batch API for Load.
 - LadybugDB: `COPY ... FROM` the CSV files.
+- ArcadeDB: GraphBatch (`create_vertices`, then `new_edges` from an id to RID map), with the CSVs parsed in
+  Python. Its faster Graph Importer does not honour CSV quotes, which the SNB text columns need (see
+  [docs/known-disagreements.md](docs/known-disagreements.md)).
 
 ## Adapter rules
 

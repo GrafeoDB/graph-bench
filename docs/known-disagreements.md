@@ -415,6 +415,85 @@ IS5 and IS6 (Grafeo 0.2 to 0.3 ms), 99 ms for IC13, 201 ms for IC2 and 239 ms fo
 Load takes 8.3 s (Graphalytics) and 11.6 s (SNB) against 0.09 s and 0.14 s. No `- id:` line: the adapter test runs
 HelixDB alone and it must agree.
 
+## ArcadeDB: the Graph Importer does not honour CSV quotes (why GraphBatch loads)
+
+- ArcadeDB's Graph Importer (https://docs.arcadedb.com/arcadedb/how-to/migration/graph-importer) is its fastest
+  graph loader (research-c: 2.0 s against 3.7 s for GraphBatch on 100k vertices and 500k edges), but its CSV reader
+  "splits on the delimiter without honouring quotes" (the docs, under array columns). The SNB text columns
+  (`content`, `title`, names) contain commas and quotes, so it would load wrong values. The adapter therefore loads
+  with GraphBatch (`create_vertices` and `new_edges` from an id to RID map, the documented Python bulk path), which
+  gets its rows from Python's `csv` module. Cause: ArcadeDB (importer); no upstream issue found, the behaviour is
+  documented.
+- Minimal reproduction (arcadedb-embedded 26.10.2.post1, Windows and Linux):
+
+  ```python
+  import json, pathlib, tempfile
+  import arcadedb_embedded as adb, jpype
+
+  adb.jvm.start_jvm()
+  d = pathlib.Path(tempfile.mkdtemp())
+  (d / "V.csv").write_text('id,name\n1,"Smith, John"\n2,"say ""hi"""\n3,plain\n', encoding="utf-8")
+  cfg = {"vertices": [{"type": "V", "file": "V.csv", "id": "id", "properties": {"id": "long:id", "name": "name"}}]}
+  GI = jpype.JClass("com.arcadedb.integration.importer.graph.GraphImporter")
+  J = jpype.JClass("com.arcadedb.serializer.json.JSONObject")(json.dumps(cfg))
+  db = adb.create_database(str(d / "db"))
+  GI.createSchemaFromConfig(db.get_java_database(), J)
+  GI.fromJSON(db.get_java_database(), J, str(d)).run()
+  print(db.query("opencypher", "MATCH (n:V) RETURN n.id AS id, n.name AS name ORDER BY id").to_list())
+  ```
+
+  Output: `[{'id': 1, 'name': '"Smith'}, {'id': 2, 'name': '"say ""hi"""'}, {'id': 3, 'name': 'plain'}]`; the
+  CSV values are `Smith, John` and `say "hi"`.
+
+## ArcadeDB: unlabeled id lookups scan every vertex (IS4, IS5, IS6; not allowlisted)
+
+The answers agree with the references. IS4, IS5 and IS6 start from `(m {id: $messageId})` with no label (the
+shared text; a message is a Post or a Comment). ArcadeDB's openCypher planner does not use the unique `id` indexes
+of the vertex types for it: `EXPLAIN` shows "Using Traditional Execution (Non-Optimized). Reason: Query pattern not
+yet supported by optimizer" and `+ MATCH NODE (m)` (IS4: `[filter: (m:Post OR m:Comment)]`), a scan of all 4178
+vertices, while a labeled lookup such as IS3's `(n:Person {id: $personId})` is a `NodeIndexSeek`. On `snb-small`
+(Windows, one thread) a single unlabeled lookup takes 2.3 ms against 0.09 ms for `(m:Comment {id: $id})`. In
+`bench --selection push --db grafeo,arcadedb` the three are marked `timeout` (⏱) by the budget rule against Grafeo
+alone (10 bindings: IS4 14.6 ms, IS5 9.3 ms, IS6 9.7 ms; IS1 0.7 ms). The query text is not rewritten. Cause:
+ArcadeDB (query planner). No `- id:` line: the adapter test runs ArcadeDB alone, where no budget applies.
+
+## ArcadeDB: algorithms are slow under the 10x budget rule (not allowlisted)
+
+The answers agree with the references (PageRank within `LDBC_EPS`, run with damping 0.85, `maxIterations` 1000 and
+`tolerance` 1e-10 as the other adapters). Against Grafeo alone, BFS (21.9 ms, Grafeo 0.95 ms) and WCC (35.2 ms,
+Grafeo 3.1 ms) are marked `timeout` (⏱) by the budget rule in `bench --selection push --db grafeo,arcadedb`;
+PageRank (11.7 ms, Grafeo 2.4 ms) is within it. The procedures run without a Graph Analytical View (optional, not
+created). `algo.bfs` leaves the start vertex out of its result ("The start node is excluded from the results",
+https://docs.arcadedb.com/arcadedb/reference/graph-algorithms/path-finding.html#algo-bfs), so the adapter adds it
+at depth 0, the reference's definition. No `- id:` line.
+
+## ArcadeDB: threads, heap, storage and the JVM start (notes)
+
+- Threads: the worker starts the JVM with the documented engine settings `arcadedb.queryParallelismPoolThreads=1`,
+  `arcadedb.parallelScanProducerPoolThreads=1`, `arcadedb.queryParallelScan=false` and
+  `arcadedb.asyncWorkerThreads=1` (https://docs.arcadedb.com/arcadedb/reference/settings) and
+  `java.util.concurrent.ForkJoinPool.common.parallelism=1`, through the package's `ARCADEDB_JVM_ARGS`; GraphBatch
+  gets `parallel_flush=False`. A load with threads=1 fails when the JVM lacks them. Measured on `snb-small` and
+  `graphalytics-small` (Windows, 16 cores, `ThreadMXBean` CPU time per Java thread): during IC6, IS4, BFS, WCC and
+  PageRank the query work is on the calling thread alone (CPU/wall 0.86 to 1.0; no pool thread used CPU). The
+  process as a whole used 1.04 to 2.4 cores, the rest on the JVM's own threads (garbage collector, JIT compiler),
+  which are not Java threads and are not capped: the JVM defaults stay, as they would for any embedding
+  application. The results record `threads_configurable=True` with that note.
+- Heap: the shared JVM cap `-Xmx4g` (`graph_bench/databases/jvm.py`, `MAX_HEAP`), checked after the start; the page
+  cache (`arcadedb.maxPageRAM`) keeps its default, a quarter of the heap.
+- Storage: ArcadeDB has no in-memory mode, so each load creates an on-disk database in its fresh workdir
+  (`storage="on-disk"`). GraphBatch runs with its default, the write-ahead log off.
+- The JVM starts once per process in `prepare_environment`, outside every clock, followed by creating and dropping
+  one empty database (the engine's one-time start, about 0.25 s). Every load is in the load clock from
+  `create_database` on: schema, unique `id` indexes, vertices and edges.
+- Logging: the engine's built-in configuration writes `./log/arcadedb.log` into the working directory; the adapter
+  passes `java.util.logging.config.file` with the same configuration and the file in a per-process temporary
+  directory, removed at exit.
+- Package: arcadedb-embedded 26.10.2.post1 is the latest stable release. ArcadeDB's Python docs announce the JVM
+  build's rename to `arcadedb-jvm` from 26.11.1, after which `arcadedb-embedded` becomes a shim that installs the
+  native (GraalVM) `arcadedb` package (https://docs.arcadedb.com/arcadedb-python/which-package.html); both exist on
+  PyPI only as 26.11.1 pre-releases today.
+
 ## DuckDB + DuckPGQ: the label disjunction `Post|Comment` does not parse (IS4, IS6; not available as an error)
 
 - id: duckdb/snb_sql_is4

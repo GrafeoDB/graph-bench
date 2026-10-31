@@ -39,6 +39,8 @@ htmlcov/
 
 # ── Embedded database data ───────────────────────────────────────────
 data/
+# ArcadeDB's default engine log directory (the adapter moves it to a temporary directory; this is a safety net)
+log/
 
 # ── Results ───────────────────────────────────────────────────────────
 results/*
