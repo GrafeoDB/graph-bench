@@ -634,3 +634,44 @@ def test_load_ql_probe_error_fails_the_entry(
     lines.clear()
     worker.run_load_ql(FakeDatabase, data, tmp_path / "work", 1, 1, base, load_id, lines.append, "setup broke")
     assert _entries(lines)[load_id] == {"kind": "entry", "id": load_id, "status": "failed", "error": "setup broke"}
+
+
+PANIC = "PanicException: assertion failed: index <= Self::MAX_CAPACITY"
+
+
+@pytest.mark.parametrize(
+    ("flag", "failed"),
+    [("panic:snb_is4", "snb_is4"), ("panic:graphalytics_bfs", "graphalytics_bfs")],
+)
+def test_worker_database_panic_fails_the_case_only(push_data_dir: Path, tmp_path: Path, flag: str, failed: str) -> None:
+    lines, proc = run_worker(tmp_path / "fake.jsonl", push_data_dir, fake=flag)
+    assert proc.returncode == 0, proc.stderr
+    assert len([line for line in lines if line["kind"] == "database"]) == 1  # one launch, no relaunch
+    entries = _entries(lines)
+    assert (entries[_id(failed)]["status"], entries[_id(failed)]["error"]) == ("failed", PANIC)
+    assert (entries[_id("snb_is3")]["status"], entries[_id("snb_is3")]["answer"]) == ("ok", "agree")
+
+
+def test_worker_database_panic_in_a_load_fails_the_load(push_data_dir: Path, tmp_path: Path) -> None:
+    lines, proc = run_worker(tmp_path / "fake.jsonl", push_data_dir, fake="panic:load_snb")
+    assert proc.returncode == 0, proc.stderr
+    entries = _entries(lines)
+    load = entries[catalog.load_id("snb", "fake", "small", 1)]
+    assert (load["status"], load["error"]) == ("failed", PANIC)
+    assert entries[_id("snb_is4")]["error"] == f"load failed: {PANIC}"
+    assert entries[_id("graphalytics_bfs")]["status"] == "ok"  # the other dataset still loads
+
+
+def test_worker_database_panic_in_open_empty_fails_the_startup(push_data_dir: Path, tmp_path: Path) -> None:
+    lines, proc = run_worker(tmp_path / "fake.jsonl", push_data_dir, fake="panic:startup")
+    assert proc.returncode == 0, proc.stderr
+    entry = _entries(lines)[catalog.startup_id("fake", 1)]
+    assert entry["status"] == "failed"
+    assert PANIC in entry["error"]
+    assert _entries(lines)[_id("snb_is4")]["status"] == "ok"
+
+
+def test_worker_keyboard_interrupt_from_the_database_stops_the_worker(push_data_dir: Path, tmp_path: Path) -> None:
+    lines, proc = run_worker(tmp_path / "fake.jsonl", push_data_dir, fake="interrupt:snb_is4")
+    assert proc.returncode != 0
+    assert _id("snb_is4") not in _entries(lines)

@@ -32,6 +32,7 @@ from graph_bench.databases import get_database
 from graph_bench.databases.base import Database, NotSupported
 from graph_bench.datasets import cache
 from graph_bench.datasets.schema import Dataset
+from graph_bench.runner import reraise_control
 from graph_bench.runner.startup import Child, fresh_dir, passed, run_child, spawn_child, startup_entry, summarize
 from graph_bench.runner.worker import (
     Emit,
@@ -128,7 +129,7 @@ class EnvironmentFailed(Exception):
     """The database's `prepare_environment` failed; the message is the worker's load error text."""
 
 
-def _load_error(exc: Exception) -> str:
+def _load_error(exc: BaseException) -> str:
     """A failed load's error text, as the worker writes it."""
     return str(exc) if isinstance(exc, EnvironmentFailed) else message(exc)
 
@@ -265,7 +266,8 @@ class Bench:
                 self.emit(progress)
 
             loaded = load(self.db_cls, self.dataset(key), self.workdir, key[3], 1, on_load, store=key[1])
-        except Exception as exc:
+        except BaseException as exc:
+            reraise_control(exc)
             self._failed[key] = _load_error(exc)
             raise LoadFailed(self._failed[key]) from exc
         self._loaded = (key, loaded)
@@ -336,7 +338,8 @@ def run_case(benchmark: Any, bench: Bench, case: Case) -> None:
         else:
             try:
                 benchmark(pf.run)
-            except Exception as exc:
+            except BaseException as exc:
+                reraise_control(exc)
                 entry["status"], entry["error"] = "failed", message(exc)
     write_guard(entry, pf.write)
     bench.emit(entry)
@@ -375,7 +378,8 @@ def _bench_write(benchmark: Any, bench: Bench, write: WriteRun, entry: dict[str,
     except SetupDiffers as exc:
         write.undo()
         entry["status"], entry["error"] = "failed", str(exc)
-    except Exception as exc:
+    except BaseException as exc:
+        reraise_control(exc)
         write.undo()
         entry["status"], entry["error"] = "failed", message(exc)
 
@@ -424,7 +428,8 @@ def run_load(benchmark: Any, bench: Bench, lc: LoadCase) -> None:
         datasets.append(bench.dataset(key))
         bench.prepare()
         benchmark.pedantic(target, setup=setup, rounds=bench.selection.load_iterations)
-    except Exception as exc:
+    except BaseException as exc:
+        reraise_control(exc)
         drop()
         error = _load_error(exc)
         bench.load_failed(key, error)
@@ -492,7 +497,8 @@ def run_load_ql(benchmark: Any, bench: Bench, lq: LoadQlCase) -> None:
             probes.append((probe, catalog.reference_path(probe.item, lq.scale, base=bench.base)))
         benchmark.pedantic(target, setup=setup, rounds=bench.selection.load_iterations)
         finish()
-    except Exception as exc:
+    except BaseException as exc:
+        reraise_control(exc)
         for db, db_dir in instances:
             db.close()
             remove(db_dir)
@@ -515,7 +521,8 @@ def run_startup(benchmark: Any, bench: Bench, sc: StartupCase) -> None:
     bench.emit({"kind": "start", "id": sc.bench_id})
     try:
         bench.db_cls.provision()
-    except Exception as exc:
+    except BaseException as exc:
+        reraise_control(exc)
         entry = {"kind": "entry", "id": sc.bench_id, "status": "failed", "error": f"provisioning: {message(exc)}"}
         bench.emit(entry)
         _outcome(entry)

@@ -47,7 +47,7 @@ from graph_bench.databases import get_database
 from graph_bench.databases.base import NotSupported
 from graph_bench.datasets import cache
 from graph_bench.results import Resource
-from graph_bench.runner import message
+from graph_bench.runner import message, reraise_control
 from graph_bench.runner.sampler import (
     SAMPLE_INTERVAL_S,
     Sample,
@@ -113,7 +113,8 @@ def measure(
         return _result("failed", setup_error)
     try:
         instance = cls(workdir, threads)
-    except Exception as exc:
+    except BaseException as exc:
+        reraise_control(exc)
         return _result("failed", f"opening the instance: {message(exc)}")
     closed = False
     try:
@@ -122,31 +123,37 @@ def measure(
             instance.load_store(store, data)
         except NotSupported as exc:
             return _result("not_supported", message(exc))
-        except Exception as exc:
+        except BaseException as exc:
+            reraise_control(exc)
             return _result("failed", message(exc))
         emit(_reading("after"))
         try:
             answer, detail = count_check(instance, data)
-        except Exception as exc:
+        except BaseException as exc:
+            reraise_control(exc)
             return _result("failed", f"counting the loaded data: {message(exc)}")
         try:
             storage = instance.info().storage
-        except Exception as exc:
+        except BaseException as exc:
+            reraise_control(exc)
             return _result("failed", f"reading the database info: {message(exc)}")
         try:
             paths = instance.store_paths()
-        except Exception as exc:
+        except BaseException as exc:
+            reraise_control(exc)
             return _result("failed", f"reading the store paths: {message(exc)}")
         closed = True
         try:
             instance.close()
-        except Exception as exc:
+        except BaseException as exc:
+            reraise_control(exc)
             return _result("failed", f"closing: {message(exc)}")
     finally:
         if not closed:
             try:
                 instance.close()
-            except Exception as exc:  # the record keeps the first error
+            except BaseException as exc:  # the record keeps the first error
+                reraise_control(exc)
                 sys.stderr.write(f"closing after the failure also failed: {message(exc)}\n")
     try:
         disk = dir_size(paths) if paths else None

@@ -43,7 +43,7 @@ from graph_bench.databases.base import Database, NotSupported
 from graph_bench.datasets import cache
 from graph_bench.datasets.schema import Dataset
 from graph_bench.results import Reference
-from graph_bench.runner import message
+from graph_bench.runner import message, reraise_control
 from graph_bench.runner.startup import STARTUP_TIMEOUT_S, run_startups, startup_entry
 from graph_bench.runner.timing import measure
 from graph_bench.suites import Algorithm, Item, Query, Write, catalog
@@ -177,8 +177,8 @@ class WriteRun:
         """Best-effort teardown after a run or setup that raised; the counts guard reports what it leaves."""
         try:
             self.teardown()
-        except Exception:
-            return
+        except BaseException as exc:
+            reraise_control(exc)
 
     def check(self) -> list[Any]:
         """The read-back, untimed: the check query per binding, canonicalized."""
@@ -259,7 +259,8 @@ def preflight(case: Case, db: Database, reference_file: Path, *, budget_s: float
         start = time.perf_counter_ns()
         raw = result.run()
         result.preflight_ns = time.perf_counter_ns() - start
-    except Exception as exc:
+    except BaseException as exc:
+        reraise_control(exc)
         return result.fail(exc)
     finally:
         emit({"kind": "progress", "id": case.bench_id})
@@ -304,11 +305,13 @@ def write_preflight(
         return result.fail(ValueError(problem))
     try:
         write.baseline = _counts(db)
-    except Exception as exc:
+    except BaseException as exc:
+        reraise_control(exc)
         return result.fail(exc, "counting the graph before the case: ")
     try:
         state = write.differs(before)
-    except Exception as exc:
+    except BaseException as exc:
+        reraise_control(exc)
         return result.fail(exc)
     if state is not None:
         result.status, result.error = "failed", f"the graph is not in its loaded state before the case: {state}"
@@ -319,7 +322,8 @@ def write_preflight(
         write.undo()
         result.status, result.error = "failed", str(exc)
         return result
-    except Exception as exc:
+    except BaseException as exc:
+        reraise_control(exc)
         write.undo()
         return result.fail(exc, "setup: ")
     emit({"kind": "run", "id": case.bench_id})
@@ -327,7 +331,8 @@ def write_preflight(
         start = time.perf_counter_ns()
         write.run()
         result.preflight_ns = time.perf_counter_ns() - start
-    except Exception as exc:
+    except BaseException as exc:
+        reraise_control(exc)
         write.undo()
         return result.fail(exc)
     finally:
@@ -337,7 +342,8 @@ def write_preflight(
         problem = verify(result.answers, after, rel_eps=item.rel_eps)
         write.teardown()
         restored = write.differs(before)
-    except Exception as exc:
+    except BaseException as exc:
+        reraise_control(exc)
         write.undo()
         return result.fail(exc, "checking the answer: ")
     result.answer = "agree"
@@ -375,7 +381,8 @@ def time_write(
     except SetupDiffers as exc:
         write.undo()
         return {"status": "failed", "error": str(exc)}
-    except Exception as exc:
+    except BaseException as exc:
+        reraise_control(exc)
         write.undo()
         return {"status": "failed", "error": message(exc)}
     return {"timing": asdict(timing)}
@@ -396,7 +403,8 @@ def write_guard(entry: dict[str, Any], write: WriteRun | None) -> None:
             nodes, edges = counted
             expected = f"expected {write.baseline[0]} nodes, {write.baseline[1]} edges"
             problem = f"the case left the graph changed: {nodes} nodes, {edges} edges; {expected}"
-    except Exception as exc:
+    except BaseException as exc:
+        reraise_control(exc)
         problem = f"counting the graph after the case: {message(exc)}"
     if problem is not None:
         entry["status"] = "failed"
@@ -448,7 +456,8 @@ def prepare_environment(db_cls: type[Database]) -> str | None:
     """Run the database's one-time environment setup (outside any clock); its error message, or None."""
     try:
         db_cls.prepare_environment()
-    except Exception as exc:
+    except BaseException as exc:
+        reraise_control(exc)
         return f"preparing the environment: {message(exc)}"
     return None
 
@@ -491,7 +500,8 @@ class LoadCheck:
             return
         try:
             answer, detail = count_check(db, dataset)
-        except Exception as exc:
+        except BaseException as exc:
+            reraise_control(exc)
             self.error = f"counting the loaded data: {message(exc)}"
             return
         if answer == "disagree" or self.skipped is None:
@@ -514,7 +524,8 @@ class LoadCheck:
             self.skipped = f"content probe {case.item.id} not run: {message(exc)}"
             self.answer, self.detail = "unchecked", self.skipped
             return
-        except Exception as exc:
+        except BaseException as exc:
+            reraise_control(exc)
             self.error = label + message(exc)
             return
         if verdict == "disagree":
@@ -651,7 +662,8 @@ def run_load_ql(
                 db.close()
                 remove(db_dir)
             emit({"kind": "progress", "id": load_id})
-    except Exception as exc:
+    except BaseException as exc:
+        reraise_control(exc)
         status = "not_supported" if isinstance(exc, NotSupported) else "failed"
         emit({"kind": "entry", "id": load_id, "status": status, "error": message(exc)})
         return
@@ -681,7 +693,8 @@ def run_startup(
     emit({"kind": "start", "id": bench_id})
     try:
         db_cls.provision()
-    except Exception as exc:
+    except BaseException as exc:
+        reraise_control(exc)
         error = f"provisioning: {message(exc)}"
         emit({"kind": "entry", "id": bench_id, "status": "failed", "error": error, "reference": "python"})
         return
@@ -776,7 +789,8 @@ def _run_case(case: Case, db: Database, base: Path, settings: _Settings, emit: E
             try:
                 timing, _ = measure(pf.run, warmup=warmup, iterations=sel.iterations, on_run=lambda: emit(progress))
                 entry["timing"] = asdict(timing)
-            except Exception as exc:
+            except BaseException as exc:
+                reraise_control(exc)
                 entry["status"], entry["error"] = "failed", message(exc)
     write_guard(entry, pf.write)
     emit(entry)
@@ -925,7 +939,8 @@ def _load_and_run(
                 emit(progress)
 
             loaded = load(db_cls, dataset, workdir, threads, iterations, on_load, check=check, store=store)
-        except Exception as exc:
+        except BaseException as exc:
+            reraise_control(exc)
             text = message(exc)
     if loaded is None:  # `text` holds the setup or load error
         if load_id is not None:

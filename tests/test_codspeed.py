@@ -193,6 +193,48 @@ def test_codspeed_marker_outcomes(push_data_dir: Path, tmp_path: Path) -> None:
     assert all(e["timing"] is None for e in entries.values())
 
 
+PANIC = "PanicException: assertion failed: index <= Self::MAX_CAPACITY"
+
+
+def test_codspeed_database_panic_is_the_tests_failure(push_data_dir: Path, tmp_path: Path) -> None:
+    """A panic from a query, an algorithm, a load and open_empty fails that test with its message; the rest run."""
+    fake = "panic:snb_is2,panic:graphalytics_bfs,panic:load_graphalytics,panic:startup"
+    junit = tmp_path / "junit.xml"
+    out = tmp_path / "gb.jsonl"
+    args = ["--db", "fake", "--selection", "push", f"--junitxml={junit}", "--gb-out", str(out)]
+    args += ["-k", "test_snb_is2 or test_snb_is3 or test_graphalytics_bfs or test_load_graphalytics or test_startup"]
+    proc = _pytest(args, _env(push_data_dir, fake))
+    assert proc.returncode == 1, proc.stdout + proc.stderr  # failures, not an interrupted or crashed session
+    outcomes = _junit_outcomes(junit)
+    assert outcomes["test_snb_is2[fake-small]"] == ("failure", f"error: {PANIC}")
+    assert outcomes["test_snb_is3[fake-small]"] == ("passed", "")
+    assert outcomes["test_graphalytics_bfs[fake-small]"][0] == "failure"
+    assert outcomes["test_graphalytics_bfs[fake-small]"][1] == f"error: load failed: {PANIC}"
+    load = next(name for name in outcomes if name.startswith("test_load_graphalytics"))
+    assert outcomes[load] == ("failure", f"error: {PANIC}")
+    startup = next(name for name in outcomes if name.startswith("test_startup"))
+    assert outcomes[startup][0] == "failure"
+    assert PANIC in outcomes[startup][1]
+
+
+def test_codspeed_database_panic_in_an_algorithm_fails_that_test(push_data_dir: Path, tmp_path: Path) -> None:
+    junit = tmp_path / "junit.xml"
+    args = ["--db", "fake", "--selection", "push", f"--junitxml={junit}", "--gb-out", str(tmp_path / "gb.jsonl")]
+    args += ["-k", "test_graphalytics_bfs or test_graphalytics_wcc"]
+    proc = _pytest(args, _env(push_data_dir, "panic:graphalytics_bfs"))
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    outcomes = _junit_outcomes(junit)
+    assert outcomes["test_graphalytics_bfs[fake-small]"] == ("failure", f"error: {PANIC}")
+    assert outcomes["test_graphalytics_wcc[fake-small]"] == ("passed", "")
+
+
+def test_codspeed_keyboard_interrupt_from_the_database_stops_the_session(push_data_dir: Path, tmp_path: Path) -> None:
+    args = ["--db", "fake", "--selection", "push", "--gb-out", str(tmp_path / "gb.jsonl")]
+    args += ["-k", "test_snb_is2 or test_snb_is3"]
+    proc = _pytest(args, _env(push_data_dir, "interrupt:snb_is2"))
+    assert proc.returncode == 2, proc.stdout + proc.stderr  # pytest: interrupted
+
+
 def test_codspeed_prepares_environment_once_before_loads(push_data_dir: Path, tmp_path: Path) -> None:
     trace = tmp_path / "trace.txt"
     env = {**_env(push_data_dir), "GRAPH_BENCH_FAKE_TRACE": str(trace)}

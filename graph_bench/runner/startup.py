@@ -48,7 +48,7 @@ import graph_bench.datasets.schema  # noqa: F401
 from graph_bench.answers import SNB_EPS, canonical, verify
 from graph_bench.databases import get_database, model_support
 from graph_bench.databases.base import NotSupported
-from graph_bench.runner import message
+from graph_bench.runner import message, reraise_control
 from graph_bench.runner.sampler import set_child_subreaper
 from graph_bench.runner.timing import summary
 from graph_bench.suites.startup import EXPECTED, primary_model, probe_text
@@ -89,7 +89,8 @@ def measure_start(db: str, threads: int | None, workdir: Path) -> tuple[int, lis
     except BaseException:
         try:
             instance.close()
-        except Exception as close_error:  # the start's own error is the one the entry records
+        except BaseException as close_error:  # the start's own error is the one the entry records
+            reraise_control(close_error)
             sys.stderr.write(f"closing after the failed start also failed: {message(close_error)}\n")
         raise
     instance.close()
@@ -115,7 +116,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         doc = {"elapsed_ns": elapsed, "rows": rows}
     except NotSupported as exc:
         doc = {"error": message(exc), "not_supported": True}
-    except Exception as exc:
+    except BaseException as exc:
+        reraise_control(exc)
         doc = {"error": message(exc), "not_supported": False}
     sys.stdout.write(json.dumps(doc, ensure_ascii=False, default=str) + "\n")
     sys.stdout.flush()

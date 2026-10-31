@@ -7,10 +7,12 @@ serves RDF only and FakeSqlDatabase SQL/PGQ only, through the single-model defau
 
 Behaviour flags, a comma list in `GRAPH_BENCH_FAKE` (FakeDatabase), or `GRAPH_BENCH_FAKE2` to `GRAPH_BENCH_FAKE4`
 (FakeDatabase2 to FakeDatabase4):
-`crash:<item_id>` exits the process with code 3, `crash_soft:<item_id>` raises RuntimeError, `hang:<item_id>`
-sleeps an hour, `slow:<item_id>` sleeps 0.2 s per call, `slow_check:<item_id>` answers at once but returns rows
-that take 0.2 s to iterate (so the worker's answer check, not the database call, is slow), `wrong:<item_id>`
-returns a perturbed answer and `unsupported:<item_id>` raises NotSupported.
+`crash:<item_id>` exits the process with code 3, `crash_soft:<item_id>` raises RuntimeError,
+`panic:<item_id>` raises `PanicException` (a `BaseException`, like pyo3's), `interrupt:<item_id>` raises
+KeyboardInterrupt, `hang:<item_id>` sleeps an hour, `slow:<item_id>` sleeps 0.2 s per call,
+`slow_check:<item_id>` answers at once but returns rows that take 0.2 s to iterate (so the worker's answer check, not
+the database call, is slow), `wrong:<item_id>` returns a perturbed answer and
+`unsupported:<item_id>` raises NotSupported.
 `crash:load_<dataset>` and `hang:load_<dataset>` do the same while loading that dataset into the graph store
 (`load_<dataset>_rdf` into the RDF store: the load's benchmark name), and `crash_soft:environment` makes
 `prepare_environment` raise.
@@ -61,6 +63,10 @@ from graph_bench.datasets.schema import Dataset
 from graph_bench.suites import Algorithm, Query, Write, catalog
 from graph_bench.suites.startup import EXPECTED, primary_model, probe_text
 from graph_bench.types import MODEL_STORE, STANDARD_DIALECT, Model, Store
+
+
+class PanicException(BaseException):
+    """What pyo3 raises for a Rust panic: a `BaseException`, not an `Exception`."""
 
 
 class SlowRows(list[tuple[Any, ...]]):
@@ -206,6 +212,10 @@ class FakeDatabase(Database):
             os._exit(3)
         if "crash_soft" in flags:
             raise RuntimeError("soft crash")
+        if "panic" in flags:
+            raise PanicException("assertion failed: index <= Self::MAX_CAPACITY")
+        if "interrupt" in flags:
+            raise KeyboardInterrupt
         if "hang" in flags:
             time.sleep(3600)
 
