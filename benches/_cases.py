@@ -573,8 +573,10 @@ def make_test(item: Item) -> Callable[..., None]:
 
 
 def load_keys() -> list[tuple[str, Store]]:
-    """Every (dataset, store) a catalog item reads: one load test each."""
-    return sorted({(item.dataset, item.store) for item in catalog.ITEMS})
+    """Every (dataset, store) a catalog item reads, but the answer-only fixtures (`catalog.ANSWER_ONLY_DATASETS`,
+    loaded for their cases without a Load entry): one load test each."""
+    keys = {(item.dataset, item.store) for item in catalog.ITEMS if item.dataset not in catalog.ANSWER_ONLY_DATASETS}
+    return sorted(keys)
 
 
 def load_ql_datasets() -> list[str]:

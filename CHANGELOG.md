@@ -74,6 +74,14 @@ benchmark moves to `legacy/` untouched and is deleted once the new comparison re
   relationship-isomorphic and walk-based engines give the same answer, and the references check that KNOWS pairs are
   unique and loop-free. Each has an SQL/PGQ twin and, but for the variable length (SPARQL 1.1 has no bounded
   repetition), a SPARQL twin in the same category. HelixDB runs all three through DSL builders.
+- **Pattern matching**: triangles and 4-cycles through a person, common friends and a multi-pattern join on SNB, each
+  with an SQL/PGQ and a SPARQL twin; triangles through a hub person and over the whole graph; and the analytics
+  brief's whole-graph 2-hop count, 2-hop count per source (top 10) and out-degree (top 10) on Graphalytics
+  (`graph_bench/suites/patterns.py`). Explicit node-distinctness conditions make relationship-isomorphic and
+  walk-based engines agree on the SNB patterns. The trail-semantics case runs the 2-hop count on a new multigraph
+  fixture with self-loops and parallel edges (`graph_bench/datasets/multigraph.py`), where trails and walks differ;
+  it is answer-only (`catalog.ANSWER_ONLY_DATASETS`): no budget, no ranking, ✓ or its marker in the matrix, and the
+  fixture has no Load or Memory and Disk rows. HelixDB runs common friends and the 2-hop count through DSL builders.
 - **Memory and Disk records**: after each database's worker (or pytest process), the supervisor loads every
   dataset and store the database's models reach once more, each in a fresh child process
   (`graph_bench/runner/resources.py`), and samples the child's whole process tree every 10 ms from outside

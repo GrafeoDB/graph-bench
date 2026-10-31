@@ -24,10 +24,23 @@ from types import ModuleType
 from typing import Any
 
 from graph_bench.databases import model_support
-from graph_bench.suites import Algorithm, Item, Query, Write, graphalytics, hops, scans, snb, snb_rdf, snb_sql
+from graph_bench.suites import (
+    Algorithm,
+    Item,
+    Query,
+    Write,
+    graphalytics,
+    hops,
+    patterns,
+    scans,
+    snb,
+    snb_rdf,
+    snb_sql,
+)
 from graph_bench.types import CATEGORY_ORDER, Category, Model, Store
 
 __all__ = [
+    "ANSWER_ONLY_DATASETS",
     "EXTRA_SUITES",
     "EXTRA_SUITES_ENV",
     "ITEMS",
@@ -43,6 +56,7 @@ __all__ = [
     "Write",
     "all_ids",
     "all_load_keys",
+    "answer_only",
     "cases",
     "load_benchmark",
     "load_id",
@@ -80,12 +94,27 @@ def _extra_suites() -> tuple[ModuleType, ...]:
 # The modules GRAPH_BENCH_EXTRA_SUITES adds, and all suite modules in catalog order; their items, in that order, are
 # the catalog.
 EXTRA_SUITES: tuple[ModuleType, ...] = _extra_suites()
-SUITES: tuple[ModuleType, ...] = (scans, hops, snb, graphalytics, snb_sql, snb_rdf, *EXTRA_SUITES)
+SUITES: tuple[ModuleType, ...] = (scans, hops, patterns, snb, graphalytics, snb_sql, snb_rdf, *EXTRA_SUITES)
 
 ITEMS: tuple[Item, ...] = tuple(item for module in SUITES for item in _module_items(module))
 
 _BY_ID = {item.id: item for item in ITEMS}
 _SOURCE = {item.id: module for module in SUITES for item in _module_items(module)}
+
+# Answer-check-only datasets: fixtures that test what an engine answers, not how fast. Their items are answer-only
+# (`answer_only`): checked like any case (✓ or a marker in the matrix) but with no time budget, in the run or at the
+# end, and never ranked, in the README tables or the summary. Their loads are not reported: the instance is loaded
+# for the items' cases (as when a selection has no Load row), with no Load, Load (query language) or Memory and Disk
+# row, so a load that fails or loses edges shows on the items themselves. The multigraph fixture is the data of the
+# trail-semantics case (`sem_trail_self_loop`).
+ANSWER_ONLY_DATASETS: frozenset[str] = frozenset({"multigraph"})
+_ANSWER_ONLY = frozenset(item.id for item in ITEMS if item.dataset in ANSWER_ONLY_DATASETS)
+
+
+def answer_only(benchmark: str) -> bool:
+    """Whether a benchmark (an item id, a results.json `benchmark`) is answer-only: no budget, no ranking."""
+    return benchmark in _ANSWER_ONLY
+
 
 # The Load (query language) content probe per (dataset, primary model): the item whose preflight call runs,
 # untimed, on each instance a query-language load filled, against that item's references. The order plus limit scan
@@ -219,7 +248,8 @@ def cases(selection_name: str, dbs: Sequence[str]) -> list[Case]:
 
 
 def all_load_keys(selection_name: str) -> dict[tuple[str, Store], Model]:
-    """Every (dataset, store) the selection's items read, sorted, with the model its load entry carries.
+    """Every (dataset, store) the selection's items read, sorted, with the model its load entry carries; the
+    reported loads (an `ANSWER_ONLY_DATASETS` fixture is loaded for its cases without a Load entry).
 
     An item reads `item.store` of its dataset: property graph and SQL/PGQ items and the algorithms share the graph
     store, RDF items read the RDF store, a separate load. The model is the first reading item's (catalog order):
@@ -227,12 +257,14 @@ def all_load_keys(selection_name: str) -> dict[tuple[str, Store], Model]:
     """
     found: dict[tuple[str, Store], Model] = {}
     for item in items(selection_name):
-        found.setdefault((item.dataset, item.store), item.model)
+        if item.dataset not in ANSWER_ONLY_DATASETS:
+            found.setdefault((item.dataset, item.store), item.model)
     return dict(sorted(found.items()))
 
 
 def load_keys(selection_name: str, models: frozenset[Model]) -> list[tuple[str, Store]]:
-    """The (dataset, store) loads of a database serving `models`, sorted: one per store its supported items read."""
+    """The (dataset, store) loads of a database serving `models`, sorted: one per store its supported items read,
+    the unreported loads of `ANSWER_ONLY_DATASETS` included (the instances its cases run on)."""
     return sorted({(item.dataset, item.store) for item in items(selection_name) if item.supported_by(models)})
 
 

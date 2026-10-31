@@ -94,6 +94,8 @@ def test_worker_emits_start_before_entry(standard: tuple[Lines, Path]) -> None:
     for line in lines[1:]:
         if line["kind"] == "start":
             started.add(line["id"])
+        elif line == {"kind": "progress", "id": None}:
+            continue  # an unreported load: the multigraph fixture's, which has no Load entry
         else:
             assert line["id"] in started, line
     entries = _entries(lines)
@@ -166,7 +168,8 @@ def test_worker_routes_each_model_to_its_store(push_data_dir: Path, tmp_path: Pa
     rdf_load = entries[catalog.load_id("snb", "fake", "small", 1, "rdf")]
     assert (rdf_load["status"], rdf_load["answer"]) == ("ok", "agree")
     loads = _calls(trace).count("load")
-    assert loads == catalog.selection("push").load_iterations * 3  # snb graph, snb RDF, graphalytics graph
+    # snb graph, snb RDF and graphalytics graph, each reported; and the multigraph fixture's unreported load, once.
+    assert loads == catalog.selection("push").load_iterations * 3 + 1
 
 
 def test_worker_skips_ids(standard: tuple[Lines, Path]) -> None:
@@ -285,7 +288,8 @@ def test_worker_prepares_environment_once_before_loads(
     _, proc = run_worker(tmp_path / "fake.jsonl", push_data_dir)
     assert proc.returncode == 0, proc.stderr
     sel = catalog.selection("push")
-    loads = sel.load_iterations * len(catalog.load_ids("push", ["fake"]))
+    # The reported loads, and the multigraph fixture's unreported one (answer-only, no Load entry), loaded once.
+    loads = sel.load_iterations * len(catalog.load_ids("push", ["fake"])) + 1
     loads_ql = sel.load_iterations * len(catalog.load_ql_ids("push", ["fake"]))
     calls = [call for call in _calls(trace) if call != "open_empty"]
     # The startup's provision, then the environment (which provisions first), then the loads; the query-language

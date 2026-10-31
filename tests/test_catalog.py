@@ -17,9 +17,10 @@ def _item(item_id: str) -> catalog.Query | catalog.Algorithm:
 
 def test_push_selection_cases() -> None:
     result = cases("push", ["grafeo", "ladybug"])
-    # 13 SNB and Graphalytics items, 4 SQL/PGQ, 3 RDF, the 15 Scans rows (5 queries, each in three models) and the 8
-    # Hops rows besides IC13 (3 queries in openCypher and SQL/PGQ, 2 in SPARQL).
-    assert len(result) == 2 * (13 + 4 + 3 + 15 + 8)
+    # 13 SNB and Graphalytics items, 4 SQL/PGQ, 3 RDF, the 15 Scans rows (5 queries, each in three models), the 8
+    # Hops rows besides IC13 (3 queries in openCypher and SQL/PGQ, 2 in SPARQL) and the 18 Pattern matching rows (10
+    # openCypher queries, 4 of them with an SQL/PGQ and a SPARQL twin).
+    assert len(result) == 2 * (13 + 4 + 3 + 15 + 8 + 18)
     assert all(c.threads == 1 for c in result)
     assert all(c.scale == "small" for c in result)
     assert [c.bench_id for c in result] == sorted(c.bench_id for c in result)
@@ -161,11 +162,33 @@ def test_load_ids_per_store() -> None:
         ("snb", "graph"): "property_graph",
         ("snb", "rdf"): "rdf",
     }
+    # The multigraph fixture is loaded for its openCypher case, but has no Load entry (answer-only).
     assert catalog.load_keys("push", frozenset({"property_graph", "sql_pgq", "rdf"})) == [
         ("graphalytics", "graph"),
+        ("multigraph", "graph"),
         ("snb", "graph"),
         ("snb", "rdf"),
     ]
+
+
+def test_answer_only_fixture_has_no_load_rows() -> None:
+    """An answer-only dataset's items have no budget and no ranking, and its loads are not reported: no Load, Load
+    (query language) or Memory and Disk row, while the databases its items reach still load it for them."""
+    assert frozenset({"multigraph"}) == catalog.ANSWER_ONLY_DATASETS
+    only = {item.id for item in catalog.ITEMS if catalog.answer_only(item.id)}
+    assert only == {"sem_trail_self_loop"}
+    assert not catalog.answer_only("pm_two_hop_count")
+    assert not catalog.answer_only("load_graphalytics")
+    for name in ("push", "full"):
+        assert all(dataset != "multigraph" for dataset, _ in catalog.all_load_keys(name))
+        assert "multigraph" not in catalog.load_ql_keys(name)
+        ids = catalog.load_ids(name, ["grafeo"]) + catalog.load_ql_ids(name, ["grafeo"])
+        assert ids and not [i for i in ids if "multigraph" in i]
+        assert ("multigraph", "graph") in catalog.load_keys(name, frozenset({"property_graph"}))
+        assert ("multigraph", "graph") not in catalog.load_keys(name, frozenset({"sql_pgq", "rdf"}))
+    assert "benches/test_pattern_matching.py::test_sem_trail_self_loop[grafeo-small]" in catalog.all_ids(
+        "push", ["grafeo"]
+    )
 
 
 def test_algorithms_run_on_any_graph_model() -> None:

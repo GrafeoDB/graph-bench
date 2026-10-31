@@ -19,7 +19,8 @@ Lines, appended to `--out` and flushed one by one:
 
 The order: the startup first (before any load, after `Database.provision()`, untimed), then per (dataset, store,
 scale) its load, its read cases, its write cases and, once that instance is released, its Load (query language)
-entry on fresh instances of its own.
+entry on fresh instances of its own. The answer-only fixtures (`catalog.ANSWER_ONLY_DATASETS`, loaded without a Load
+entry) come last.
 
 The canonical answers of each case go to `<out dir>/<out stem>/answers/<sanitized id>.json`.
 """
@@ -861,7 +862,10 @@ def run(
                     else:
                         emit(unsupported_load_entry(load_ql_id, model))
         reported = {key: load_id for key, load_id in load_ids.items() if load_id not in skip}
-        needed = [key for key in sorted(groups) if groups[key] or key in reported or key in load_ql_ids]
+        # An answer-only fixture last: its load is unreported (no `start` line), so a crash while loading it leaves
+        # no open id, and the resume rule then fails only what is still unrecorded, its own cases.
+        order = sorted(groups, key=lambda key: (key[0] in catalog.ANSWER_ONLY_DATASETS, key))
+        needed = [key for key in order if groups[key] or key in reported or key in load_ql_ids]
         if not needed:
             return
         datasets = cache.prepare(sel.name)
@@ -932,7 +936,9 @@ def _load_and_run(
     if text is None:
         try:
             progress = {"kind": "progress", "id": load_id}
-            iterations = settings.selection.load_iterations
+            # An unreported load (no Load entry: an answer-only fixture, or a selection without the Load row) records
+            # no time, so one load is enough.
+            iterations = settings.selection.load_iterations if load_id is not None else 1
             check = load_id is not None
 
             def on_load() -> None:

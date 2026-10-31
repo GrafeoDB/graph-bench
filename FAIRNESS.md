@@ -115,6 +115,12 @@ measured, while results.json and the matrix show ⏱. A ⏱ from the in-run cuto
   of their dataset's instance. In `graph-bench codspeed` a run's read-back and teardown happen in the next round's
   setup, so CodSpeed times the writes alone; a later run whose read-back differs has then already been measured
   by CodSpeed, while results.json and the matrix show ≠.
+- **Answer-only cases:** a case on an answer-check fixture (`catalog.ANSWER_ONLY_DATASETS`, today the multigraph
+  fixture of the trail-semantics case `sem_trail_self_loop`) is run and checked like any query, but it has no time
+  budget (in the run or at the end), is no yardstick for another database's budget and is never ranked: its
+  detail cell is ✓ when the answer agrees (or its marker), it counts towards ✓ k/n and Grafeo's n, and it is
+  nobody's fastest and no rank position. The fixture is loaded for its cases without a Load, Load (query language)
+  or Memory and Disk row, so a load that fails or drops a self-loop or a parallel edge shows on the case itself.
 - **A database panic** (a Rust panic that surfaces as pyo3's `PanicException`, which is not an `Exception`) is a
   ✗ with its message, "PanicException: ...", wherever the database call was (a query, an algorithm, a load, a
   close, the startup); the worker goes on with the next case instead of dying.

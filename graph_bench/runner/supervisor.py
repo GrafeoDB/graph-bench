@@ -23,7 +23,8 @@ line, which the worker writes immediately before the preflight's database call, 
 and the case becomes `timeout` ("too slow: cut off at ..."); harness work (reference loading, the answer check)
 is outside the window. At the end `apply_budget_rule` compares every entry with the other databases only, at
 10x on the final timings; that decides the marker, and that final rule does not depend on the run order. Startup and
-both load rows (`types.BUDGET_EXEMPT`) have no budget, in the run or at the end, and are no yardstick.
+both load rows (`types.BUDGET_EXEMPT`) and the answer-only items (`catalog.answer_only`) have no budget, in the run or
+at the end, and are no yardstick.
 
 Resources (the Memory and Disk records, `Selection.resources`): after a database's worker (or pytest) process for
 one thread setting has finished, in both modes, the supervisor measures each load the database's models reach, one
@@ -244,7 +245,8 @@ def _budgets(entries: Sequence[Entry], db: str, meta: dict[str, _Meta]) -> dict[
 
     This in-run cutoff is a runaway guard on first (cold) runs; `apply_budget_rule` at 10x on the final timings
     decides the marker. Only cases with at least 3 such entries get a budget, so the in-run budget never depends
-    on which one or two databases happened to run first. `BUDGET_EXEMPT` categories get none.
+    on which one or two databases happened to run first. `BUDGET_EXEMPT` categories and answer-only items
+    (`catalog.answer_only`) get none.
     """
     found: dict[tuple[str, str, int | None], list[int]] = {}
     for e in entries:
@@ -253,7 +255,7 @@ def _budgets(entries: Sequence[Entry], db: str, meta: dict[str, _Meta]) -> dict[
     budgets = {}
     for bench_id, m in meta.items():
         values = found.get((m.benchmark, m.scale, m.threads))
-        if values and len(values) >= 3 and m.category not in BUDGET_EXEMPT:
+        if values and len(values) >= 3 and m.category not in BUDGET_EXEMPT and not catalog.answer_only(m.benchmark):
             budgets[bench_id] = max(IN_RUN_FACTOR * _top3_mean(values) / 1e9, IN_RUN_FLOOR_S)
     return budgets
 
@@ -263,13 +265,14 @@ def apply_budget_rule(results: Results) -> None:
 
     A benchmark is an item at one scale and thread setting, across databases. Each entry's budget is 10x the
     mean of the 3 fastest other databases' ok/agree values for it (of all others if fewer than 3); with no
-    other such database no budget applies. Startup and both load rows (`BUDGET_EXEMPT`) are exempt, as entries
-    and as yardsticks. The entry itself never counts, so the outcome does not depend on order. Speed is
-    `timing.median_ns` in bench mode and `preflight_ns` in codspeed mode. The timing of a marked entry is kept.
+    other such database no budget applies. Startup and both load rows (`BUDGET_EXEMPT`) and answer-only items
+    (`catalog.answer_only`) are exempt, as entries and as yardsticks. The entry itself never counts, so the outcome
+    does not depend on order. Speed is `timing.median_ns` in bench mode and `preflight_ns` in codspeed mode. The
+    timing of a marked entry is kept.
     """
     groups: dict[tuple[str, str, int | None], list[tuple[Entry, float]]] = {}
     for e in results.entries:
-        if e.status != "ok" or e.answer != "agree" or e.category in BUDGET_EXEMPT:
+        if e.status != "ok" or e.answer != "agree" or e.category in BUDGET_EXEMPT or catalog.answer_only(e.benchmark):
             continue  # exempt: no budget and no yardstick (as in the in-run `_budgets`)
         speed = (e.timing.median_ns if e.timing is not None else None) if results.mode == "bench" else e.preflight_ns
         if speed is not None:

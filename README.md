@@ -50,7 +50,7 @@ the Load table has a separate row for it (⊘ for a database without RDF, as a l
 | Batch writes | batch insert, update, delete, upsert | property graph | planned |
 | Scans | label scan, property filter, aggregation, order plus limit, property filter with average | property graph, plus SQL/PGQ and SPARQL twins | implemented |
 | Hops | 1 and 2 hop expansion, variable length 1 to 3, shortest path | property graph, plus SQL/PGQ and SPARQL twins | implemented |
-| Pattern matching | triangles, cycles, multi-pattern joins | property graph | planned |
+| Pattern matching | triangles through a person, a hub and the whole graph, 4-cycles, common friends, a multi-pattern join, whole-graph 2-hop counts, out-degree, trail semantics with self-loops (answer check only) | property graph, plus SQL/PGQ and SPARQL twins of the first four | implemented |
 | Complex queries | LDBC SNB Interactive short reads IS1 to IS7 and complex reads | property graph | IS1 to IS7, IC2, IC6 implemented |
 | Algorithms | Graphalytics BFS, WCC, PageRank, then CDLP, LCC, SSSP, Louvain, betweenness | databases with native algorithms and a property graph or SQL/PGQ model | BFS, WCC, PR implemented |
 | Vector search | kNN, batch kNN, recall@k, filtered kNN | databases with vector indexes | planned |

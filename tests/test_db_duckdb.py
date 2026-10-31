@@ -77,7 +77,7 @@ def test_duckdb_resources_ok(push: Results) -> None:
 def test_duckdb_known_disagreements_are_the_ones_duckpgq_causes(
     known_disagreements: Callable[[str], set[str]],
 ) -> None:
-    assert known_disagreements("duckdb") == {"snb_sql_is4", "snb_sql_is6", "graphalytics_pr"}
+    assert known_disagreements("duckdb") == {"snb_sql_is4", "snb_sql_is6", "graphalytics_pr", "pattern_join_sql"}
 
 
 def test_duckdb_threads_settings(tmp_path: Path) -> None:

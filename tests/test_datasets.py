@@ -5,7 +5,7 @@ from pathlib import Path
 import networkx
 import pytest
 
-from graph_bench.datasets import cache, graphalytics, snb
+from graph_bench.datasets import cache, graphalytics, multigraph, snb
 from graph_bench.datasets.schema import Dataset, EdgeTable, NodeTable
 
 
@@ -139,7 +139,7 @@ def test_key_changes_with_answers_source(tmp_path: Path, monkeypatch: pytest.Mon
 def test_prepare_reuses_complete_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GRAPH_BENCH_DATA_DIR", str(tmp_path))
     first = cache.prepare("push")
-    assert set(first) == {("snb", "small"), ("graphalytics", "small")}
+    assert set(first) == {("snb", "small"), ("graphalytics", "small"), ("multigraph", "small")}
     assert (first[("snb", "small")].root / ".complete").exists()
 
     def boom(*args: object, **kwargs: object) -> None:
@@ -147,5 +147,6 @@ def test_prepare_reuses_complete_dir(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(snb, "generate", boom)
     monkeypatch.setattr(graphalytics, "generate", boom)
+    monkeypatch.setattr(multigraph, "generate", boom)
     second = cache.prepare("push")
     assert second == first

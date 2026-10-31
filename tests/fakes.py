@@ -179,7 +179,7 @@ class FakeDatabase(Database):
         write = self._write_item(model, lambda w: w.check_for(dialect) == text)
         if write is not None:
             return self._check(write, params)
-        item = self._item(lambda i: isinstance(i, Query) and i.model == model and i.text.get(dialect) == text)
+        item = self._item(lambda i: isinstance(i, Query) and i.model == model and i.text.get(dialect) == text, params)
         return self._rows(item, params)
 
     def write(self, model: Model, text: str, params: Mapping[str, Any]) -> list[tuple[Any, ...]]:
@@ -265,10 +265,20 @@ class FakeDatabase(Database):
             return [*answer, ["wrong"]]
         return answer
 
-    def _item(self, match: Any) -> Query | Algorithm:
+    def _item(self, match: Any, params: Mapping[str, Any] | None = None) -> Query | Algorithm:
+        """The item a text belongs to. Two items may share a text on one dataset (the hub triangles run the triangle
+        text): then the one whose references hold the binding."""
         assert self.dataset is not None, "query before load"
         name = self.dataset.name
-        return next(i for i in catalog.ITEMS if i.dataset == name and not isinstance(i, Write) and match(i))
+        found = [i for i in catalog.ITEMS if i.dataset == name and not isinstance(i, Write) and match(i)]
+        if params is not None and len(found) > 1:
+            found = [i for i in found if dict(params) in self._reference_bindings(i)] or found
+        return found[0]
+
+    def _reference_bindings(self, item: Query | Algorithm) -> list[dict[str, Any]]:
+        assert self.dataset is not None
+        path = catalog.reference_path(item, self.dataset.scale, base=self.dataset.root.parent)
+        return catalog.load_reference(path)[0] if path.exists() else []
 
     @staticmethod
     def _statements(item: Write, phase: str, dialect: str) -> tuple[str, ...]:
@@ -329,7 +339,7 @@ class FakeDatabase(Database):
     def query(self, text: str, params: Mapping[str, Any]) -> list[tuple[Any, ...]]:
         if self.dataset is None and self.empty:
             return self._probe(primary_model(self.models), text)
-        item = self._item(lambda i: isinstance(i, Query) and i.text_for(self.dialect_for(i.model)) == text)
+        item = self._item(lambda i: isinstance(i, Query) and i.text_for(self.dialect_for(i.model)) == text, params)
         return self._rows(item, params)
 
     def _rows(self, item: Query | Algorithm, params: Mapping[str, Any]) -> list[tuple[Any, ...]]:
