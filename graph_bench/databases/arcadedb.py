@@ -248,6 +248,14 @@ class ArcadeDatabase(Database):
                 properties = [{c.name: row[c.name] for c in edge.columns} for row in rows] if edge.columns else None
                 batch.new_edges(sources, edge.type, targets, properties)
 
+    def store_paths(self) -> list[Path]:
+        """The database directory `workdir/db` that `create_database` made. Confirmed by a directory listing after a
+        GraphBatch load of the push graphalytics dataset (arcadedb-embedded 26.10.2.post1): `db/` alone holds the
+        bucket files (`*.bucket`), the index (`*.umtidx`), the dictionary, `schema.json`, `statistics.json`,
+        `configuration.json` and `last-tx-id.bin`, and nothing else is written into `workdir`. The engine's log goes
+        to a temporary directory (`_start`), so it is not counted."""
+        return [self.workdir / "db"]
+
     def query(self, text: str, params: Mapping[str, Any]) -> list[tuple[Any, ...]]:
         # A dict binds by name (`$name`); an empty one is passed too, since None is not a parameter map.
         return [tuple(row.values()) for row in self.db.query("opencypher", text, dict(params)).to_list()]

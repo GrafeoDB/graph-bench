@@ -19,6 +19,7 @@ from graph_bench.suites.startup import PROBE
 from graph_bench.types import Model
 from tests.conftest import (
     assert_loads_agree,
+    assert_resources_ok,
     assert_startup_agrees,
     not_yet_implemented,
     run_push,
@@ -67,6 +68,11 @@ def test_helixdb_startup_agrees(push: Results) -> None:
 def test_helixdb_load_unchanged(push: Results) -> None:
     """The loads still load the whole dataset (their counts agree) with `open_empty` split out."""
     assert_loads_agree(push, "helixdb")
+
+
+def test_helixdb_resources_ok(push: Results) -> None:
+    """Memory and Disk: one ok, agreeing record per load with ordered readings; in memory."""
+    assert_resources_ok(push, "helixdb", on_disk=False)
 
 
 def test_helixdb_settings(tmp_path: Path) -> None:

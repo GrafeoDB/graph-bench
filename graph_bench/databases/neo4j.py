@@ -584,6 +584,14 @@ class Neo4jDatabase(Database):
             self._run(f"CALL gds.graph.project('{GRAPH}', 'V', 'E'{read}) YIELD nodeCount", {}, commit=True)
             self.projected = True
 
+    def store_paths(self) -> list[Path]:
+        """`workdir/data`: "all data-related content, such as databases, transactions" (the data directory,
+        https://neo4j.com/docs/operations-manual/current/configuration/file-locations/; the transaction logs are
+        `data/transactions` by default). A directory listing after a load confirms it: `data/databases/{neo4j,system}`
+        and `data/transactions/{neo4j,system}`. The importer's CSV copies (`import/`), its configuration (`conf/`),
+        `logs/` and `import.report` are scaffolding, not stored data, and stay out."""
+        return [self.workdir / "data"]
+
     def _run(self, text: str, params: Mapping[str, Any], *, commit: bool = False) -> list[tuple[Any, ...]]:
         with self.db.beginTx() as tx:
             result = tx.execute(text, _params(params))

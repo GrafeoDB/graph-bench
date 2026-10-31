@@ -22,6 +22,7 @@ from graph_bench.results import Results
 from graph_bench.types import Model
 from tests.conftest import (
     assert_loads_agree,
+    assert_resources_ok,
     assert_startup_agrees,
     not_yet_implemented,
     run_push,
@@ -80,6 +81,11 @@ def test_arcadedb_startup_agrees(push: Results) -> None:
 def test_arcadedb_load_unchanged(push: Results) -> None:
     """The loads still load the whole dataset (their counts agree) with `open_empty` split out."""
     assert_loads_agree(push, "arcadedb")
+
+
+def test_arcadedb_resources_ok(push: Results) -> None:
+    """Memory and Disk: one ok, agreeing record per load with ordered readings; on disk."""
+    assert_resources_ok(push, "arcadedb", on_disk=True)
 
 
 def test_arcadedb_info_and_env(tmp_path: Path) -> None:

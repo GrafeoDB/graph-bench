@@ -6,15 +6,12 @@ from typing import Any, ClassVar
 
 import duckdb
 
-from graph_bench.databases.base import Database, DatabaseInfo, NotSupported
+from graph_bench.databases.base import Database, DatabaseInfo, NotSupported, provision_once
 from graph_bench.datasets.schema import Column, Dataset
 from graph_bench.types import Model
 
 # DuckDB column types of the dataset's column types (https://duckdb.org/docs/current/sql/data_types/overview).
 TYPES = {"INT64": "BIGINT", "DOUBLE": "DOUBLE", "STRING": "VARCHAR"}
-# Set once `provision` has installed DuckPGQ in this process (the worker calls it twice: before the Startup children
-# and in `prepare_environment`).
-_PROVISIONED: list[bool] = []
 
 # Algorithms: the DuckPGQ table functions `pagerank` and `weakly_connected_component`
 # (https://duckpgq.org/documentation/graph_functions/). The arguments are the property graph and the vertex and edge
@@ -74,14 +71,15 @@ class DuckDatabase(Database):
 
         https://duckdb.org/community_extensions/extensions/duckpgq.html
         """
-        if _PROVISIONED:
-            return
+        provision_once(cls.name, cls._install)
+
+    @staticmethod
+    def _install() -> None:
         con = duckdb.connect(":memory:")
         try:
             con.execute("INSTALL duckpgq FROM community")
         finally:
             con.close()
-        _PROVISIONED.append(True)
 
     def info(self) -> DatabaseInfo:
         note = "SET threads=1" if self.threads == 1 else "default threads"

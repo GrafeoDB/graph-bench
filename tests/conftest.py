@@ -8,7 +8,7 @@ from typing import get_args
 import pytest
 
 from graph_bench.datasets import cache
-from graph_bench.results import Entry, Results
+from graph_bench.results import Entry, Resource, Results
 from graph_bench.runner.supervisor import run_bench
 from graph_bench.suites import catalog
 from graph_bench.types import Model
@@ -75,14 +75,13 @@ def run_push(
     case_timeout_s: float,
     env: Mapping[str, str] | None = None,
 ) -> Results:
-    """One push run of `db` (resources off) in `root` (the working directory, `out` and `work` go there), shared by
-    an adapter module's push, startup and load tests. For module fixtures: it uses its own `MonkeyPatch`."""
+    """One push run of `db` in `root` (the working directory, `out` and `work` go there), shared by an adapter
+    module's push, startup, load and resources tests. For module fixtures: it uses its own `MonkeyPatch`."""
     with pytest.MonkeyPatch.context() as mp:
         mp.chdir(root)
         mp.setenv("GRAPH_BENCH_DATA_DIR", str(data_dir))
         for key, value in (env or {}).items():
             mp.setenv(key, value)
-        resources_off(mp)  # Task 4 turns them on with test_<db>_resources_ok
         return run_bench("push", [db], root / "out", workdir=root / "work", case_timeout_s=case_timeout_s)
 
 
@@ -115,3 +114,26 @@ def warn_if_fixed(entry: Entry, known: set[str]) -> None:
     """
     if entry.benchmark in known and entry.status == "ok" and entry.answer == "agree":
         warnings.warn(f"ALLOWLISTED BUT NOW AGREES: {entry.database}/{entry.benchmark}", stacklevel=2)
+
+
+def assert_resources_ok(results: Results, db: str, *, on_disk: bool) -> list[Resource]:
+    """The push run's Memory and Disk records of `db`: one per load the model gate lets run, each ok and agreeing.
+
+    Every record has the three readings in order (`peak_bytes >= max(baseline_bytes, after_bytes)`), and a disk
+    size above 0 for an on-disk database, None for an in-memory one. Returns the records that ran.
+    """
+    mine = [r for r in results.resources if r.database == db]
+    assert mine
+    ran = [r for r in mine if not (r.status == "not_supported" and MODEL_GATE.fullmatch(r.error or ""))]
+    assert ran
+    for r in ran:
+        assert (r.status, r.answer) == ("ok", "agree"), f"{r.id}: {r.status} {r.answer} {r.error} {r.detail}"
+        assert r.baseline_bytes is not None and r.after_bytes is not None and r.peak_bytes is not None
+        assert r.peak_bytes >= max(r.baseline_bytes, r.after_bytes), r.id
+        assert r.footprint_bytes == r.after_bytes - r.baseline_bytes, r.id
+        assert r.processes is not None and r.processes >= 1, r.id
+        if on_disk:
+            assert r.storage == "on-disk" and r.disk_bytes is not None and r.disk_bytes > 0, r.id
+        else:
+            assert r.storage == "in-memory" and r.disk_bytes is None, r.id
+    return ran

@@ -33,7 +33,11 @@ def __getattr__(name: str) -> Any:
 
     def open_empty(self: Any) -> None:
         base.open_empty(self)
-        Path(os.environ[MARKER_ENV]).write_text(str(os.getpid()), encoding="utf-8")
+        marker = Path(os.environ[MARKER_ENV])
+        # Atomic: the reader polls for the file and must never see it empty or half written.
+        partial = marker.with_name(marker.name + ".tmp")
+        partial.write_text(str(os.getpid()), encoding="utf-8")
+        os.replace(partial, marker)
         time.sleep(600)
 
     return type(name, (base,), {"name": db_name, "open_empty": open_empty})

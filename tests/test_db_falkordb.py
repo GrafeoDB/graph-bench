@@ -1,5 +1,6 @@
 """FalkorDB adapter (falkordblite, Linux only): the push selection agrees except the recorded known disagreements."""
 
+import json
 import re
 import sys
 from collections.abc import Callable
@@ -18,6 +19,7 @@ from graph_bench.runner.startup import run_startups
 from graph_bench.types import Model
 from tests.conftest import (
     assert_loads_agree,
+    assert_resources_ok,
     assert_startup_agrees,
     not_yet_implemented,
     run_push,
@@ -32,9 +34,15 @@ pytestmark = pytest.mark.falkordb
 
 
 @pytest.fixture(scope="module")
-def push(push_data_dir: Path, tmp_path_factory: pytest.TempPathFactory) -> Results:
-    """One push run of falkordb, shared by the push, startup and load tests."""
-    return run_push("falkordb", tmp_path_factory.mktemp("push-falkordb"), push_data_dir, 60)
+def push_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The push run's working directory (its `out` and `work` are inside)."""
+    return tmp_path_factory.mktemp("push-falkordb")
+
+
+@pytest.fixture(scope="module")
+def push(push_data_dir: Path, push_root: Path) -> Results:
+    """One push run of falkordb, shared by the push, startup, load and resources tests."""
+    return run_push("falkordb", push_root, push_data_dir, 60)
 
 
 def test_falkordb_push_agrees(push: Results, known_disagreements: Callable[[str], set[str]]) -> None:
@@ -67,6 +75,26 @@ def test_falkordb_startup_agrees(push: Results) -> None:
 def test_falkordb_load_unchanged(push: Results) -> None:
     """The loads still load the whole dataset (their counts agree) with `open_empty` split out."""
     assert_loads_agree(push, "falkordb")
+
+
+def test_falkordb_resources_ok(push: Results) -> None:
+    """Memory and Disk: one ok, agreeing record per load with ordered readings; in memory."""
+    assert_resources_ok(push, "falkordb", on_disk=False)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="falkordblite is Linux only; the subreaper is Linux only")
+def test_falkordb_redis_server_in_tree(push: Results, push_root: Path) -> None:
+    """redislite daemonizes its redis-server, which leaves the child's tree; the subreaper adopts it, so the tree
+    the resources child reads after the load holds a process named `redis-server`, and the record counts it."""
+    records = assert_resources_ok(push, "falkordb", on_disk=False)
+    for record in records:
+        assert record.processes is not None and record.processes >= 2, record.id
+    raw = sorted((push_root / "out" / "raw").glob("falkordb-*/resources/*.jsonl"))
+    assert len(raw) == len(records)
+    for path in raw:
+        lines = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+        [after] = [line for line in lines if line.get("kind") == "memory" and line.get("phase") == "after"]
+        assert "redis-server" in after["names"], (path.name, after["names"])
 
 
 def test_falkordb_info_and_algorithms(push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

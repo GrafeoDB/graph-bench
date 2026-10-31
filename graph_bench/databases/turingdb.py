@@ -213,6 +213,18 @@ class TuringDatabase(Database):
         """Nodes and edges loaded, counted with `COUNT_NODES` and `COUNT_EDGES`."""
         return int(self.query(COUNT_NODES, {})[0][0]), int(self.query(COUNT_EDGES, {})[0][0])
 
+    def store_paths(self) -> list[Path]:
+        """The graph's own directory `<data_dir>/graphs/<graph>`: its commit log, commits and data parts.
+
+        Confirmed by a directory listing after a real `LOAD PARQUET` load (turingdb embedded, Linux): the engine's
+        `data_dir` holds `graphs/<graph>/{commitlog,info,type,commits/,dataparts/}` per graph (plus the engine's own
+        `graphs/default`, `turingdb.lock` and `turingdb.sock`, none of them this instance's data), and the Parquet
+        staging under `data/<graph>` that this adapter wrote (removed by `close`, and not stored data either).
+        """
+        if _engine.get("root") is None or not self.graph:
+            return []
+        return [_engine["root"] / "graphs" / self.graph]
+
     def close(self) -> None:
         # The embedded client has no close method and the engine lives on (see `_engine`); only the Parquet staging
         # files of this load are removed. TuringDB has no DROP GRAPH, so the graph stays in the engine's data_dir.

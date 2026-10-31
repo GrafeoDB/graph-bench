@@ -323,6 +323,11 @@ kills it with the child (`kill_tree`, which finds it through the Linux child sub
 answered or timed out. `test_falkordb_startup_leaves_no_redis_server` and
 `test_falkordb_startup_timeout_kills_the_redis_server` check both on Linux.
 
+The Memory record needs the same tree: the redis-server is a child of the measuring process only through the Linux
+child subreaper, and holds the whole graph, so without it the load would read as a few MB.
+`test_falkordb_redis_server_in_tree` checks that the after-load tree holds it. The store is in memory (`save ""`),
+so there is no Disk size.
+
 ## FalkorDB: slow point lookups and IC6 under the 10x budget rule (not allowlisted)
 
 The answers agree with the references. In a `bench --selection push --db grafeo,falkordb` run on Linux (Docker,
@@ -412,6 +417,10 @@ alone, where no budget applies and they must agree.
   run).
 - There is no in-memory mode: the graph is on disk (`storage="on-disk"`), and no thread setting is exposed
   (`threads_configurable=False`).
+- Disk: the graph's own directory `<data_dir>/graphs/<graph>` (`store_paths`), measured after `close()`. A listing
+  after a load shows its commit log, commits and data parts. The engine's own `graphs/default`, its lock and socket
+  files, and the Parquet staging under `data/<graph>` (removed by `close`) are not counted. The files are sized in
+  whole MiB blocks, so the apparent size is the engine's allocation, not the bytes of data.
 - The load clock covers the CSV to Parquet conversion with pyarrow and
   `LOAD PARQUET` (https://docs.turingdb.ai/import_data/parquet). TuringDB's load needs this conversion because it
   has no CSV bulk path for more than a few thousand edges (https://docs.turingdb.ai/import_data/csv).
@@ -570,6 +579,9 @@ at depth 0, the reference's definition. No `- id:` line.
   cache (`arcadedb.maxPageRAM`) keeps its default, a quarter of the heap.
 - Storage: ArcadeDB has no in-memory mode, so each load creates an on-disk database in its fresh workdir
   (`storage="on-disk"`). GraphBatch runs with its default, the write-ahead log off.
+- Disk: the database directory `workdir/db` alone (`store_paths`). After a load it holds the bucket files, the index,
+  the dictionary and the schema, statistics and configuration files, and nothing else lands in the workdir (the
+  engine log goes to a temporary directory).
 - The JVM starts once per process in `prepare_environment`, outside every clock, followed by creating and dropping
   one empty database (the engine's one-time start, about 0.25 s). Every load is in the load clock from
   `create_database` on: schema, unique `id` indexes, vertices and edges.
@@ -717,6 +729,11 @@ Measured on Windows (one thread, push data, three loads per dataset in one proce
 - Storage: Community has no in-memory mode, so each load writes an on-disk store in its fresh workdir
   (`storage="on-disk"`). The impermanent test builders are internal test utilities that the distribution does not
   ship.
+- Disk: `workdir/data` (`store_paths`): `data/databases` and `data/transactions` for the `neo4j` and `system`
+  databases, "all data-related content" in Neo4j's words. `conf/` (the importer's configuration), `import/` (the
+  CSV copies), `logs/` and `import.report` are the load's scaffolding and are not counted.
+- Memory: the importer's JVMs are children of the measuring process, so the peak during the load covers the
+  importer, then the embedded DBMS, as the load's real cost; `processes` is at least 2 for it.
 - JVM start: once per process in `prepare_environment`, outside every clock. It then opens and shuts down one
   empty DBMS (class loading and GDS registration, about 10 s cold), so the first load does not carry them. It holds
   no data and runs no query. Fetching (SHA-256 checked) and extracting the tarball and the JRE happen in

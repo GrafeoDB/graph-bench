@@ -29,6 +29,7 @@ from graph_bench.results import Results
 from graph_bench.types import Model
 from tests.conftest import (
     assert_loads_agree,
+    assert_resources_ok,
     assert_startup_agrees,
     not_yet_implemented,
     run_push,
@@ -98,6 +99,18 @@ def test_neo4j_startup_agrees(push: Results) -> None:
 def test_neo4j_load_unchanged(push: Results) -> None:
     """The loads still load the whole dataset (their counts agree) with `open_empty` split out."""
     assert_loads_agree(push, "neo4j")
+
+
+def test_neo4j_resources_ok(push: Results) -> None:
+    """Memory and Disk: one ok, agreeing record per load with ordered readings; on disk."""
+    assert_resources_ok(push, "neo4j", on_disk=True)
+
+
+def test_neo4j_peak_includes_importer(push: Results) -> None:
+    """The importer's JVMs are children of the resources child, so the sampled tree holds more than one process
+    during the load (`processes` is the largest count seen from before to after) and its peak covers their memory."""
+    for record in assert_resources_ok(push, "neo4j", on_disk=True):
+        assert record.processes is not None and record.processes >= 2, record.id
 
 
 def test_neo4j_info_and_env(tmp_path: Path) -> None:

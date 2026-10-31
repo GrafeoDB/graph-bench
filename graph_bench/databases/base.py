@@ -1,7 +1,7 @@
 """The contract every benchmarked database implements."""
 
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Literal
@@ -12,6 +12,22 @@ from graph_bench.types import Model, Store
 
 class NotSupported(Exception):
     """The database lacks the capability; the case is reported as not available."""
+
+
+_PROVISIONED: set[str] = set()
+
+
+def provision_once(key: str, install: Callable[[], None]) -> None:
+    """Run `install` once per process for `key`; later calls return at once.
+
+    The worker calls `provision` before the Startup children and again through `prepare_environment`, and an
+    install that opens a throwaway database is not free. A failed `install` is not recorded, so the next call
+    tries again.
+    """
+    if key in _PROVISIONED:
+        return
+    install()
+    _PROVISIONED.add(key)
 
 
 @dataclass(frozen=True)

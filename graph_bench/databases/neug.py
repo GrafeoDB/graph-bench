@@ -5,7 +5,7 @@ from typing import Any, ClassVar
 
 import neug
 
-from graph_bench.databases.base import Database, DatabaseInfo, NotSupported
+from graph_bench.databases.base import Database, DatabaseInfo, NotSupported, provision_once
 from graph_bench.datasets.schema import Column, Dataset, EdgeTable
 from graph_bench.types import Model
 
@@ -26,9 +26,6 @@ BFS = "CALL bfs('g', {{source: {source}, directed: true}}) RETURN node.id, dista
 # The load check (`counts`): every node and every relationship, over all tables, counted with Cypher.
 COUNT_NODES = "MATCH (n) RETURN count(n)"
 COUNT_EDGES = "MATCH ()-[r]->() RETURN count(r)"
-# Set once `provision` has installed GDS in this process (the worker calls it twice: before the Startup children
-# and in `prepare_environment`).
-_PROVISIONED: list[bool] = []
 
 
 def _path(dataset: Dataset, file: str) -> str:
@@ -67,8 +64,10 @@ class NeugDatabase(Database):
 
         https://neug.io/docs/extensions/load_gds/
         """
-        if _PROVISIONED:
-            return
+        provision_once(cls.name, cls._install)
+
+    @staticmethod
+    def _install() -> None:
         db = neug.Database("", max_thread_num=1)
         conn = db.connect()
         try:
@@ -76,7 +75,6 @@ class NeugDatabase(Database):
         finally:
             conn.close()
             db.close()
-        _PROVISIONED.append(True)
 
     @property
     def _max_thread_num(self) -> int:

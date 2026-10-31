@@ -61,6 +61,13 @@ the Load table has a separate row for it (⊘ for a database without RDF, as a l
 | Deriva workload | a simulated multi-repo roundtrip using deriva's pipeline patterns | property graph | planned |
 | Project suites | each project's own published queries, as written | the owning database and any that can run them | planned |
 
+Memory and Disk are records beside the matrix, not timed rows: each load is repeated once in a fresh process whose
+whole process tree (the interpreter, the started engine, an importer, a server that daemonizes) is read for its
+resident memory, loaded and at its peak during the load, and the store's files are measured after the database has
+closed. An in-memory store has no disk size. The details and their limits are in
+[FAIRNESS.md](FAIRNESS.md#memory-and-disk); the files each on-disk database counts are in
+[docs/known-disagreements.md](docs/known-disagreements.md).
+
 Algorithms always use the database's native implementation, as a procedure or as a query in its own language. A
 database without one gets ⊘; NetworkX is only the reference for the answer check.
 

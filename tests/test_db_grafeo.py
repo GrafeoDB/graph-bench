@@ -15,6 +15,7 @@ from graph_bench.results import Results
 from graph_bench.types import Model
 from tests.conftest import (
     assert_loads_agree,
+    assert_resources_ok,
     assert_startup_agrees,
     not_yet_implemented,
     run_push,
@@ -63,6 +64,11 @@ def test_grafeo_startup_agrees(push: Results) -> None:
 def test_grafeo_load_unchanged(push: Results) -> None:
     """The loads still load the whole dataset (their counts agree) with `open_empty` split out."""
     assert_loads_agree(push, "grafeo")
+
+
+def test_grafeo_resources_ok(push: Results) -> None:
+    """Memory and Disk: one ok, agreeing record per load with ordered readings; in memory."""
+    assert_resources_ok(push, "grafeo", on_disk=False)
 
 
 def test_grafeo_single_thread_env() -> None:
