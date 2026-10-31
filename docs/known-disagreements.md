@@ -375,6 +375,27 @@ and falkordblite starts the module with none, so the server uses the core count,
 single-threaded where it can. The results record `threads_configurable=False`. The server is also a separate
 process (`local process`), so its memory is not under the harness's per-process caps.
 
+## FalkorDB: a call longer than about 50 s fails on the client's socket timeout (known limitation)
+
+- The adapter keeps falkordblite's client settings. falkordblite 0.11.0's `FalkorDB(dbfilename, serverconfig,
+  **kwargs)` builds a `redislite.Redis` client (redis-py 8.1.0) whose connection has, read from the code and the
+  live connection pool, `socket_timeout` 5 s and a `Retry` of 10 attempts with exponential backoff on
+  `TimeoutError` and `ConnectionError`.
+- Effect: a single FalkorDB call that runs longer than about 50 s (5 s times 10 retries; 58 s measured) fails as
+  ✗ `TimeoutError: Timeout reading from socket` on that binding, instead of reaching the harness's case timeout
+  (which kills the process tree) or the 10x budget rule (⏱). The server goes on running the query, so the next case
+  may start behind it. Seen with the 3-hop pattern this category had before its removal (45 s for one person); in
+  the push selection today the longest FalkorDB call is a `hop_var` binding from a hub, about 3.5 s, so nothing is
+  marked by it.
+- Why it is not changed: falkordblite documents only `FalkorDB(path)`
+  (https://docs.falkordb.com/operations/falkordblite/falkordblite-py.html, https://github.com/FalkorDB/falkordblite).
+  redislite documents that `redislite.Redis` takes every `redis.Redis()` keyword argument
+  (https://redislite.readthedocs.io/en/latest/topic/redislite_module.html) and redis-py documents `socket_timeout`
+  (https://redis.readthedocs.io/en/stable/connections.html), but falkordblite does not document passing it through
+  `FalkorDB(...)`; that hand-off is visible only in its code, and the adapter uses documented paths only.
+- It can change once falkordblite documents client options: then `socket_timeout=None` would leave the limit to
+  the harness, as for every other database.
+
 ## FalkorDB: Startup starts a redis-server per child (note)
 
 The Startup time covers falkordblite starting its `redis-server` (with `save ""`, as in a load) and selecting the
@@ -402,8 +423,8 @@ budget applies and they must agree.
   milliseconds per call.
 - Cause: FalkorDB engine and the out-of-process server (per-call overhead); `snb_is6` and `snb_ic6` also include
   variable-length traversals. The adapter uses the `id` indexes it creates in the load and no query cache.
-- Hops: `hop_1` and `hop_2` are within the budget; `hop_var` agrees but takes 6.6 s for 10 bindings (Docker run
-  with TuringDB, 250x its 26 ms), up to 3.3 s for one binding from a hub.
+- Hops: `hop_1` and `hop_2` are within the budget; `hop_var` agrees but takes 6.6 to 11.1 s for 10 bindings (Docker runs
+  with TuringDB, 250x to 348x its 26 to 32 ms), about 3.5 s for the one binding from a hub.
 
 ## FalkorDB: BFS is slow under the 10x budget rule (not allowlisted)
 
@@ -570,7 +591,8 @@ Aggregation section). Every filtered scan reads the label's nodes and filters th
 created on `creationDate` or `length`, as no other database gets one.
 
 The Hops it runs agree and are ⏱ by the same rule in `bench --selection push` (Windows, eight databases): `hop_1`
-37.7 ms for 10 bindings (64.7x), `hop_2` 3.68 s (123.5x) and `hop_var` 66.7 s (51.1x). The builders follow the
+22 to 38 ms for 10 bindings (37x to 65x), `hop_2` 1.7 to 3.7 s (78x to 124x) and `hop_var` 67 to 70 s (49x to
+51x), over two runs. The builders follow the
 shared texts: every walk is expanded (`both("KNOWS")` per step, `repeat` three times for `hop_var`) and deduplicated
 once at the end, as `count(DISTINCT f.id)`; no step deduplicates the intermediate persons, which the texts do not
 ask for either. `hop_var` makes the HelixDB adapter test take about 6 minutes longer (warm-up plus 5 runs).
@@ -881,8 +903,9 @@ filtered endpoints). No `- id:` line: the adapter test runs DuckDB alone, where 
 rewritten.
 
 The Hops twins agree too; in `bench --selection push` (Windows, eight databases, Grafeo the only other SQL/PGQ
-database) `hop_1_sql` 26.3 ms for 10 bindings (72.5x Grafeo's 0.36 ms, the same graph pattern WHERE filter on the
-start person) and `hop_var_sql` 164 ms (15.9x Grafeo's 10.3 ms) are ⏱; `hop_2_sql` (58 ms) is within the budget.
+database) `hop_1_sql` 25 to 26 ms for 10 bindings (67x to 73x Grafeo's 0.36 to 0.38 ms, the same graph pattern WHERE filter on the
+start person) and `hop_var_sql` 163 to 164 ms (16x to 17x Grafeo's 10 ms) are ⏱, over two runs; `hop_2_sql` (58 to 65 ms) is
+within the budget.
 
 ## DuckDB + DuckPGQ: SQL/PGQ IC13 does not finish on `snb-medium` (⏱, not allowlisted)
 
