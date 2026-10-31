@@ -172,7 +172,9 @@ queries agree afterwards), but slower than the batch API. It is not a disagreeme
   materializes every path before the distinct count.
 - Reference answer: 999 for every binding (the radius-3 ball holds every person with friends on `snb-small`).
 - Cause: Grafeo engine (openCypher variable-length expand: all paths are kept, millions of trails of up to 3 edges
-  from this hub, although the result needs only the distinct end nodes). Not rewritten in the shared text.
+  from this hub, although the result needs only the distinct end nodes). Confirmed by grafeo-31: the reachability
+  search is allowed for Cypher trails only when the hops are directed or at most one, so an undirected `*1..3`
+  enumerates every trail (directed takes 1.4 ms); queued for grafeo 0.6.1. Not rewritten in the shared text.
 
 ## Grafeo: SPARQL alternative of a path and its inverse is not supported (1-hop, 2-hop (SPARQL))
 
@@ -187,7 +189,8 @@ queries agree afterwards), but slower than the batch API. It is not a disagreeme
   texts and agrees.
 - Reference answers: the openCypher `hop_1` and `hop_2` references.
 - Cause: Grafeo engine (SPARQL property path evaluation, SPARQL 1.1 section 9.1 alternative and inverse paths).
-  Not rewritten as a `UNION` of the two directions, which would be a different text for one engine.
+  Confirmed by grafeo-31: an alternative path is translated only when every branch is a plain predicate; queued for
+  grafeo 0.6.1. Not rewritten as a `UNION` of the two directions, which would be a different text for one engine.
 
 ## Grafeo: SPARQL IS6 property path is slow (not allowlisted)
 
