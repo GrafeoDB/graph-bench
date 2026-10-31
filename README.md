@@ -12,18 +12,20 @@ README at each Grafeo release. The rules every database is measured under are in
 
 ## Databases
 
-| Database | Package | Process | Status |
-| --- | --- | --- | --- |
-| Grafeo | `grafeo` | in-process | implemented |
-| LadybugDB | `ladybug` | in-process | implemented |
-| TuringDB | `turingdb` (embedded mode, Linux only) | in-process | implemented |
-| FalkorDB | `falkordblite` (Linux only) | local process (a Redis server subprocess) | implemented |
-| NeuG | `neug` | in-process | implemented |
-| ArcadeDB | `arcadedb-embedded` (bundles its JRE) | in-process (JVM), on disk | implemented |
-| Neo4j Community | `JPype1` (the Community tarball and a Temurin 21 JRE are downloaded) | in-process (JVM), on disk | implemented |
-| DuckDB + DuckPGQ | `duckdb` (+ the `duckpgq` community extension) | in-process | implemented |
-| Oxigraph | `pyoxigraph` | in-process | implemented |
-| HelixDB | `helix-db` + `helix-db-embedded` | in-process (embedded mode) | implemented |
+| Database | Package | Process | Status | Licence |
+| --- | --- | --- | --- | --- |
+| Grafeo | `grafeo` | in-process | implemented | Apache-2.0 |
+| LadybugDB | `ladybug` | in-process | implemented | MIT |
+| TuringDB | `turingdb` (embedded mode, Linux only) | in-process | implemented | BSL 1.1 (Community Edition) |
+| FalkorDB | `falkordblite` (Linux only) | local process (a Redis server subprocess) | implemented | SSPL v1 (FalkorDB engine); BSD (falkordblite wrapper) |
+| NeuG | `neug` | in-process | implemented | Apache-2.0 |
+| ArcadeDB | `arcadedb-embedded` (bundles its JRE) | in-process (JVM), on disk | implemented | Apache-2.0 |
+| Neo4j Community | `JPype1` (the Community tarball and a Temurin 21 JRE are downloaded) | in-process (JVM), on disk | implemented | GPLv3 (Neo4j Community and GDS Community) |
+| DuckDB + DuckPGQ | `duckdb` (+ the `duckpgq` community extension) | in-process | implemented | MIT (DuckDB and duckpgq) |
+| Oxigraph | `pyoxigraph` | in-process | implemented | MIT OR Apache-2.0 |
+| HelixDB | `helix-db` + `helix-db-embedded` | in-process (embedded mode) | implemented | AGPL-3.0 (engine); Python SDK MIT, embedded runtime Apache-2.0 |
+
+graph-bench downloads each database at run time and redistributes none of them.
 
 Neo4j is measured as Community only: the Enterprise terms restrict publishing benchmarks. Neo4j fetches its
 Community tarball and a Temurin 21 JRE into the data cache (SHA-256 checked, about 690 MB with the extracted
@@ -147,11 +149,17 @@ one version string.
 - `.github/workflows/ci.yml`: lint and the test suite on Python 3.12 and 3.13, including the adapter tests
   against Grafeo and LadybugDB from PyPI.
 - `.github/workflows/bench.yml`: graph-bench's own CodSpeed project, separate from grafeo's CodSpeed benchmarks,
-  which it does not replace. It builds grafeo `main` from source and runs the `push` selection on CodSpeed's
+  which it does not replace. It measures the newest stable release of every database from PyPI, grafeo
+  included (grafeo's own CodSpeed suite covers `main`): after the locked `uv sync` it upgrades the database
+  packages (`graph-bench packages`) without touching `uv.lock`, and the job log lists the installed versions.
+  It runs the `push` selection on CodSpeed's
   macro runners in wall-time mode on every push to `main`, daily and on demand. The daily run also runs `full`
   with `graph-bench bench` and opens a pull request on `bot/results` that updates the section below. Needs the
   CodSpeed app on graph-bench and codspeed-macro runners enabled for the org; authentication uses GitHub OIDC
   (no token secret).
+- `.github/workflows/pins.yml`: weekly (and on demand), checks for a newer stable Neo4j Community release and a
+  newer Temurin JRE of the Java major Neo4j requires, and opens a pull request on `bot/pins` that updates
+  `graph_bench/databases/pins.py` (URLs and SHA-256 from the vendors' published checksums).
 
 ## Results
 

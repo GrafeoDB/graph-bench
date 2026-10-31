@@ -2,9 +2,11 @@
 
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
+import tomllib
 from collections.abc import Callable
 from pathlib import Path
 
@@ -73,6 +75,33 @@ def _install_requested(grafeo: str | None, *, git_sha: str | None = None) -> dic
 def version() -> None:
     """Print the graph-bench version."""
     typer.echo(__version__)
+
+
+def database_requirements(pyproject: Path) -> list[str]:
+    """The packages of the database extras, version bounds dropped, environment markers kept.
+
+    The extras are the ones the `embedded` extra lists; `uv pip install --upgrade -r` on the result moves each
+    database to its newest stable release (uv never picks a pre-release unless asked) without touching uv.lock.
+    """
+    extras = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["optional-dependencies"]
+    listed = re.search(r"\[([^\]]*)\]", extras["embedded"][0])
+    names = [name.strip() for name in listed.group(1).split(",")] if listed else []
+    requirements: list[str] = []
+    for extra in names:
+        for requirement in extras[extra]:
+            spec, _, marker = requirement.partition(";")
+            package = re.match(r"[A-Za-z0-9._-]+", spec.strip())
+            if package is None:
+                raise ValueError(f"cannot read the requirement {requirement!r}")
+            requirements.append(package.group(0) + (f" ;{marker}" if marker else ""))
+    return requirements
+
+
+@app.command()
+def packages() -> None:
+    """Print the database packages of the `embedded` extra, one requirement per line, without version bounds."""
+    root = Path(__file__).resolve().parent.parent
+    typer.echo("\n".join(database_requirements(root / "pyproject.toml")))
 
 
 @app.command("list")

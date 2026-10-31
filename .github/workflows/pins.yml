@@ -1,0 +1,42 @@
+# Weekly check for newer pinned downloads: the Neo4j Community tarball and the Temurin JRE of the Java major Neo4j
+# requires (JRE_MAJOR in graph_bench/databases/pins.py). When one exists, `graph_bench.pins_update` rewrites pins.py
+# (URL and SHA-256 from the vendors' published checksums: Neo4j's `.sha256`, Adoptium's API) and this job opens a
+# pull request on the branch bot/pins. A human reviews it; the Java major is only changed by hand.
+name: Pins
+
+on:
+  schedule:
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pins:
+    name: Check the Neo4j and Temurin pins
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          python-version: "3.13"
+      - name: Look for newer releases
+        run: uv run --no-project python -m graph_bench.pins_update --write
+        env:
+          PYTHONPATH: .
+      - uses: peter-evans/create-pull-request@v7
+        with:
+          branch: bot/pins
+          title: Update the Neo4j and Temurin pins
+          commit-message: Update the Neo4j and Temurin pins
+          body: |
+            A newer stable Neo4j Community release and/or Temurin JRE exists. `graph_bench/databases/pins.py` was
+            rewritten by `python -m graph_bench.pins_update --write`; the SHA-256 values come from Neo4j's
+            published `.sha256` file and Adoptium's API. Check that the new Neo4j still runs on the Java major in
+            `JRE_MAJOR` and run the Neo4j adapter tests before merging.
+          add-paths: graph_bench/databases/pins.py
+          delete-branch: true

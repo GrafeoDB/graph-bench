@@ -16,6 +16,8 @@ GDS_JAR = f"neo4j-graph-data-science-{NEO4J_VERSION}.jar"
 # 65), so the JRE is Temurin 21, pinned to one release so the checksums stay valid (Adoptium's API,
 # https://api.adoptium.net/v3/assets/latest/21/hotspot?architecture=x64&image_type=jre&vendor=eclipse&os=<os>,
 # `binary.package.checksum`).
+# The Java major Neo4j requires; `graph_bench.pins_update` looks for newer Temurin releases of this major only.
+JRE_MAJOR = 21
 JRE_RELEASE = "jdk-21.0.13+9"
 JRE_VERSION = "21.0.13"
 _JRE_BASE = "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.13%2B9"

@@ -49,7 +49,6 @@ def test_bench_workflow_shape() -> None:
     assert "token" not in action["with"]
     assert "graph-bench codspeed --selection push" in action["with"]["run"]
     runs = _runs(codspeed)
-    assert any("graph-bench setup --grafeo grafeo" in run for run in runs)
     assert any("graph-bench data key --selection push" in run for run in runs)
     assert any("graph-bench list --selection push" in run for run in runs)
     assert any(use.startswith("actions/upload-artifact@") for use in _uses(codspeed))
@@ -66,6 +65,36 @@ def test_bench_workflow_shape() -> None:
     pr = next(step for step in readme["steps"] if step.get("uses", "").startswith("peter-evans/create-pull-request@"))
     assert pr["with"]["branch"] == "bot/results"
     assert pr["with"]["title"] == "Update benchmark results"
+
+
+def test_bench_workflow_measures_released_databases() -> None:
+    workflow = _load("bench.yml")
+    for name, job in workflow["jobs"].items():
+        runs = _runs(job)
+        # Grafeo is measured as its latest PyPI release, not built from main.
+        assert not any("setup --grafeo" in run for run in runs), name
+        assert not any(step.get("with", {}).get("repository") == "GrafeoDB/grafeo" for step in job["steps"]), name
+        assert not any(use.startswith(("dtolnay/rust-toolchain@", "Swatinem/rust-cache@")) for use in _uses(job)), name
+        # After the locked sync the database packages move to their newest stable releases.
+        sync = next(i for i, run in enumerate(runs) if "uv sync --frozen" in run)
+        upgrade = next(i for i, run in enumerate(runs) if "uv pip install --upgrade -r" in run)
+        assert sync < upgrade, name
+        assert any("graph-bench packages" in run for run in runs), name
+        assert not any("--pre" in run or "--prerelease" in run for run in runs), name
+        assert not any("uv lock" in run or "uv sync --upgrade" in run for run in runs), name
+
+
+def test_pins_workflow_opens_a_pull_request() -> None:
+    workflow = _load("pins.yml")
+    triggers = _triggers(workflow)
+    assert {"schedule", "workflow_dispatch"} <= set(triggers)
+    assert triggers["schedule"][0]["cron"]
+    job = workflow["jobs"]["pins"]
+    assert job["permissions"] == {"contents": "write", "pull-requests": "write"}
+    assert any("graph_bench.pins_update --write" in run for run in _runs(job))
+    pr = next(step for step in job["steps"] if step.get("uses", "").startswith("peter-evans/create-pull-request@"))
+    assert pr["with"]["branch"] == "bot/pins"
+    assert pr["with"]["add-paths"] == "graph_bench/databases/pins.py"
 
 
 def test_ci_workflow_shape() -> None:
@@ -85,7 +114,7 @@ def test_setup_uv_pinned_to_full_version() -> None:
     # astral-sh/setup-uv publishes no floating major tag (no `v10`), so a major pin fails at "Set up job".
     pins = [
         use
-        for name in ("ci.yml", "bench.yml")
+        for name in ("ci.yml", "bench.yml", "pins.yml")
         for job in _load(name)["jobs"].values()
         for use in _uses(job)
         if use.startswith("astral-sh/setup-uv@")

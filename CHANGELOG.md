@@ -49,8 +49,9 @@ benchmark moves to `legacy/` untouched and is deleted once the new comparison re
   scale), both single-threaded.
 - **CI**: `ci.yml` (lint and tests on Python 3.12 and 3.13, including the adapter agreement tests) and
   `bench.yml`, graph-bench's own CodSpeed project, separate from grafeo's CodSpeed benchmarks: the `push`
-  selection in wall-time mode on CodSpeed's macro runners against grafeo `main` built from source, and a daily
-  `full` run that opens a pull request updating the README results.
+  selection in wall-time mode on CodSpeed's macro runners against the newest stable release of every database (grafeo from PyPI too), and a daily
+  `full` run that opens a pull request updating the README results. `pins.yml` checks weekly for a newer Neo4j
+  Community and Temurin JRE and opens a pull request on `bot/pins`.
 - **Known disagreements**: `docs/known-disagreements.md` records wrong answers, slow cases and engine findings as
   they are, instead of working around them in the adapters.
 
