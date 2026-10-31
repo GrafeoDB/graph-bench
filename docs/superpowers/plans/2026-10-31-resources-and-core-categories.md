@@ -123,7 +123,9 @@
 - `scan_aggregate` "Aggregation": `MATCH (p:Person) RETURN p.browserUsed AS browser, p.gender AS gender, count(*) AS persons, min(p.birthday) AS firstBirthday, max(p.creationDate) AS lastCreated ORDER BY browser, gender`; ordered; one empty binding.
 - `scan_order_limit` "Order plus limit": `MATCH (m:Comment) WHERE m.length >= $minLength RETURN m.id AS id, m.content AS content, m.creationDate AS created ORDER BY created DESC, id ASC LIMIT 20`; ordered; bindings: the distinct comment lengths spread evenly. Its content strings carry commas and quotes, so it is the Load (query language) content probe: `LOAD_QL_PROBES[("snb", "property_graph")] = "scan_order_limit"`, `[("snb", "sql_pgq")] = "scan_order_limit_sql"`.
 
-**Twins** (`<id>_sql`, `<id>_rdf`, `same_as=<id>`, titles "<title> (SQL/PGQ)" / "<title> (SPARQL)", placement per open decision 1): all four in SQL/PGQ (R6 graph-pattern WHERE, an edge variable on every edge pattern, `$name` parameters) and SPARQL (`VALUES` first).
+- `scan_filter_avg` "Property filter with average" (analytics brief A4, `.claude/todo/grafeo-0.6.1-analytics.md`): `MATCH (c:Comment) WHERE c.length > $min RETURN count(*) AS n, avg(c.length) AS mean`; one row; bindings: `selection.bindings` thresholds spread over the comment lengths; `rel_eps` for the average as the other float answers.
+
+**Twins** (`<id>_sql`, `<id>_rdf`, `same_as=<id>`, titles "<title> (SQL/PGQ)" / "<title> (SPARQL)", placement per open decision 1): all five in SQL/PGQ (R6 graph-pattern WHERE, an edge variable on every edge pattern, `$name` parameters) and SPARQL (`VALUES` first).
 
 **Databases:** every property-graph adapter; HelixDB builders where the DSL expresses the query, else a reason string (⊘).
 
@@ -152,6 +154,14 @@
 - `pattern_square` "4-cycles through a person": `MATCH (a:Person {id: $personId})-[:KNOWS]-(b:Person)-[:KNOWS]-(c:Person)-[:KNOWS]-(d:Person)-[:KNOWS]-(a) WHERE b.id < d.id AND c.id <> $personId RETURN count(*) AS cycles`.
 - `pattern_common` "Common friends": `MATCH (a:Person {id: $person1Id})-[:KNOWS]-(c:Person)-[:KNOWS]-(b:Person {id: $person2Id}) RETURN count(DISTINCT c.id) AS common`.
 - `pattern_join` "Multi-pattern join": `MATCH (p:Person)-[:HAS_INTEREST]->(t:Tag), (m:Post)-[:HAS_TAG]->(t), (m)-[:HAS_CREATOR]->(p) RETURN t.name AS tag, count(*) AS posts ORDER BY posts DESC, tag ASC`; ordered; one empty binding.
+
+**Whole-graph analytics items** (analytics brief A1 to A3 and C1, user decision 2026-10-31; texts exactly as in `.claude/todo/grafeo-0.6.1-analytics.md`, frozen after the baseline):
+- `pm_two_hop_count` "2-hop paths, whole graph" (A1, graphalytics): `MATCH (a:V)-[:E]->(b:V)-[:E]->(c:V) RETURN count(*) AS paths`; one empty binding.
+- `pm_two_hop_top10` "2-hop paths per source, top 10" (A2, graphalytics): `MATCH (a:V)-[:E]->(b:V)-[:E]->(c:V) WHERE a.id < $cut RETURN a.id AS id, count(*) AS paths ORDER BY paths DESC, id ASC LIMIT 10`; ordered; bindings: `selection.bindings` cuts spread over the vertex ids.
+- `agg_out_degree_top10` "Out-degree, top 10" (A3, graphalytics): `MATCH (a:V)-[:E]->(:V) RETURN a.id AS id, count(*) AS degree ORDER BY degree DESC, id ASC LIMIT 10`; ordered; one empty binding.
+- `sem_trail_self_loop` "Trail semantics with self-loops" (C1): an answer-check-only case on a small fixture dataset with self-loops and multi-edges (a new tiny dataset in `graph_bench/datasets/`, loaded like graphalytics), running the A1 text; the reference counts paths in which no edge repeats (openCypher relationship isomorphism). Its timing is not ranked: mark it answer-only in the catalog and report (no budget, no ranking, still ✓/≠ in the matrix). Recorded in known-disagreements for every engine that counts walks (the brief expects LadybugDB to count self-loop paths twice).
+- These run on `graphalytics` (whose `E` edges are stored in both directions); the A1 reference on graphalytics counts directed 2-paths without edge reuse, which on a symmetric graph without self-loops equals walks minus the paths that return over the same edge pair only when the edges are the same edge (they are distinct edges in the symmetric storage, so no subtraction); the implementer derives and tests this against naive enumeration on a 6-vertex graph.
+- Baseline and freeze: after this task's full run (Task 11), record the commit sha of the frozen texts in the analytics brief's "Frozen texts commit" line and fill its status table at `medium` (the `large` scale is graph-bench 0.4.0). After the freeze, these texts change only with the user's approval.
 
 **Decisions:** every text binds pairwise distinct nodes, so isomorphic and homomorphic engines give the same counts. Bindings: triangles and squares use `selection.bindings` persons with friends whose KNOWS degree is at most the median degree, spread evenly (bounds hub enumeration, deterministic); common friends use pairs half the id-sorted list apart, as IC13. Twins: SQL/PGQ and SPARQL of all four (cyclic patterns repeat the variable; SPARQL basic graph patterns with FILTERs).
 
