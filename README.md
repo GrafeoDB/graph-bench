@@ -23,7 +23,7 @@ README at each Grafeo release. The rules every database is measured under are in
 | Neo4j Community | `JPype1` (the Community tarball and a Temurin 21 JRE are downloaded) | in-process (JVM), on disk | implemented | GPLv3 (Neo4j Community and GDS Community) |
 | DuckDB + DuckPGQ | `duckdb` (+ the `duckpgq` community extension) | in-process | implemented | MIT (DuckDB and duckpgq) |
 | Oxigraph | `pyoxigraph` | in-process | implemented | MIT OR Apache-2.0 |
-| HelixDB | `helix-db` + `helix-db-embedded` | in-process (embedded mode) | implemented | AGPL-3.0 (engine); Python SDK MIT, embedded runtime Apache-2.0 |
+| HelixDB | `helix-db` + `helix-db-embedded` | in-process (embedded mode) | implemented | Apache-2.0 (engine and embedded runtime); Python SDK MIT |
 
 graph-bench downloads each database at run time and redistributes none of them.
 
