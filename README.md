@@ -22,7 +22,7 @@ README at each Grafeo release. The rules every database is measured under are in
 | ArcadeDB | `arcadedb-embedded` | in-process (JVM) | planned |
 | Neo4j Community | Maven jars through JPype | in-process (JVM) | planned |
 | DuckDB + DuckPGQ | `duckdb` | in-process | planned |
-| Oxigraph | `pyoxigraph` | in-process | planned |
+| Oxigraph | `pyoxigraph` | in-process | implemented |
 | HelixDB | `helix-db` + `helix-db-embedded` | in-process (embedded mode) | implemented |
 
 Neo4j is measured as Community only: the Enterprise terms restrict publishing benchmarks. The JVM databases

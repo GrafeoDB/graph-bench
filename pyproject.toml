@@ -42,7 +42,8 @@ turingdb = ["turingdb>=3.0.2; sys_platform == 'linux'", "pyarrow>=15; sys_platfo
 # helix-db is the pure Python SDK (imported as helixdb); helix-db-embedded carries the native runtime and has wheels
 # for Linux, Windows and macOS.
 helixdb = ["helix-db>=0.3.4", "helix-db-embedded>=0.3.3"]
-embedded = ["graph-bench[grafeo,ladybug,neug,falkordb,turingdb,helixdb]"]
+oxigraph = ["pyoxigraph>=0.5.13"]
+embedded = ["graph-bench[grafeo,ladybug,neug,falkordb,turingdb,helixdb,oxigraph]"]
 bench = ["pytest>=9.0.2", "pytest-codspeed>=5.0.3"]
 dev = [
     "pytest>=9.0.2",
@@ -82,6 +83,7 @@ markers = [
     "falkordb: requires FalkorDB (falkordblite, Linux only)",
     "turingdb: requires TuringDB (Linux only)",
     "helixdb: requires HelixDB (helix-db and helix-db-embedded)",
+    "oxigraph: requires Oxigraph (pyoxigraph)",
     "slow: slow tests",
 ]
 
