@@ -56,6 +56,19 @@ the plans show avoidable work. They carry no `- id:` line, so the adapter test s
   is planned as `NodeScan (m:*)`, a label filter, then the `id` filter, so the property index on `id` is not
   used when the label is a disjunction or absent. Cause: Grafeo engine (query planner).
 
+## Grafeo: medium-scale RDF and IC13 (not allowlisted)
+
+From the `full` selection on Grafeo release/0.6.1 builds (64a679ed and 9164e307), answers agree, ⏱ by the budget:
+
+- RDF/SPARQL IS1, IS4, IS6 against Oxigraph in the same run (9164e307, medians for 10 bindings): `snb-small`
+  101 / 40 / 549 ms against 3.4 / 1.6 / 2.5 ms; `snb-medium` 1,700 / 673 / 8,221 ms against 3.4 / 1.7 / 3.2 ms.
+  Per query, IS1 costs about 8.6 ms on small and 74 ms on medium, so it grows with the data: the subject is bound
+  only through the literal object of `v:id` from the inline `VALUES`, which Grafeo does not yet turn into a
+  per-row lookup. The first query after a load also pays a statistics collection (967 ms on medium for the
+  reachability ASK). Reported to grafeo-31 with the exact texts. Cause: Grafeo engine (SPARQL planner).
+- Cypher `snb_ic13` on `snb-medium`: 111 ms for 10 bindings on 9164e307 (188 ms on 64a679ed), against 3.3 to 15 ms
+  for the three fastest (ArcadeDB, Neo4j, NeuG). Reported; grafeo-28 profiles it on the medium dataset.
+
 ## Grafeo: LOAD CSV is 2x to 3x slower than its batch API (not allowlisted)
 
 Load uses the batch API, Grafeo's fastest documented bulk path; LOAD CSV will be tracked as its own benchmark,
@@ -416,6 +429,20 @@ IS5 and IS6 (Grafeo 0.2 to 0.3 ms), 99 ms for IC13, 201 ms for IC2 and 239 ms fo
 Load takes 8.3 s (Graphalytics) and 11.6 s (SNB) against 0.09 s and 0.14 s. No `- id:` line: the adapter test runs
 HelixDB alone and it must agree.
 
+## HelixDB: intermittent planner error during loads on a busy machine (✗ when it happens, not allowlisted)
+
+- Error: `HelixError: embedded HelixDB error: message='Query error: planner error: unsupported cascades plan:
+  selected optimizer result did not contain a best physical alternative'`, raised by a `write_batch` during
+  `load()`, so the load and its cases are ✗ with this text.
+- Seen in both `full` runs that shared the machine with a second full run: Windows (the `snb-medium` load) and
+  Linux in Docker (both Graphalytics loads and the `snb-medium` load), helix-db 0.3.4 and helix-db-embedded 0.3.3.
+- Never seen otherwise. HelixDB alone through the worker (Windows and Linux, all four loads). Ten repeated
+  Graphalytics loads, under 16 busy CPU loops and with `PYTHONHASHSEED` 0 to 15. A clean sequential `full` run
+  with eight databases on Windows: every load ok.
+- The batches are the same in every run, so the failure depends on timing or resources, not on the input. Cause:
+  HelixDB engine (the cascades optimizer gives up on a write batch under load). Not worked around: a failing load
+  stays ✗.
+
 ## ArcadeDB: the Graph Importer does not honour CSV quotes (why GraphBatch loads)
 
 - ArcadeDB's Graph Importer (https://docs.arcadedb.com/arcadedb/how-to/migration/graph-importer) is its fastest
@@ -686,6 +713,15 @@ filters in the graph pattern WHERE, which DuckPGQ evaluates after matching, wher
 `(n:Person WHERE n.id = $personId)` took 1.2 ms in research). IC13 is 3.5 s for 10 bindings (`ANY SHORTEST` from the
 filtered endpoints). No `- id:` line: the adapter test runs DuckDB alone, where no budget applies. The texts are not
 rewritten.
+
+## DuckDB + DuckPGQ: SQL/PGQ IC13 does not finish on `snb-medium` (⏱, not allowlisted)
+
+In the `full` selection (`bench --selection full`, Windows and Linux, DuckDB 2.0.0 with duckpgq), `snb_sql_ic13`
+on `snb-medium` (about 10x `snb-small`: 41,078 nodes, 376,477 edges) prints no output for the 600 s case timeout,
+so the entry is ⏱ with "no output for 600 s". On `snb-small` it agrees (3.5 s for 10 bindings). The text is the
+shared standard SQL/PGQ `ANY SHORTEST` over undirected `KNOWS` (`suites/snb_sql.py`), not rewritten. The push
+selection has no medium scale, so there is no `- id:` line. Cause: DuckPGQ engine (shortest path search cost grows
+much faster than the graph).
 
 ## DuckDB + DuckPGQ: threads, storage and the extension (notes)
 
