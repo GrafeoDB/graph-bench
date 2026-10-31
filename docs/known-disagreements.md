@@ -254,6 +254,16 @@ not a disagreement, so there is no `- id:` line.
   Wrapping the COPY statements in one transaction did not make the load measurably faster.
 - Cause: NeuG engine (checkpoint per statement), not measured further.
 
+## FalkorDB: no install on glibc older than 2.38 (the CI runner)
+
+- Package: falkordblite 0.11.0 (FalkorDB 4.22.1). Its PyPI wheels are `manylinux_2_38_x86_64` and
+  `manylinux_2_38_aarch64` (plus macOS), so pip and uv refuse them on glibc older than 2.38.
+- Where it shows: the CI runner `codspeed-macro-arm64-graviton-ubuntu-22-04` is Ubuntu 22.04 with glibc 2.35, so
+  `install-databases.sh` logs the install failure and FalkorDB reports ✗ "not installed" for every case there. It
+  runs on newer Linux (the full local run, ci.yml on ubuntu-latest).
+- Cause: FalkorDB packaging (wheel platform tag); not worked around in the adapter. A build for glibc 2.35 or
+  older would remove the gap.
+
 ## FalkorDB: IC13 does not run (shortestPath is limited to WITH or RETURN, and to directed)
 
 - id: falkordb/snb_ic13

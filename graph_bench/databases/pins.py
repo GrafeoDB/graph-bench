@@ -14,7 +14,7 @@ GDS_JAR = f"neo4j-graph-data-science-{NEO4J_VERSION}.jar"
 # Neo4j 2026.10 runs on Java 21 or 25 ("Java SE 21 and Java SE 25 Platform Specification",
 # https://neo4j.com/docs/operations-manual/current/installation/requirements/); its class files are Java 21 (major
 # 65), so the JRE is Temurin 21, pinned to one release so the checksums stay valid (Adoptium's API,
-# https://api.adoptium.net/v3/assets/latest/21/hotspot?architecture=x64&image_type=jre&vendor=eclipse&os=<os>,
+# https://api.adoptium.net/v3/assets/latest/21/hotspot?architecture=<x64|aarch64>&image_type=jre&vendor=eclipse&os=<os>,
 # `binary.package.checksum`).
 # The Java major Neo4j requires; `graph_bench.pins_update` looks for newer Temurin releases of this major only.
 JRE_MAJOR = 21
@@ -25,6 +25,10 @@ JRES: dict[tuple[str, str], tuple[str, str]] = {
     ("linux", "x86_64"): (
         f"{_JRE_BASE}/OpenJDK21U-jre_x64_linux_hotspot_21.0.13_9.tar.gz",
         "a535a1df9c6284d9618872984e026ae0352d1f7e9e0605425c0e6114f47351dd",
+    ),
+    ("linux", "aarch64"): (
+        f"{_JRE_BASE}/OpenJDK21U-jre_aarch64_linux_hotspot_21.0.13_9.tar.gz",
+        "b1734db7ade49c3f6acc6ae06233b8c2dd90e3e2f00f67000ae1c972aaa64d8c",
     ),
     ("win32", "amd64"): (
         f"{_JRE_BASE}/OpenJDK21U-jre_x64_windows_hotspot_21.0.13_9.zip",

@@ -166,10 +166,10 @@ grafeo's README never names other graph databases unless the user decides on tha
 
 ## CI and publishing
 
-- **graph-bench workflow:** runs on `codspeed-macro` runners in wall-time mode, on push, on a schedule and on demand.
+- **graph-bench workflow:** runs on CodSpeed's Graviton macro runner (`codspeed-macro-arm64-graviton-ubuntu-22-04`: arm64, Ubuntu 22.04, glibc 2.35; the user's choice, 2026-10-31) in wall-time mode, on push, on a schedule and on demand.
 - **Separate CodSpeed project:** graph-bench's CodSpeed results are their own project, owned by the graph-bench repo. They sit next to grafeo's existing CodSpeed benchmarks, which keep finding grafeo regressions on releases, and never replace or feed them.
 - **Grafeo build:** the workflow measures the latest PyPI release of grafeo, like every other database; grafeo's own CodSpeed suite covers main. This is the user's choice (2026-10-31). `setup --grafeo <path>` stays a local option.
-- **Database versions:** before each benchmark run the workflow upgrades every database package of the `embedded` extra to its newest stable release (`graph-bench packages`, `uv pip install --upgrade -r`), without changing uv.lock. The test CI stays on the lock.
+- **Database versions:** before each benchmark run the workflow syncs the non-database extras from the lock, then installs each database package of the `embedded` extra on its own at its newest stable release (`graph-bench packages`, `.github/scripts/install-databases.sh`), without changing uv.lock. A package with no installable build for the runner is logged with the installer's reason and does not stop the job; its database then shows as failed ("not installed") for every case, since vendors fix their own platform gaps. FalkorDB is the one such gap on this runner: falkordblite 0.11.0 ships only `manylinux_2_38` wheels and the runner has glibc 2.35. Neo4j's Temurin JRE is pinned for linux x86_64, linux aarch64 and windows amd64. The test CI stays on the lock.
 - **Pins:** `pins.yml` checks weekly for a newer stable Neo4j Community release and a newer Temurin JRE of the Java major Neo4j requires, and opens a pull request on `bot/pins` that updates `graph_bench/databases/pins.py`.
 - **graph-bench README:** a scheduled `full` run regenerates its results section and opens a bot PR.
 - **grafeo README:** at each grafeo release (from 0.6.1), the pre-release checklist runs `setup --grafeo <wheel>`, `bench --selection full` and `report --format summary` locally, and commits the block on grafeo's release branch. No automation writes to grafeo.

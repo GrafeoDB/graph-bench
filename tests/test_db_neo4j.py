@@ -338,3 +338,21 @@ def test_run_admin_reports_a_failure(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match=r"failed \(exit 3\): bad input"):
         neo.run_admin(command, tmp_path, dict(os.environ))
     assert neo.run_admin([sys.executable, "-c", "print('done')"], tmp_path, dict(os.environ)).strip() == "done"
+
+
+@pytest.mark.parametrize(
+    ("system", "machine", "expected"),
+    [
+        ("linux", "x86_64", ("linux", "x86_64")),
+        ("linux", "aarch64", ("linux", "aarch64")),
+        ("linux", "arm64", ("linux", "aarch64")),
+        ("win32", "AMD64", ("win32", "amd64")),
+    ],
+)
+def test_jre_pin_follows_the_machine(
+    monkeypatch: pytest.MonkeyPatch, system: str, machine: str, expected: tuple[str, str]
+) -> None:
+    monkeypatch.setattr(neo.sys, "platform", system)
+    monkeypatch.setattr(neo.platform, "machine", lambda: machine)
+    assert neo._platform_key() == expected
+    assert expected in neo.JRES

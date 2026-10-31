@@ -28,6 +28,7 @@ def _asset(name: str, sha: str, release: str = "jdk-21.0.14+7", security: int = 
 def _responses() -> dict[tuple[str, str], str]:
     return {
         ("linux", "x86_64"): _asset("OpenJDK21U-jre_x64_linux_hotspot_21.0.14_7.tar.gz", "c" * 64),
+        ("linux", "aarch64"): _asset("OpenJDK21U-jre_aarch64_linux_hotspot_21.0.14_7.tar.gz", "e" * 64),
         ("win32", "amd64"): _asset("OpenJDK21U-jre_x64_windows_hotspot_21.0.14_7.zip", "d" * 64),
     }
 
@@ -99,6 +100,7 @@ def test_rewrite_to_newer_pins_produces_a_valid_module() -> None:
     base = "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.14%2B7/"
     assert namespace["JRES"] == {
         ("linux", "x86_64"): (base + "OpenJDK21U-jre_x64_linux_hotspot_21.0.14_7.tar.gz", "c" * 64),
+        ("linux", "aarch64"): (base + "OpenJDK21U-jre_aarch64_linux_hotspot_21.0.14_7.tar.gz", "e" * 64),
         ("win32", "amd64"): (base + "OpenJDK21U-jre_x64_windows_hotspot_21.0.14_7.zip", "d" * 64),
     }
 
@@ -114,6 +116,14 @@ def test_adoptium_url_asks_for_the_jre_of_the_major() -> None:
     assert "/latest/21/hotspot" in url
     assert "image_type=jre" in url
     assert "os=linux" in url
+    assert "architecture=x64" in url
+    assert "architecture=aarch64" in pins_update.adoptium_url(21, "linux", "aarch64")
+
+
+def test_every_pinned_platform_has_an_adoptium_target() -> None:
+    assert set(pins.JRES) == set(pins_update.ADOPTIUM_TARGETS)
+    assert pins_update.ADOPTIUM_TARGETS[("linux", "aarch64")] == ("linux", "aarch64")
+    assert pins.JRES[("linux", "aarch64")][0].endswith("jre_aarch64_linux_hotspot_21.0.13_9.tar.gz")
 
 
 def test_main_reports_then_writes_then_finds_nothing_to_do(

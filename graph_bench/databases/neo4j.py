@@ -106,7 +106,9 @@ _STATE: dict[str, Any] = {}
 
 
 def _platform_key() -> tuple[str, str]:
-    return sys.platform, platform.machine().lower()
+    """The key into `JRES`: `sys.platform` and the machine as the pins name it (x86_64, amd64 on Windows, aarch64)."""
+    machine = platform.machine().lower()
+    return sys.platform, "aarch64" if machine == "arm64" else machine
 
 
 def install_root() -> Path:

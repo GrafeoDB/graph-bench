@@ -87,6 +87,11 @@ print(json.dumps(doc))
 """
 
 
+def _platform_label() -> str:
+    """The platform a missing package is reported against, e.g. "linux/aarch64"."""
+    return f"{sys.platform}/{platform.machine().lower()}"
+
+
 def _tag(threads: int | None) -> str:
     return "1" if threads == 1 else "all"
 
@@ -445,7 +450,8 @@ class _Run:
     def _not_installed(self, meta: dict[str, _Meta], error: str) -> None:
         for bench_id, m in meta.items():
             if m.supported:
-                self.record(m.entry(bench_id, status="failed", error=f"not installed: {error}"))
+                reason = f"not installed: {error} (the package is missing or has no build for {_platform_label()})"
+                self.record(m.entry(bench_id, status="failed", error=reason))
             else:
                 self.record(m.entry(bench_id, status="not_supported", error=f"model {m.model} not supported"))
 

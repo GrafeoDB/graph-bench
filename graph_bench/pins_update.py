@@ -21,8 +21,12 @@ from graph_bench.databases import pins
 PINS_FILE = Path(__file__).resolve().parent / "databases" / "pins.py"
 MAVEN_METADATA_URL = "https://repo1.maven.org/maven2/org/neo4j/neo4j/maven-metadata.xml"
 NEO4J_URL_TEMPLATE = "https://dist.neo4j.org/neo4j-community-{version}-unix.tar.gz"
-# Adoptium's os names for the platforms in `pins.JRES`.
-ADOPTIUM_OS = {("linux", "x86_64"): "linux", ("win32", "amd64"): "windows"}
+# Adoptium's (os, architecture) names for the platforms in `pins.JRES`.
+ADOPTIUM_TARGETS = {
+    ("linux", "x86_64"): ("linux", "x64"),
+    ("linux", "aarch64"): ("linux", "aarch64"),
+    ("win32", "amd64"): ("windows", "x64"),
+}
 _STABLE = re.compile(r"\d+(\.\d+)+")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
@@ -123,10 +127,10 @@ def _fetch(url: str) -> str:
         return response.read().decode("utf-8")
 
 
-def adoptium_url(major: int, os_name: str) -> str:
+def adoptium_url(major: int, os_name: str, architecture: str = "x64") -> str:
     return (
         f"https://api.adoptium.net/v3/assets/latest/{major}/hotspot"
-        f"?architecture=x64&image_type=jre&vendor=eclipse&os={os_name}"
+        f"?architecture={architecture}&image_type=jre&vendor=eclipse&os={os_name}"
     )
 
 
@@ -134,7 +138,10 @@ def latest_pins() -> tuple[Neo4jPin, JrePin]:
     metadata = _fetch(MAVEN_METADATA_URL)
     version = neo4j_release(metadata)
     sha256 = checksum_from_sidecar(_fetch(NEO4J_URL_TEMPLATE.format(version=version) + ".sha256"))
-    responses = {platform: _fetch(adoptium_url(pins.JRE_MAJOR, os_name)) for platform, os_name in ADOPTIUM_OS.items()}
+    responses = {
+        platform: _fetch(adoptium_url(pins.JRE_MAJOR, os_name, architecture))
+        for platform, (os_name, architecture) in ADOPTIUM_TARGETS.items()
+    }
     return Neo4jPin(version, sha256), parse_adoptium(responses)
 
 

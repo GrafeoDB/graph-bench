@@ -444,6 +444,7 @@ def test_missing_driver_marks_failed(bench_env: pytest.MonkeyPatch, tmp_path: Pa
             assert entry.status == "failed", entry
             assert entry.error is not None and entry.error.startswith("not installed: ")
             assert "no_such_module" in entry.error
+            assert "no build for" in entry.error
         else:
             assert entry.status == "not_supported", entry
     assert entries[catalog.load_id("snb", "ghost_rdf", "small", 1, "rdf")].status == "failed"

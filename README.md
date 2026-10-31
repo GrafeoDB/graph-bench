@@ -153,8 +153,11 @@ one version string.
   included (grafeo's own CodSpeed suite covers `main`): after the locked `uv sync` it upgrades the database
   packages (`graph-bench packages`) without touching `uv.lock`, and the job log lists the installed versions.
   It runs the `push` selection on CodSpeed's
-  macro runners in wall-time mode on every push to `main`, daily and on demand. The daily run also runs `full`
-  with `graph-bench bench` and opens a pull request on `bot/results` that updates the section below. Needs the
+  Graviton macro runner (`codspeed-macro-arm64-graviton-ubuntu-22-04`, arm64) in wall-time mode on every push to `main`, daily and on demand. The daily run also runs `full`
+  with `graph-bench bench` and opens a pull request on `bot/results` that updates the section below. The databases install one at a time
+  (`.github/scripts/install-databases.sh`), so a package without a build for the runner does not stop the job: FalkorDB
+  has no arm64 build for glibc 2.35 (falkordblite ships `manylinux_2_38` wheels only), so its cases show ✗ (not
+  installed). Needs the
   CodSpeed app on graph-bench and codspeed-macro runners enabled for the org; authentication uses GitHub OIDC
   (no token secret).
 - `.github/workflows/pins.yml`: weekly (and on demand), checks for a newer stable Neo4j Community release and a
