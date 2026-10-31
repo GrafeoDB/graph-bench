@@ -1,14 +1,17 @@
 import csv
 import json
+from collections import defaultdict
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
+import networkx
 import pytest
 
 from graph_bench.datasets import cache
 from graph_bench.datasets.schema import Column, Dataset, EdgeTable, NodeTable
 from graph_bench.datasets.snb import SnbGraph
-from graph_bench.suites import catalog, graphalytics, scans, snb
+from graph_bench.suites import catalog, graphalytics, hops, scans, snb
 
 
 @pytest.fixture(scope="module")
@@ -183,6 +186,145 @@ def test_scan_twins_share_the_references() -> None:
             assert catalog.reference_source(twin.id) is scans
     assert catalog.LOAD_QL_PROBES[("snb", "property_graph")] == "scan_order_limit"
     assert catalog.LOAD_QL_PROBES[("snb", "sql_pgq")] == "scan_order_limit_sql"
+
+
+def _knows(pairs: list[tuple[str, str]]) -> SnbGraph:
+    """Persons and the KNOWS edges `pairs` (stored as directed edges, src to dst, as the generator does)."""
+    out: dict[str, list[tuple[str, dict[str, Any]]]] = defaultdict(list)
+    incoming: dict[str, list[tuple[str, dict[str, Any]]]] = defaultdict(list)
+    for src, dst in pairs:
+        out[src].append((dst, {"creationDate": 0}))
+        incoming[dst].append((src, {"creationDate": 0}))
+    persons = sorted({p for pair in pairs for p in pair})
+    return SnbGraph(
+        nodes={"Person": {p: {"id": p} for p in persons}},
+        out={"KNOWS": dict(out)},
+        incoming={"KNOWS": dict(incoming)},
+    )
+
+
+def _hops(g: SnbGraph, person: str) -> dict[str, int]:
+    return {qid: hops.reference(qid, g, {"personId": person})[0][0] for qid in hops.HOP_IDS}
+
+
+def test_hop3_reference_excludes_repeated_edges() -> None:
+    # Path a-b-c: the only 3-edge walks from a repeat an edge (a-b-a-b, a-b-c-b), so hop_3 counts nobody.
+    path = _knows([("a", "b"), ("b", "c")])
+    assert _hops(path, "a") == {"hop_1": 1, "hop_2": 1, "hop_3": 0, "hop_var": 2}
+    # Triangle a-b-c: the 3-edge trail a-b-c-a ends at a itself (f <> $personId), so hop_3 is 0 again; the two
+    # 2-edge walks a-b-c and a-c-b reach c and b.
+    triangle = _knows([("a", "b"), ("b", "c"), ("c", "a")])
+    assert _hops(triangle, "a") == {"hop_1": 2, "hop_2": 2, "hop_3": 0, "hop_var": 2}
+    # Square a-b-c-d-a: hop_3 counts the ends of 3-edge trails (b and d, both also friends), not the persons at
+    # distance 3; edge direction does not matter (d-a is stored as d to a).
+    square = _knows([("a", "b"), ("b", "c"), ("c", "d"), ("d", "a")])
+    assert _hops(square, "a") == {"hop_1": 2, "hop_2": 1, "hop_3": 2, "hop_var": 3}
+    # Path a-b-c-d-e from a: one 3-edge trail, to d; e is 4 hops away.
+    long_path = _knows([("a", "b"), ("c", "b"), ("c", "d"), ("d", "e")])
+    assert _hops(long_path, "a") == {"hop_1": 1, "hop_2": 1, "hop_3": 1, "hop_var": 3}
+
+
+def test_hop_references_reject_repeated_pairs_and_self_loops() -> None:
+    """The texts' node-distinctness conditions equal edge distinctness only on a simple graph: a generator change
+    that breaks it must fail the references, not change their meaning."""
+    with pytest.raises(ValueError, match="KNOWS pair"):
+        hops.reference("hop_1", _knows([("a", "b"), ("b", "a")]), {"personId": "a"})
+    with pytest.raises(ValueError, match="self-loop"):
+        hops.reference("hop_2", _knows([("a", "b"), ("b", "b")]), {"personId": "a"})
+
+
+def test_hop_var_equals_bfs_ball(graph: SnbGraph) -> None:
+    """`*1..3` is the radius-3 ball around the person, without the person, in either match semantics."""
+
+    def ball(g: SnbGraph, person: str) -> int:
+        nx_graph = networkx.Graph()
+        nx_graph.add_edges_from((src, dst) for src, edges in g.out["KNOWS"].items() for dst, _ in edges)
+        return len(networkx.single_source_shortest_path_length(nx_graph, person, cutoff=3)) - 1
+
+    bindings = hops.bindings("hop_var", graph, 10)
+    assert len(bindings) == 10
+    for b in bindings:
+        assert hops.reference("hop_var", graph, b) == [[ball(graph, b["personId"])]], b
+    # snb-small is dense enough that every ball above holds every person with friends; a sparse random graph has
+    # balls of many sizes.
+    sparse = networkx.gnm_random_graph(300, 330, seed=7)
+    g = _knows([(f"p{u}", f"p{v}") for u, v in sparse.edges])
+    sizes = {hops.reference("hop_var", g, {"personId": f"p{n}"})[0][0] for n in sparse if sparse.degree(n)}
+    assert len(sizes) > 10
+    for n in sparse:
+        if sparse.degree(n):
+            assert hops.reference("hop_var", g, {"personId": f"p{n}"}) == [[ball(g, f"p{n}")]], n
+
+
+def test_hop_bindings_spread_over_persons_with_friends(graph: SnbGraph) -> None:
+    persons = sorted(p for p in graph.nodes["Person"] if graph.out["KNOWS"].get(p) or graph.incoming["KNOWS"].get(p))
+    degree = {p: len(graph.out["KNOWS"].get(p, [])) + len(graph.incoming["KNOWS"].get(p, [])) for p in persons}
+    median = sorted(degree.values())[len(degree) // 2]
+    for qid in hops.HOP_IDS:
+        bindings = hops.bindings(qid, graph, 10)
+        assert len(bindings) == 10
+        ids = [b["personId"] for b in bindings]
+        assert ids == sorted(set(ids)) and set(ids) <= set(persons)
+        # A hub (more than ten times the median degree) is among them.
+        assert any(degree[p] > 10 * median for p in ids), qid
+        assert all(hops.reference(qid, graph, b)[0][0] > 0 for b in bindings)
+
+
+def test_hop_twins_share_the_references() -> None:
+    by_id = {item.id: item for item in catalog.ITEMS}
+    twins = {
+        "hop_1": ("sql", "rdf"),
+        "hop_2": ("sql", "rdf"),
+        "hop_3": ("sql", "rdf"),
+        "hop_var": ("sql",),  # SPARQL 1.1 has no bounded repetition of a property path
+    }
+    names = {"sql": ("sql_pgq", "sql_pgq", "SQL/PGQ"), "rdf": ("rdf", "sparql", "SPARQL")}
+    for qid, suffixes in twins.items():
+        base = by_id[qid]
+        assert isinstance(base, catalog.Query)
+        assert (base.category, base.model, base.ordered, base.rel_eps) == ("hops", "property_graph", False, 0.0)
+        for suffix in suffixes:
+            model, dialect, name = names[suffix]
+            twin = by_id[f"{qid}_{suffix}"]
+            assert isinstance(twin, catalog.Query)
+            assert (twin.category, twin.model, twin.same_as, twin.rel_eps) == ("hops", model, qid, 0.0)
+            assert twin.title == f"{base.title} ({name})"
+            assert twin.text[dialect].strip()
+            assert catalog.reference_source(twin.id) is hops
+    assert "hop_var_rdf" not in by_id
+    # IC13 stays in the SNB module, in Hops.
+    assert (by_id["snb_ic13"].category, catalog.reference_source("snb_ic13")) == ("hops", snb)
+
+
+def test_hop_texts_keep_the_distinctness_conditions() -> None:
+    """Every text of hop_2 and hop_3 (each dialect, each twin) keeps the node-distinctness conditions that make
+    relationship isomorphism and homomorphism give the same answer."""
+    by_id = {item.id: item for item in catalog.ITEMS}
+    conditions = {
+        "hop_2": {
+            "cypher": ["f.id <> $personId"],
+            "sql_pgq": ["f.id <> $personId"],
+            "sparql": ["?fid != ?personId"],
+        },
+        "hop_3": {
+            "cypher": ["b.id <> $personId", "f.id <> a.id", "f.id <> $personId"],
+            "sql_pgq": ["b.id <> $personId", "f.id <> a.id", "f.id <> $personId"],
+            "sparql": ["?bid != ?personId", "?fid != ?aid", "?fid != ?personId"],
+        },
+        "hop_var": {"cypher": ["f.id <> $personId"], "sql_pgq": ["f.id <> $personId"]},
+    }
+    for qid, by_dialect in conditions.items():
+        texts = {
+            dialect: text
+            for item_id in (qid, f"{qid}_sql", f"{qid}_rdf")
+            if item_id in by_id
+            for dialect, text in by_id[item_id].text.items()  # type: ignore[union-attr]
+            if dialect != "helix"
+        }
+        assert set(texts) == set(by_dialect), qid
+        for dialect, needles in by_dialect.items():
+            for needle in needles:
+                assert needle in texts[dialect], (qid, dialect, needle)
 
 
 def test_bfs_reference_depths(tmp_path: Path) -> None:

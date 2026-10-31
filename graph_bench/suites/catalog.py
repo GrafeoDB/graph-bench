@@ -24,7 +24,7 @@ from types import ModuleType
 from typing import Any
 
 from graph_bench.databases import model_support
-from graph_bench.suites import Algorithm, Item, Query, Write, graphalytics, scans, snb, snb_rdf, snb_sql
+from graph_bench.suites import Algorithm, Item, Query, Write, graphalytics, hops, scans, snb, snb_rdf, snb_sql
 from graph_bench.types import CATEGORY_ORDER, Category, Model, Store
 
 __all__ = [
@@ -80,7 +80,7 @@ def _extra_suites() -> tuple[ModuleType, ...]:
 # The modules GRAPH_BENCH_EXTRA_SUITES adds, and all suite modules in catalog order; their items, in that order, are
 # the catalog.
 EXTRA_SUITES: tuple[ModuleType, ...] = _extra_suites()
-SUITES: tuple[ModuleType, ...] = (scans, snb, graphalytics, snb_sql, snb_rdf, *EXTRA_SUITES)
+SUITES: tuple[ModuleType, ...] = (scans, hops, snb, graphalytics, snb_sql, snb_rdf, *EXTRA_SUITES)
 
 ITEMS: tuple[Item, ...] = tuple(item for module in SUITES for item in _module_items(module))
 

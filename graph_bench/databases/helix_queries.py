@@ -262,6 +262,40 @@ def scan_filter_avg(b: Mapping[str, Any]) -> tuple[QueryRequest, Rows]:
     return _request(_THRESHOLD, b, n=longer().count(), mean=mean), rows
 
 
+def _distinct_count(t: Any, b: Mapping[str, Any]) -> tuple[QueryRequest, Rows]:
+    """`count(DISTINCT f.id)`: the persons the traversal ends at, deduplicated, then counted (both in HelixDB)."""
+
+    def rows(result: Mapping[str, Any]) -> list[tuple[Any, ...]]:
+        return [(result["n"],)]
+
+    return _request(_PERSON, b, n=t.dedup().count()), rows
+
+
+def _person() -> Any:
+    return g().n_with_label_where("Person", SourcePredicate.eq("id", _PERSON.personId))
+
+
+def hop_1(b: Mapping[str, Any]) -> tuple[QueryRequest, Rows]:
+    # `both` follows KNOWS in either direction, as the undirected `-[:KNOWS]-`; KNOWS joins persons only.
+    return _distinct_count(_person().both("KNOWS"), b)
+
+
+def hop_2(b: Mapping[str, Any]) -> tuple[QueryRequest, Rows]:
+    # Walks of two KNOWS edges; `f.id <> $personId` drops the walks back to the person, which are also the only
+    # ones that repeat an edge (the data has no repeated pair), so walks and the openCypher matches end at the same
+    # persons.
+    t = _person().both("KNOWS").both("KNOWS").where(Predicate.neq("id", _PERSON.personId))
+    return _distinct_count(t, b)
+
+
+def hop_var(b: Mapping[str, Any]) -> tuple[QueryRequest, Rows]:
+    # `*1..3`: `repeat` over `both("KNOWS")` three times, emitting the persons after every step (1, 2 and 3 hops),
+    # then without the person: the radius-3 ball, which walks and trails reach alike (see `suites/hops.py`).
+    config = RepeatConfig.new(sub().both("KNOWS")).times(3).emit_after()
+    t = _person().repeat(config).where(Predicate.neq("id", _PERSON.personId))
+    return _distinct_count(t, b)
+
+
 def startup_probe(b: Mapping[str, Any]) -> tuple[QueryRequest, Rows]:
     """The Startup probe (`suites.startup.PROBE["helix"]`): the number of nodes, `MATCH (n) RETURN count(n)`, with
     the `count` step over all nodes (https://docs.helix-db.com/database/helix-db/query-guides/projections)."""
@@ -307,5 +341,13 @@ BUILDERS: dict[str, Builder | str] = {
     ),
     "scan_order_limit": scan_order_limit,
     "scan_filter_avg": scan_filter_avg,
+    "hop_1": hop_1,
+    "hop_2": hop_2,
+    "hop_3": (
+        "3-hop: the condition f.id <> a.id compares the walk's last person with its first friend, and a predicate "
+        "compares a property only with a constant, a parameter or an expression over the current element (no "
+        "reference to a node bound earlier in the walk), so the distinct count over the pattern cannot be expressed"
+    ),
+    "hop_var": hop_var,
     "startup_probe": startup_probe,
 }

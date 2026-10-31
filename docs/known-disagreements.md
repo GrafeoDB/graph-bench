@@ -153,6 +153,43 @@ queries agree afterwards), but slower than the batch API. It is not a disagreeme
   grafeo side for every reserved word (`from`, `select`, `where`, `match`, `order`, `limit`, `as`); queued for
   grafeo 0.6.1. Not renamed in the shared text, which would hide it.
 
+## Grafeo: variable length `*1..3` from a hub exceeds the path search memory limit (Variable length 1 to 3)
+
+- id: grafeo/hop_var
+- Query: `hop_var` (Variable length 1 to 3), the shared openCypher text in `graph_bench/suites/hops.py`, no Grafeo
+  override: `MATCH (s:Person {id: $personId})-[:KNOWS*1..3]-(f:Person) WHERE f.id <> $personId RETURN
+  count(DISTINCT f.id) AS persons`.
+- Dataset: `snb-small`. Binding 0, `person_0`, one of the generator's influencers (571 KNOWS edges).
+- Grafeo 0.6.0 outcome: ✗ on the first binding, `GRAFEO-Q006: execution error: A variable-length pattern would
+  hold more than 1526945 paths at once, more than the 256 MiB of memory a path search may use: bound the
+  quantifier, or use TRAIL, ACYCLIC or ANY SHORTEST (...), or return DISTINCT nodes (`RETURN DISTINCT f`,
+  `count(DISTINCT f)`)`. The quantifier is bounded already, and `count(DISTINCT f)` in place of
+  `count(DISTINCT f.id)` fails the same way (tried outside the benchmark, not used). The other bindings
+  (`person_143`, `person_189`, degree 25 to 36) answer 999 in 60 to 90 ms each; `*1..2` from `person_0` answers
+  in 8 ms.
+- The SQL/PGQ twin `hop_var_sql`, the same pattern as `-[k:KNOWS]-{1,3}`, agrees on all 10 bindings in 11 ms in
+  total on the same Grafeo, so the engine can answer the question; the openCypher variable-length expand
+  materializes every path before the distinct count.
+- Reference answer: 999 for every binding (the radius-3 ball holds every person with friends on `snb-small`).
+- Cause: Grafeo engine (openCypher variable-length expand: all paths are kept, millions of trails of up to 3 edges
+  from this hub, although the result needs only the distinct end nodes). Not rewritten in the shared text.
+
+## Grafeo: SPARQL alternative of a path and its inverse is not supported (1-hop, 2-hop, 3-hop (SPARQL))
+
+- id: grafeo/hop_1_rdf
+- id: grafeo/hop_2_rdf
+- id: grafeo/hop_3_rdf
+- Queries: `hop_1_rdf`, `hop_2_rdf`, `hop_3_rdf`, the shared SPARQL texts in `graph_bench/suites/hops.py`; every
+  step is `?x (v:KNOWS|^v:KNOWS) ?y`, KNOWS in either direction (each pair is stored once, as one triple).
+- Dataset: `snb-small` as RDF triples.
+- Grafeo 0.6.0 outcome: ✗ on the first binding, `GRAFEO-Q004: unsupported: Complex property paths not yet
+  supported`. Reduced on an empty store: `?s (v:a|^v:a) ?o` fails the same way, while `?s v:a|v:b ?o` and
+  `?s ^v:a ?o` parse and run, so it is the alternative whose branch is an inverse path. Oxigraph runs the same three
+  texts and agrees.
+- Reference answers: the openCypher `hop_1`, `hop_2` and `hop_3` references.
+- Cause: Grafeo engine (SPARQL property path evaluation, SPARQL 1.1 section 9.1 alternative and inverse paths).
+  Not rewritten as a `UNION` of the two directions, which would be a different text for one engine.
+
 ## Grafeo: SPARQL IS6 property path is slow (not allowlisted)
 
 - `snb_rdf_is6` on `snb-small` agrees (10/10) with a median of 451 ms for 10 bindings (about 45 ms each), against
@@ -325,6 +362,23 @@ not a disagreement, so there is no `- id:` line.
 - Cause: FalkorDB engine (openCypher coverage). KNOWS is stored once per pair, so a directed form is not the same
   question. No rewrite is used: a database that cannot run the standard text gets the marker (FAIRNESS.md).
 
+## FalkorDB: the 3-hop count runs past the client's socket timeout (3-hop)
+
+- id: falkordb/hop_3
+- Query: `hop_3` (3-hop), the shared openCypher text in `graph_bench/suites/hops.py`, no FalkorDB override.
+- Dataset: `snb-small` (Linux, Docker ubuntu:24.04, falkordblite 0.11.0, FalkorDB 4.22.1).
+- FalkorDB outcome: ✗ on the first binding (`person_0`), `TimeoutError: Timeout reading from socket`, after about
+  58 s. The falkordblite client connection (redis-py 8.1.0) has a 5 s socket timeout and retries a timed-out
+  command 10 times with backoff; the adapter keeps falkordblite's client settings. With no socket timeout (tried
+  outside the benchmark, not used), the second binding alone, `person_143` (36 friends), answers 999, the
+  reference, in 45 s, so the 10 bindings would take minutes and the case would be ⏱ instead.
+- `hop_1`, `hop_2` and `hop_var` agree; `hop_var` is ⏱ by the budget rule in a multi-database run (6.6 s for 10
+  bindings in the Docker run against TuringDB's 26 ms).
+- Reference answer: 999 for every binding.
+- Cause: FalkorDB engine (the fixed-length 3-hop pattern with its `WHERE` conditions over 18,000 KNOWS edges, tens
+  of seconds per person), surfaced as ✗ by the client's socket timeout. A follow-up case can start while the
+  server still runs the timed-out query; in the Docker run `hop_var` (next) still agreed.
+
 ## FalkorDB: PageRank parameters are fixed (answer agrees)
 
 `algo.pageRank(label, relationship)` takes no damping, iteration or tolerance argument and its docs list none
@@ -489,6 +543,25 @@ alone, where no budget applies and they must agree.
   where the shared text has one (a disadvantage, not a workaround).
 - Cause: HelixDB DSL (feature coverage), not the adapter.
 
+## HelixDB: the 3-hop count cannot be expressed in the DSL (not available)
+
+- id: helixdb/hop_3
+- Query: `hop_3` (3-hop): `MATCH (s:Person {id: $personId})-[:KNOWS]-(a:Person)-[:KNOWS]-(b:Person)-[:KNOWS]-(f:Person)
+  WHERE b.id <> $personId AND f.id <> a.id AND f.id <> $personId RETURN count(DISTINCT f.id) AS persons`.
+- HelixDB outcome: `not_supported` (⊘), "3-hop: the condition f.id <> a.id compares the walk's last person with its
+  first friend, and a predicate compares a property only with a constant, a parameter or an expression over the
+  current element (no reference to a node bound earlier in the walk), so the distinct count over the pattern cannot
+  be expressed". In helix-db 0.3.4 `Predicate` compares a property with a value, a parameter or an `Expr`, and
+  `Expr` has properties of the current element, constants, parameters and arithmetic; a node named with `bind` can
+  only be projected (`BindingProjection`), not compared
+  (https://docs.helix-db.com/database/helix-db/query-guides/filtering). Dropping `f.id <> a.id` would count the
+  walks `s-a-b-a` and change the answer; checking it in Python would compute the answer outside HelixDB; neither is
+  done.
+- `hop_1`, `hop_2` and `hop_var` run as builders (`both("KNOWS")` steps, `dedup`, `count`; `hop_var` is `repeat`
+  three times with `emit_after`) and agree; `hop_2`'s one condition, `f.id <> $personId`, is a parameter
+  comparison.
+- Cause: HelixDB DSL (feature coverage), not the adapter.
+
 ## HelixDB: no BFS, WCC or PageRank (not available)
 
 - id: helixdb/graphalytics_bfs
@@ -530,6 +603,12 @@ The Scans it runs agree as well and are ⏱ by the same rule in `bench --selecti
 for 7 bindings (249x) and `scan_filter_avg` 1051 ms for 10 bindings (924x, two filtered scans per binding, see the
 Aggregation section). Every filtered scan reads the label's nodes and filters them in the DSL; no range index is
 created on `creationDate` or `length`, as no other database gets one.
+
+The Hops it runs agree and are ⏱ by the same rule in `bench --selection push` (Windows, eight databases): `hop_1`
+37.7 ms for 10 bindings (64.7x), `hop_2` 3.68 s (123.5x) and `hop_var` 66.7 s (51.1x). The builders follow the
+shared texts: every walk is expanded (`both("KNOWS")` per step, `repeat` three times for `hop_var`) and deduplicated
+once at the end, as `count(DISTINCT f.id)`; no step deduplicates the intermediate persons, which the texts do not
+ask for either. `hop_var` makes the HelixDB adapter test take about 6 minutes longer (warm-up plus 5 runs).
 
 ## HelixDB: intermittent planner error during loads on a busy machine (✗ when it happens, not allowlisted)
 
@@ -835,6 +914,11 @@ filters in the graph pattern WHERE, which DuckPGQ evaluates after matching, wher
 `(n:Person WHERE n.id = $personId)` took 1.2 ms in research). IC13 is 3.5 s for 10 bindings (`ANY SHORTEST` from the
 filtered endpoints). No `- id:` line: the adapter test runs DuckDB alone, where no budget applies. The texts are not
 rewritten.
+
+The Hops twins agree too; in `bench --selection push` (Windows, eight databases, Grafeo the only other SQL/PGQ
+database) `hop_1_sql` 26.3 ms for 10 bindings (72.5x Grafeo's 0.36 ms, the same graph pattern WHERE filter on the
+start person) and `hop_var_sql` 164 ms (15.9x Grafeo's 10.3 ms) are ⏱; `hop_2_sql` (58 ms) and `hop_3_sql` (7.9 s)
+are within the budget.
 
 ## DuckDB + DuckPGQ: SQL/PGQ IC13 does not finish on `snb-medium` (⏱, not allowlisted)
 

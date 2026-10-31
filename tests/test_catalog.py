@@ -17,8 +17,9 @@ def _item(item_id: str) -> catalog.Query | catalog.Algorithm:
 
 def test_push_selection_cases() -> None:
     result = cases("push", ["grafeo", "ladybug"])
-    # 13 SNB and Graphalytics items, 4 SQL/PGQ, 3 RDF and the 15 Scans rows (5 queries, each in three models).
-    assert len(result) == 2 * (13 + 4 + 3 + 15)
+    # 13 SNB and Graphalytics items, 4 SQL/PGQ, 3 RDF, the 15 Scans rows (5 queries, each in three models) and the 11
+    # Hops rows besides IC13 (4 queries in openCypher and SQL/PGQ, 3 in SPARQL).
+    assert len(result) == 2 * (13 + 4 + 3 + 15 + 11)
     assert all(c.threads == 1 for c in result)
     assert all(c.scale == "small" for c in result)
     assert [c.bench_id for c in result] == sorted(c.bench_id for c in result)
