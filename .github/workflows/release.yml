@@ -108,6 +108,10 @@ jobs:
     if: needs.detect.outputs.run == 'true'
     # Same runner as bench.yml's README job.
     runs-on: codspeed-macro-arm64-graviton-ubuntu-22-04
+    # One macro-runner job at a time across workflows: two at once lost their runners (2026-10-31).
+    concurrency:
+      group: macro-runner
+      cancel-in-progress: false
     permissions:
       contents: write
     steps:

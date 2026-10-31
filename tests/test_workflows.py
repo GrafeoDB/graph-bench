@@ -240,3 +240,19 @@ def test_prepare_action_installs_released_databases() -> None:
     assert all(step["shell"] == "bash" for step in action["runs"]["steps"] if "run" in step)
     assert "uv sync --frozen --extra bench" in runs[0]
     assert any("install-databases.sh" in run for run in runs)
+
+
+def test_macro_runner_jobs_never_run_at_once() -> None:
+    """Every job on a CodSpeed macro runner shares one concurrency group, across bench.yml and release.yml."""
+    root = Path(__file__).resolve().parents[1] / ".github" / "workflows"
+    found = []
+    for name in ("bench.yml", "release.yml"):
+        doc = yaml.safe_load((root / name).read_text(encoding="utf-8"))
+        for job_name, job in doc["jobs"].items():
+            if str(job.get("runs-on", "")).startswith("codspeed-macro"):
+                assert job.get("concurrency") == {"group": "macro-runner", "cancel-in-progress": False}, (
+                    name,
+                    job_name,
+                )
+                found.append((name, job_name))
+    assert len(found) == 3

@@ -27,6 +27,10 @@ jobs:
     # GitHub OIDC (no token secret), hence id-token: write. The explicit Graviton (arm64, Ubuntu 22.04) label is
     # the macro runner the plain `codspeed-macro` used to alias; the dataset cache key carries runner.arch.
     runs-on: codspeed-macro-arm64-graviton-ubuntu-22-04
+    # One macro-runner job at a time across workflows: two at once lost their runners (2026-10-31).
+    concurrency:
+      group: macro-runner
+      cancel-in-progress: false
     permissions:
       contents: read
       id-token: write
@@ -52,6 +56,10 @@ jobs:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     # Needs codspeed-macro runners enabled for the org (no CodSpeed upload, so no token). Same runner as above.
     runs-on: codspeed-macro-arm64-graviton-ubuntu-22-04
+    # One macro-runner job at a time across workflows: two at once lost their runners (2026-10-31).
+    concurrency:
+      group: macro-runner
+      cancel-in-progress: false
     permissions:
       contents: write
       pull-requests: write
