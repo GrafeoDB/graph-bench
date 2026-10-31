@@ -155,6 +155,11 @@
 - `pattern_common` "Common friends": `MATCH (a:Person {id: $person1Id})-[:KNOWS]-(c:Person)-[:KNOWS]-(b:Person {id: $person2Id}) RETURN count(DISTINCT c.id) AS common`.
 - `pattern_join` "Multi-pattern join": `MATCH (p:Person)-[:HAS_INTEREST]->(t:Tag), (m:Post)-[:HAS_TAG]->(t), (m)-[:HAS_CREATOR]->(p) RETURN t.name AS tag, count(*) AS posts ORDER BY posts DESC, tag ASC`; ordered; one empty binding.
 
+**Hub and unanchored cyclic items** (user decision 2026-10-31, from grafeo-31: the median-degree cases above are the guard; these measure the hub blow-up and worst-case-optimal joins):
+- `pattern_triangle_hub` "Triangles through a hub person": the `pattern_triangle` text, with bindings drawn from the top 1% of persons by KNOWS degree (spread evenly over that group, deterministic).
+- `pattern_triangle_all` "Triangles, whole graph": `MATCH (a:Person)-[:KNOWS]-(b:Person)-[:KNOWS]-(c:Person)-[:KNOWS]-(a) WHERE a.id < b.id AND b.id < c.id RETURN count(*) AS triangles`; one empty binding; on SNB. (Labels added to grafeo-31's suggested text so every engine scans the same node set; same meaning on this data.)
+- Grafeo may show ⏱ or ✗ (the two-hop panic on nodes with more than 65,536 out-edges, grafeo 0.6.1 urgent) on these until its fixes land; record the cause in known-disagreements the same way as A1.
+
 **Whole-graph analytics items** (analytics brief A1 to A3 and C1, user decision 2026-10-31; texts exactly as in `.claude/todo/grafeo-0.6.1-analytics.md`, frozen after the baseline):
 - `pm_two_hop_count` "2-hop paths, whole graph" (A1, graphalytics): `MATCH (a:V)-[:E]->(b:V)-[:E]->(c:V) RETURN count(*) AS paths`; one empty binding.
 - `pm_two_hop_top10` "2-hop paths per source, top 10" (A2, graphalytics): `MATCH (a:V)-[:E]->(b:V)-[:E]->(c:V) WHERE a.id < $cut RETURN a.id AS id, count(*) AS paths ORDER BY paths DESC, id ASC LIMIT 10`; ordered; bindings: `selection.bindings` cuts spread over the vertex ids.
