@@ -69,11 +69,11 @@ benchmark moves to `legacy/` untouched and is deleted once the new comparison re
   SNB comments and persons (`graph_bench/suites/scans.py`), each with an SQL/PGQ and a SPARQL twin in the same
   category that shares its references, so DuckDB + DuckPGQ and Oxigraph take part. HelixDB runs four through DSL
   builders (the aggregation is ⊘). The order plus limit scan is the Load (query language) content probe.
-- **Hops**: 1-hop, 2-hop, 3-hop and variable length 1 to 3 over KNOWS in either direction, each a distinct count of
-  the persons reached (`graph_bench/suites/hops.py`), beside IC13. Explicit node-distinctness conditions make
+- **Hops**: 1-hop, 2-hop and variable length 1 to 3 over KNOWS in either direction, each a distinct count of the
+  persons reached (`graph_bench/suites/hops.py`), beside IC13. Explicit node-distinctness conditions make
   relationship-isomorphic and walk-based engines give the same answer, and the references check that KNOWS pairs are
   unique and loop-free. Each has an SQL/PGQ twin and, but for the variable length (SPARQL 1.1 has no bounded
-  repetition), a SPARQL twin in the same category. HelixDB runs three through DSL builders (3-hop is ⊘).
+  repetition), a SPARQL twin in the same category. HelixDB runs all three through DSL builders.
 - **Memory and Disk records**: after each database's worker (or pytest process), the supervisor loads every
   dataset and store the database's models reach once more, each in a fresh child process
   (`graph_bench/runner/resources.py`), and samples the child's whole process tree every 10 ms from outside

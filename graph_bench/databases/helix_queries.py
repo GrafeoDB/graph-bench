@@ -343,11 +343,6 @@ BUILDERS: dict[str, Builder | str] = {
     "scan_filter_avg": scan_filter_avg,
     "hop_1": hop_1,
     "hop_2": hop_2,
-    "hop_3": (
-        "3-hop: the condition f.id <> a.id compares the walk's last person with its first friend, and a predicate "
-        "compares a property only with a constant, a parameter or an expression over the current element (no "
-        "reference to a node bound earlier in the walk), so the distinct count over the pattern cannot be expressed"
-    ),
     "hop_var": hop_var,
     "startup_probe": startup_probe,
 }

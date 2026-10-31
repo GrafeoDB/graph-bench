@@ -207,21 +207,30 @@ def _hops(g: SnbGraph, person: str) -> dict[str, int]:
     return {qid: hops.reference(qid, g, {"personId": person})[0][0] for qid in hops.HOP_IDS}
 
 
-def test_hop3_reference_excludes_repeated_edges() -> None:
-    # Path a-b-c: the only 3-edge walks from a repeat an edge (a-b-a-b, a-b-c-b), so hop_3 counts nobody.
-    path = _knows([("a", "b"), ("b", "c")])
-    assert _hops(path, "a") == {"hop_1": 1, "hop_2": 1, "hop_3": 0, "hop_var": 2}
-    # Triangle a-b-c: the 3-edge trail a-b-c-a ends at a itself (f <> $personId), so hop_3 is 0 again; the two
-    # 2-edge walks a-b-c and a-c-b reach c and b.
+def test_hop_references_exclude_repeated_edges() -> None:
+    # Path a-b: the only 2-edge walk from a is a-b-a, which repeats the edge and returns to a, so hop_2 is 0.
+    edge = _knows([("a", "b")])
+    assert _hops(edge, "a") == {"hop_1": 1, "hop_2": 0, "hop_var": 1}
+    # Path a-b-c: a-b-c reaches c; a-b-a does not count.
+    path = _knows([("a", "b"), ("c", "b")])
+    assert _hops(path, "a") == {"hop_1": 1, "hop_2": 1, "hop_var": 2}
+    # Triangle a-b-c: the 3-edge trail a-b-c-a ends at a itself, which `f.id <> $personId` removes from hop_var;
+    # the two 2-edge walks a-b-c and a-c-b reach c and b.
     triangle = _knows([("a", "b"), ("b", "c"), ("c", "a")])
-    assert _hops(triangle, "a") == {"hop_1": 2, "hop_2": 2, "hop_3": 0, "hop_var": 2}
-    # Square a-b-c-d-a: hop_3 counts the ends of 3-edge trails (b and d, both also friends), not the persons at
-    # distance 3; edge direction does not matter (d-a is stored as d to a).
-    square = _knows([("a", "b"), ("b", "c"), ("c", "d"), ("d", "a")])
-    assert _hops(square, "a") == {"hop_1": 2, "hop_2": 1, "hop_3": 2, "hop_var": 3}
-    # Path a-b-c-d-e from a: one 3-edge trail, to d; e is 4 hops away.
+    assert _hops(triangle, "a") == {"hop_1": 2, "hop_2": 2, "hop_var": 2}
+    # Path a-b-c-d-e: hop_var stops at d, 3 hops away; edge direction does not matter.
     long_path = _knows([("a", "b"), ("c", "b"), ("c", "d"), ("d", "e")])
-    assert _hops(long_path, "a") == {"hop_1": 1, "hop_2": 1, "hop_3": 1, "hop_var": 3}
+    assert _hops(long_path, "a") == {"hop_1": 1, "hop_2": 1, "hop_var": 3}
+
+
+def test_hop_references_count_distinct_persons_not_walks() -> None:
+    # a knows b, c and d, each of whom knows e: three 2-edge walks end at e, one person. hop_var reaches b, c, d and
+    # e by many walks (a-b-e-c, a-c-e-b, ...), four persons.
+    fan = _knows([("a", "b"), ("a", "c"), ("a", "d"), ("b", "e"), ("c", "e"), ("d", "e")])
+    assert _hops(fan, "a") == {"hop_1": 3, "hop_2": 1, "hop_var": 4}
+    # Square a-b-c-d-a: a-b-c and a-d-c end at the same person.
+    square = _knows([("a", "b"), ("b", "c"), ("c", "d"), ("d", "a")])
+    assert _hops(square, "a") == {"hop_1": 2, "hop_2": 1, "hop_var": 3}
 
 
 def test_hop_references_reject_repeated_pairs_and_self_loops() -> None:
@@ -275,7 +284,6 @@ def test_hop_twins_share_the_references() -> None:
     twins = {
         "hop_1": ("sql", "rdf"),
         "hop_2": ("sql", "rdf"),
-        "hop_3": ("sql", "rdf"),
         "hop_var": ("sql",),  # SPARQL 1.1 has no bounded repetition of a property path
     }
     names = {"sql": ("sql_pgq", "sql_pgq", "SQL/PGQ"), "rdf": ("rdf", "sparql", "SPARQL")}
@@ -292,12 +300,13 @@ def test_hop_twins_share_the_references() -> None:
             assert twin.text[dialect].strip()
             assert catalog.reference_source(twin.id) is hops
     assert "hop_var_rdf" not in by_id
+    assert not {"hop_3", "hop_3_sql", "hop_3_rdf"} & set(by_id)
     # IC13 stays in the SNB module, in Hops.
     assert (by_id["snb_ic13"].category, catalog.reference_source("snb_ic13")) == ("hops", snb)
 
 
 def test_hop_texts_keep_the_distinctness_conditions() -> None:
-    """Every text of hop_2 and hop_3 (each dialect, each twin) keeps the node-distinctness conditions that make
+    """Every text of hop_2 and hop_var (each dialect, each twin) keeps the node-distinctness condition that makes
     relationship isomorphism and homomorphism give the same answer."""
     by_id = {item.id: item for item in catalog.ITEMS}
     conditions = {
@@ -305,11 +314,6 @@ def test_hop_texts_keep_the_distinctness_conditions() -> None:
             "cypher": ["f.id <> $personId"],
             "sql_pgq": ["f.id <> $personId"],
             "sparql": ["?fid != ?personId"],
-        },
-        "hop_3": {
-            "cypher": ["b.id <> $personId", "f.id <> a.id", "f.id <> $personId"],
-            "sql_pgq": ["b.id <> $personId", "f.id <> a.id", "f.id <> $personId"],
-            "sparql": ["?bid != ?personId", "?fid != ?aid", "?fid != ?personId"],
         },
         "hop_var": {"cypher": ["f.id <> $personId"], "sql_pgq": ["f.id <> $personId"]},
     }

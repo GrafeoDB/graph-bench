@@ -1,15 +1,14 @@
-"""Hops: 1, 2 and 3 hop expansions and a variable-length expansion over KNOWS in either direction.
+"""Hops: 1 and 2 hop expansions and a variable-length expansion (1 to 3 hops) over KNOWS in either direction.
 
-Four openCypher queries (ported from the legacy `traversal.py` hop_1, hop_2 and BFS depth 3), each counting the
+Three openCypher queries (ported from the legacy `traversal.py` hop_1, hop_2 and BFS depth 3), each counting the
 distinct persons a pattern reaches from one person, with deterministic bindings and a Python reference answer, and
-their twins in SQL/PGQ (`<id>_sql`, all four) and SPARQL (`<id>_rdf`, all but `hop_var`), which ask the same
+their twins in SQL/PGQ (`<id>_sql`, all three) and SPARQL (`<id>_rdf`, `hop_1` and `hop_2`), which ask the same
 question through the other models and share the openCypher item's bindings and references (`same_as`). The twins
 are rows of this category, so DuckDB + DuckPGQ and Oxigraph appear in Hops too. IC13 (shortest path, `snb.py`) is
 in Hops as well and stays there.
 
 - `hop_1`: the friends of the person.
 - `hop_2`: the persons at the end of a 2-edge walk from the person, the person excluded.
-- `hop_3`: the persons at the end of a 3-edge walk `s-a-b-f` from the person, with `b <> s`, `f <> a` and `f <> s`.
 - `hop_var`: the persons within 3 hops (`*1..3`), the person excluded.
 
 Match semantics. openCypher matches a pattern under relationship isomorphism (no edge twice in one match); some
@@ -17,13 +16,10 @@ engines match walks (homomorphism, an edge may repeat). The texts make both give
 
 - The generated data has no repeated KNOWS pair and no self-loop (`_adjacency` checks both and raises otherwise),
   so an edge is identified by its two persons.
-- In `s-a-f` the two edges are the same exactly when `f = s`, which `hop_2` excludes.
-- In `s-a-b-f` the first two edges are the same exactly when `b = s`, the last two exactly when `f = a`, and the
-  first and the last exactly when `b = s` (or `b = a`, a self-loop); `hop_3` excludes `b = s` and `f = a`, so
-  every walk it keeps is a trail. `f <> s` is the condition of the question itself: a trail may close a triangle
-  back at the person.
+- In `s-m-f` the two edges are the same exactly when `f = s`, which `hop_2` excludes (`f.id <> $personId`).
 - `*1..3` reaches the radius-3 ball around the person under either semantics: a shortest path never repeats an
-  edge, and every walk end within 3 edges is within distance 3.
+  edge, and every walk end within 3 edges is within distance 3; `f.id <> $personId` removes the person, whom a
+  trail can reach again by closing a triangle.
 
 The references enumerate the walks with explicit edge identities (relationship isomorphism) and apply the same
 conditions, so they are also the homomorphic answer. `count(DISTINCT f.id)` gives one integer row per binding,
@@ -39,11 +35,14 @@ after the pattern with the openCypher conditions, `$personId`, and a variable on
 selector (only an unbounded quantifier needs one). The distinct count is the outer SQL query's, over the `COLUMNS`
 rows. The SPARQL texts follow `snb_rdf.py` (an inline `VALUES` block first, bound by `rdf.bind`): a basic graph
 pattern with a named variable for every person of the openCypher pattern, each step the property path
-`(v:KNOWS|^v:KNOWS)` (KNOWS in either direction), and the same conditions as FILTERs over the ids. SPARQL matches
-walks, which the conditions make equal to the openCypher answer. There is no SPARQL `hop_var`: SPARQL 1.1 has no
-bounded repetition of a property path (`{1,3}` was dropped from the 1.1 drafts,
-https://www.w3.org/TR/sparql11-query/#propertypaths), and a union of the three fixed-length patterns would be a
-different query text, not the shared one; Oxigraph shows ⊘ on the `hop_var` row by model.
+`(v:KNOWS|^v:KNOWS)` (KNOWS in either direction), and the same condition as a FILTER over the ids. SPARQL matches
+walks, which the condition makes equal to the openCypher answer.
+
+There is no SPARQL `hop_var`: SPARQL 1.1 has no bounded repetition of a property path (`{1,3}` was in the 1.1
+drafts and dropped from the Recommendation, https://www.w3.org/TR/sparql11-query/#propertypaths; `*` and `+` are
+unbounded), and a union of the 1, 2 and 3 step patterns would be a different query text, not the shared one. As
+for IC13 (`snb_rdf.py`), the question then has no SPARQL row, and Oxigraph shows the model gate's ⊘ on the
+`hop_var` and `hop_var_sql` rows.
 
 HelixDB (dialect "helix") has no query text: its text is the name of a builder in
 `graph_bench.databases.helix_queries`, or a reason the DSL cannot express the query.
@@ -59,7 +58,7 @@ from graph_bench.suites import Query
 from graph_bench.suites.snb import _spread, _with_friends
 
 # The openCypher items, in category order.
-HOP_IDS = ("hop_1", "hop_2", "hop_3", "hop_var")
+HOP_IDS = ("hop_1", "hop_2", "hop_var")
 
 # One distinct count per binding: compared exactly.
 _EXACT = 0.0
@@ -71,11 +70,6 @@ RETURN count(DISTINCT f.id) AS persons"""
 _HOP_2 = """\
 MATCH (s:Person {id: $personId})-[:KNOWS]-(:Person)-[:KNOWS]-(f:Person)
 WHERE f.id <> $personId
-RETURN count(DISTINCT f.id) AS persons"""
-
-_HOP_3 = """\
-MATCH (s:Person {id: $personId})-[:KNOWS]-(a:Person)-[:KNOWS]-(b:Person)-[:KNOWS]-(f:Person)
-WHERE b.id <> $personId AND f.id <> a.id AND f.id <> $personId
 RETURN count(DISTINCT f.id) AS persons"""
 
 _HOP_VAR = """\
@@ -96,14 +90,6 @@ SELECT count(DISTINCT fid) AS persons
 FROM GRAPH_TABLE (snb
   MATCH (s:Person)-[k1:KNOWS]-(m:Person)-[k2:KNOWS]-(f:Person)
   WHERE s.id = $personId AND f.id <> $personId
-  COLUMNS (f.id AS fid)
-)"""
-
-_HOP_3_SQL = """\
-SELECT count(DISTINCT fid) AS persons
-FROM GRAPH_TABLE (snb
-  MATCH (s:Person)-[k1:KNOWS]-(a:Person)-[k2:KNOWS]-(b:Person)-[k3:KNOWS]-(f:Person)
-  WHERE s.id = $personId AND b.id <> $personId AND f.id <> a.id AND f.id <> $personId
   COLUMNS (f.id AS fid)
 )"""
 
@@ -131,21 +117,10 @@ _HOP_2_RDF = f"""\
   FILTER(?fid != ?personId)
 }}"""
 
-_HOP_3_RDF = f"""\
-{PREFIXES}SELECT (COUNT(DISTINCT ?fid) AS ?persons) WHERE {{
-  VALUES ?personId {{ $personId }}
-  ?s a v:Person ; v:id ?personId ; (v:KNOWS|^v:KNOWS) ?a .
-  ?a a v:Person ; v:id ?aid ; (v:KNOWS|^v:KNOWS) ?b .
-  ?b a v:Person ; v:id ?bid ; (v:KNOWS|^v:KNOWS) ?f .
-  ?f a v:Person ; v:id ?fid .
-  FILTER(?bid != ?personId && ?fid != ?aid && ?fid != ?personId)
-}}"""
-
 # (id, title, openCypher, SQL/PGQ, SPARQL or None)
 _ITEMS: tuple[tuple[str, str, str, str, str | None], ...] = (
     ("hop_1", "1-hop", _HOP_1, _HOP_1_SQL, _HOP_1_RDF),
     ("hop_2", "2-hop", _HOP_2, _HOP_2_SQL, _HOP_2_RDF),
-    ("hop_3", "3-hop", _HOP_3, _HOP_3_SQL, _HOP_3_RDF),
     ("hop_var", "Variable length 1 to 3", _HOP_VAR, _HOP_VAR_SQL, None),
 )
 
@@ -218,18 +193,6 @@ def _hop_2(adj: Adjacency, s: str) -> set[str]:
     return found
 
 
-def _hop_3(adj: Adjacency, s: str) -> set[str]:
-    found: set[str] = set()
-    for a, e1 in adj.get(s, []):
-        for b, e2 in adj[a]:
-            if e2 == e1 or b == s:
-                continue
-            for f, e3 in adj[b]:
-                if e3 not in (e1, e2) and f != a and f != s:
-                    found.add(f)
-    return found
-
-
 def _hop_var(adj: Adjacency, s: str) -> set[str]:
     """The ends of the 1, 2 and 3 edge trails from `s` (no edge twice), without `s`."""
     found: set[str] = set()
@@ -249,7 +212,6 @@ def _hop_var(adj: Adjacency, s: str) -> set[str]:
 _REFERENCES: dict[str, Callable[[Adjacency, str], set[str]]] = {
     "hop_1": _hop_1,
     "hop_2": _hop_2,
-    "hop_3": _hop_3,
     "hop_var": _hop_var,
 }
 

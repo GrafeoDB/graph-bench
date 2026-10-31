@@ -105,8 +105,6 @@ def test_unsupported_queries_raise_not_supported(tmp_path: Path) -> None:
             db.query(name, {})
     with pytest.raises(NotSupported, match="grouping by two properties"):
         db.query("scan_aggregate", {})
-    with pytest.raises(NotSupported, match=r"f\.id <> a\.id"):
-        db.query("hop_3", {})
     for algo in ("bfs", "wcc", "pr"):
         with pytest.raises(NotSupported):
             db.algorithm(algo, {})
