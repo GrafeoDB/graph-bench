@@ -56,10 +56,11 @@ the plans show avoidable work. They carry no `- id:` line, so the adapter test s
   is planned as `NodeScan (m:*)`, a label filter, then the `id` filter, so the property index on `id` is not
   used when the label is a disjunction or absent. Cause: Grafeo engine (query planner).
 - `scan_order_limit` and `scan_filter_avg` on `snb-small` (push run medians 3.35 ms and 2.15 ms for 7 and 10
-  bindings, against NeuG's 0.38 ms and 0.27 ms; within the 10x rule). `scan_order_limit` plans `Limit (20)` over a
-  full `Sort (created DESC, id ASC)` over `Return (m.id, m.content, m.creationDate)`, so every matching comment's
-  content is projected and the whole set sorted, where a top-20 sort would keep 20 rows. Cause: Grafeo engine
-  (query planner, no top-k for `ORDER BY ... LIMIT`).
+  bindings, against NeuG's 0.38 ms and 0.27 ms; within the 10x rule). Grafeo's `EXPLAIN` prints the logical plan
+  (`Limit (20)` over `Sort`), but the physical plan runs a top-k operator; per query, the text with `LIMIT 20` takes
+  about 0.4 ms against about 1.1 to 1.6 ms for the full sort (grafeo-31's measurement). The gap with NeuG is the
+  per-row cost of scanning, filtering and reading properties, the same as `scan_filter_avg`. Cause: Grafeo engine
+  (per-row scan and property read cost), covered by the A4 profile planned for grafeo 0.6.1.
 
 ## Grafeo: medium-scale RDF and IC13 (not allowlisted)
 
@@ -148,8 +149,9 @@ queries agree afterwards), but slower than the batch API. It is not a disagreeme
   binding convention both engines' Python APIs take (see `snb_sql.py`), and a name after `$` is a parameter name,
   not a keyword.
 - Reference answer: the openCypher `scan_filter` references (10 windows of about 200 comments each).
-- Cause: Grafeo engine (SQL/PGQ parser: the parameter name after `$` is lexed as a keyword). Not renamed in the
-  shared text, which would hide it.
+- Cause: Grafeo engine (SQL/PGQ parser: the parameter name after `$` is lexed as a keyword). Confirmed by the
+  grafeo side for every reserved word (`from`, `select`, `where`, `match`, `order`, `limit`, `as`); queued for
+  grafeo 0.6.1. Not renamed in the shared text, which would hide it.
 
 ## Grafeo: SPARQL IS6 property path is slow (not allowlisted)
 
