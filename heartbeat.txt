@@ -1,0 +1,866 @@
+=== 2026-10-31T15:35:01Z run 41214897079 attempt 1 job post
+load: 1.23 0.62 0.25
+               total        used        free      shared  buff/cache   available
+Mem:           32022         519       28594          53        2908       31133
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  131 01:22 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  110 01:40 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  105 01:28 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  73 01:58 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+  41 02:01 php-fpm: master process (/etc/php/8.1/fpm/php-fpm.conf)
+bench output:
+=== 2026-10-31T15:36:02Z run 41214897079 attempt 1 job post
+load: 1.08 0.69 0.30
+               total        used        free      shared  buff/cache   available
+Mem:           32022         743       28367          54        2911       30909
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  220 01:01 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  132 02:24 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  111 02:42 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  107 02:30 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  73 03:00 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "run", "id": "benches/test_complex_queries.py::test_snb_is7[grafeo-medium]"}
+bench output:
+=== 2026-10-31T15:37:04Z run 41214897079 attempt 1 job post
+load: 1.03 0.75 0.34
+               total        used        free      shared  buff/cache   available
+Mem:           32022         745       28365          54        2911       30906
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  220 02:02 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  132 03:25 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  111 03:43 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  108 03:31 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  73 04:01 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "progress", "id": "benches/test_complex_queries.py::test_snb_is7[grafeo-medium]"}
+bench output:
+=== 2026-10-31T15:38:05Z run 41214897079 attempt 1 job post
+load: 1.01 0.80 0.39
+               total        used        free      shared  buff/cache   available
+Mem:           32022         737       28373          54        2912       30915
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  220 03:03 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  132 04:26 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  110 04:32 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  109 04:44 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 05:02 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "progress", "id": "benches/test_complex_queries.py::test_snb_is7[grafeo-medium]"}
+bench output:
+=== 2026-10-31T15:39:07Z run 41214897079 attempt 1 job post
+load: 1.00 0.84 0.43
+               total        used        free      shared  buff/cache   available
+Mem:           32022         750       28316          54        2955       30902
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  220 04:05 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  132 05:28 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  110 05:46 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  108 05:34 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  72 06:04 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "run", "id": "benches/test_hops.py::test_snb_ic13[grafeo-medium]"}
+bench output:
+=== 2026-10-31T15:40:08Z run 41214897079 attempt 1 job post
+load: 1.00 0.87 0.47
+               total        used        free      shared  buff/cache   available
+Mem:           32022         751       28315          54        2955       30901
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  220 05:06 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  132 06:29 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  111 06:35 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  110 06:47 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 07:05 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "run", "id": "benches/test_hops.py::test_snb_ic13[grafeo-medium]"}
+bench output:
+=== 2026-10-31T15:41:10Z run 41214897079 attempt 1 job post
+load: 1.00 0.90 0.50
+               total        used        free      shared  buff/cache   available
+Mem:           32022         745       28321          54        2956       30906
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  220 06:08 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  132 07:31 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  110 07:49 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  108 07:37 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  72 08:07 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "run", "id": "benches/test_hops.py::test_snb_ic13[grafeo-medium]"}
+bench output:
+=== 2026-10-31T15:42:11Z run 41214897079 attempt 1 job post
+load: 1.00 0.92 0.54
+               total        used        free      shared  buff/cache   available
+Mem:           32022         744       28321          54        2956       30907
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  220 07:09 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  132 08:32 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  110 08:50 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  108 08:38 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  72 09:08 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "run", "id": "benches/test_hops.py::test_snb_ic13[grafeo-medium]"}
+bench output:
+=== 2026-10-31T15:43:13Z run 41214897079 attempt 1 job post
+load: 1.00 0.94 0.57
+               total        used        free      shared  buff/cache   available
+Mem:           32022         747       28319          54        2956       30904
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  220 08:11 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  132 09:34 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  112 09:40 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  110 09:52 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 10:10 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "run", "id": "benches/test_hops.py::test_snb_ic13[grafeo-medium]"}
+bench output:
+=== 2026-10-31T15:44:14Z run 41214897079 attempt 1 job post
+load: 1.00 0.95 0.60
+               total        used        free      shared  buff/cache   available
+Mem:           32022         743       28322          54        2956       30908
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  220 09:12 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  133 10:35 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  109 10:41 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  107 10:53 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 11:11 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "run", "id": "benches/test_hops.py::test_snb_ic13[grafeo-medium]"}
+bench output:
+=== 2026-10-31T15:45:15Z run 41214897079 attempt 1 job post
+load: 1.00 0.96 0.63
+               total        used        free      shared  buff/cache   available
+Mem:           32022         743       28322          54        2956       30908
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  220 10:14 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  133 11:37 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  109 11:43 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  107 11:55 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 12:13 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "run", "id": "benches/test_hops.py::test_snb_ic13[grafeo-medium]"}
+bench output:
+=== 2026-10-31T15:46:17Z run 41214897079 attempt 1 job post
+load: 1.00 0.97 0.66
+               total        used        free      shared  buff/cache   available
+Mem:           32022         745       28320          54        2956       30906
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  220 11:15 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  133 12:38 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  111 12:44 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  108 12:56 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 13:14 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "run", "id": "benches/test_hops.py::test_snb_ic13[grafeo-medium]"}
+bench output:
+=== 2026-10-31T15:47:18Z run 41214897079 attempt 1 job post
+load: 1.00 0.98 0.68
+               total        used        free      shared  buff/cache   available
+Mem:           32022         746       28318          55        2957       30905
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  220 12:16 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  133 13:39 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  112 13:45 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  108 13:57 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 14:15 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "run", "id": "benches/test_hops.py::test_snb_ic13[grafeo-medium]"}
+bench output:
+=== 2026-10-31T15:48:20Z run 41214897079 attempt 1 job post
+load: 1.00 0.99 0.70
+               total        used        free      shared  buff/cache   available
+Mem:           32022         615       28449          55        2957       31036
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  133 14:41 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  113 14:47 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  108 14:59 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  88 00:04 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  72 15:17 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "database", "name": "grafeo", "version": "0.6.0", "process": "in-process", "threads_configurable": true, "threads_note": "single-threaded executor", "storage": "in-memory", "java": null}
+bench output:
+=== 2026-10-31T15:49:21Z run 41214897079 attempt 1 job post
+load: 1.00 0.99 0.73
+               total        used        free      shared  buff/cache   available
+Mem:           32022         611       28453          55        2958       31040
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  134 15:42 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  113 15:48 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  108 16:00 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  88 01:05 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  72 16:18 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "run", "id": "benches/test_hops.py::test_snb_ic13[grafeo-small]"}
+bench output:
+=== 2026-10-31T15:50:23Z run 41214897079 attempt 1 job post
+load: 1.06 1.02 0.76
+               total        used        free      shared  buff/cache   available
+Mem:           32022         611       28453          55        2958       31040
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  134 16:44 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  113 16:50 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  108 17:02 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  88 02:07 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  72 17:20 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "run", "id": "benches/test_hops.py::test_snb_ic13[grafeo-small]"}
+bench output:
+=== 2026-10-31T15:51:24Z run 41214897079 attempt 1 job post
+load: 1.02 1.01 0.78
+               total        used        free      shared  buff/cache   available
+Mem:           32022         610       28453          55        2958       31041
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  134 17:45 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  113 17:51 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  108 18:03 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  88 03:08 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  72 18:21 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "run", "id": "benches/test_hops.py::test_snb_ic13[grafeo-small]"}
+bench output:
+=== 2026-10-31T15:52:26Z run 41214897079 attempt 1 job post
+load: 1.00 1.01 0.79
+               total        used        free      shared  buff/cache   available
+Mem:           32022         612       28452          55        2958       31039
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  134 18:47 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  113 18:53 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  108 19:05 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  88 04:10 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  72 19:23 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "run", "id": "benches/test_hops.py::test_snb_ic13[grafeo-small]"}
+bench output:
+=== 2026-10-31T15:53:27Z run 41214897079 attempt 1 job post
+load: 1.00 1.00 0.81
+               total        used        free      shared  buff/cache   available
+Mem:           32022         611       28452          55        2958       31039
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  134 19:48 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  113 19:54 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  108 20:06 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  88 05:11 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  72 20:24 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "run", "id": "benches/test_hops.py::test_snb_ic13[grafeo-small]"}
+bench output:
+=== 2026-10-31T15:54:28Z run 41214897079 attempt 1 job post
+load: 1.00 1.00 0.83
+               total        used        free      shared  buff/cache   available
+Mem:           32022         617       28446          55        2958       31034
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  135 20:50 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  113 20:56 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  108 21:08 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  92 06:13 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  72 21:26 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "run", "id": "benches/test_hops.py::test_snb_ic13[grafeo-small]"}
+bench output:
+=== 2026-10-31T15:55:30Z run 41214897079 attempt 1 job post
+load: 1.00 1.00 0.84
+               total        used        free      shared  buff/cache   available
+Mem:           32022         623       28440          55        2958       31028
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  135 21:51 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  113 21:57 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  108 22:09 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  97 07:14 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  72 22:27 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "run", "id": "benches/test_hops.py::test_snb_ic13[grafeo-small]"}
+bench output:
+=== 2026-10-31T15:56:31Z run 41214897079 attempt 1 job post
+load: 1.00 1.00 0.85
+               total        used        free      shared  buff/cache   available
+Mem:           32022         627       28436          55        2958       31024
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  135 22:53 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  113 22:59 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  108 23:11 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  101 08:16 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  72 23:29 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "run", "id": "benches/test_hops.py::test_snb_ic13[grafeo-small]"}
+bench output:
+=== 2026-10-31T15:57:33Z run 41214897079 attempt 1 job post
+load: 1.06 1.03 0.87
+               total        used        free      shared  buff/cache   available
+Mem:           32022         631       28432          55        2959       31020
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  135 23:54 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  113 24:00 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  108 24:12 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  104 09:17 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  72 24:30 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "run", "id": "benches/test_hops.py::test_snb_ic13[grafeo-small]"}
+bench output:
+=== 2026-10-31T15:58:34Z run 41214897079 attempt 1 job post
+load: 1.02 1.02 0.88
+               total        used        free      shared  buff/cache   available
+Mem:           32022         634       28428          55        2959       31016
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  135 24:55 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  113 25:01 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  110 25:13 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  109 10:18 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  72 25:31 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "run", "id": "benches/test_hops.py::test_snb_ic13[grafeo-small]"}
+bench output:
+=== 2026-10-31T15:59:36Z run 41214897079 attempt 1 job post
+load: 1.00 1.01 0.90
+               total        used        free      shared  buff/cache   available
+Mem:           32022        1046       28016          55        2959       30605
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  521 00:38 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  135 25:57 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  113 26:03 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  111 26:15 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 26:33 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "start", "id": "benches/test_load.py::test_load_snb_rdf[grafeo-medium]"}
+bench output:
+=== 2026-10-31T16:00:37Z run 41214897079 attempt 1 job post
+load: 1.00 1.01 0.91
+               total        used        free      shared  buff/cache   available
+Mem:           32022        1059       28003          55        2959       30592
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  531 01:39 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  135 26:58 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  113 27:04 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  111 27:16 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 27:34 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "progress", "id": "benches/test_load.py::test_load_snb_rdf[grafeo-medium]"}
+bench output:
+=== 2026-10-31T16:01:39Z run 41214897079 attempt 1 job post
+load: 1.00 1.00 0.91
+               total        used        free      shared  buff/cache   available
+Mem:           32022        1268       27794          55        2959       30382
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  737 02:41 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  135 28:00 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  113 28:06 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  111 28:18 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 28:36 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "progress", "id": "benches/test_load.py::test_load_snb_rdf[grafeo-medium]"}
+bench output:
+=== 2026-10-31T16:02:40Z run 41214897079 attempt 1 job post
+load: 1.00 1.00 0.92
+               total        used        free      shared  buff/cache   available
+Mem:           32022        1144       27917          55        2959       30506
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  615 03:42 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  135 29:01 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  115 29:07 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  111 29:19 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 29:37 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "progress", "id": "benches/test_load.py::test_load_snb_rdf[grafeo-medium]"}
+bench output:
+=== 2026-10-31T16:03:41Z run 41214897079 attempt 1 job post
+load: 1.00 1.00 0.93
+               total        used        free      shared  buff/cache   available
+Mem:           32022        1296       27765          56        2960       30354
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  772 04:43 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  135 30:02 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  116 30:08 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  107 30:20 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 30:38 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "progress", "id": "benches/test_load.py::test_load_snb_rdf[grafeo-medium]"}
+bench output:
+=== 2026-10-31T16:04:43Z run 41214897079 attempt 1 job post
+load: 1.00 1.00 0.93
+               total        used        free      shared  buff/cache   available
+Mem:           32022        1307       27754          56        2960       30343
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  783 05:45 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  135 31:04 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  116 31:10 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  107 31:22 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 31:40 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "progress", "id": "benches/test_rdf.py::test_snb_rdf_is1[grafeo-medium]"}
+bench output:
+=== 2026-10-31T16:05:44Z run 41214897079 attempt 1 job post
+load: 1.00 1.00 0.94
+               total        used        free      shared  buff/cache   available
+Mem:           32022        1311       27750          56        2960       30339
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  783 06:46 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  135 32:05 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  116 32:11 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  108 32:23 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 32:41 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "run", "id": "benches/test_rdf.py::test_snb_rdf_is6[grafeo-medium]"}
+bench output:
+=== 2026-10-31T16:06:46Z run 41214897079 attempt 1 job post
+load: 1.00 1.00 0.94
+               total        used        free      shared  buff/cache   available
+Mem:           32022        1312       27749          56        2960       30338
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  783 07:48 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  135 33:07 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  116 33:13 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  108 33:25 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 33:43 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "progress", "id": "benches/test_rdf.py::test_snb_rdf_is6[grafeo-medium]"}
+bench output:
+=== 2026-10-31T16:07:47Z run 41214897079 attempt 1 job post
+load: 1.00 1.00 0.95
+               total        used        free      shared  buff/cache   available
+Mem:           32022        1312       27749          56        2960       30338
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  783 08:50 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  135 34:09 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  116 34:15 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  108 34:27 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 34:45 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "progress", "id": "benches/test_rdf.py::test_snb_rdf_is6[grafeo-medium]"}
+bench output:
+=== 2026-10-31T16:08:49Z run 41214897079 attempt 1 job post
+load: 1.00 1.00 0.96
+               total        used        free      shared  buff/cache   available
+Mem:           32022        1310       27751          56        2961       30340
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  783 09:51 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  135 35:10 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  116 35:16 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  108 35:28 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 35:46 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "progress", "id": "benches/test_rdf.py::test_snb_rdf_is6[grafeo-medium]"}
+bench output:
+=== 2026-10-31T16:09:50Z run 41214897079 attempt 1 job post
+load: 1.00 1.00 0.96
+               total        used        free      shared  buff/cache   available
+Mem:           32022        1309       27751          56        2961       30340
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  783 10:52 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  135 36:11 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  116 36:17 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  108 36:29 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 36:47 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "progress", "id": "benches/test_rdf.py::test_snb_rdf_is6[grafeo-medium]"}
+bench output:
+=== 2026-10-31T16:10:52Z run 41214897079 attempt 1 job post
+load: 1.00 1.00 0.97
+               total        used        free      shared  buff/cache   available
+Mem:           32022        1310       27751          56        2961       30340
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  783 11:54 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  135 37:13 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  116 37:19 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  108 37:31 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 37:49 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "progress", "id": "benches/test_rdf.py::test_snb_rdf_is6[grafeo-medium]"}
+bench output:
+=== 2026-10-31T16:11:53Z run 41214897079 attempt 1 job post
+load: 1.00 1.00 0.97
+               total        used        free      shared  buff/cache   available
+Mem:           32022        1310       27751          56        2961       30340
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  783 12:55 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  135 38:14 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  116 38:20 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  108 38:32 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 38:50 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "progress", "id": "benches/test_rdf.py::test_snb_rdf_is6[grafeo-medium]"}
+bench output:
+=== 2026-10-31T16:12:55Z run 41214897079 attempt 1 job post
+load: 1.00 1.00 0.98
+               total        used        free      shared  buff/cache   available
+Mem:           32022        1139       27922          56        2961       30511
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  612 13:57 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  136 39:16 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  116 39:22 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  108 39:34 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 39:52 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "progress", "id": "benches/test_rdf.py::test_snb_rdf_is6[grafeo-small]"}
+bench output:
+=== 2026-10-31T16:13:56Z run 41214897079 attempt 1 job post
+load: 1.00 1.00 0.99
+               total        used        free      shared  buff/cache   available
+Mem:           32022         734       28324          56        2963       30916
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  213 00:35 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db ladybug --selection
+  136 40:17 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  116 40:23 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  108 40:35 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 40:53 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "entry", "id": "benches/test_rdf.py::test_snb_rdf_is6[grafeo-small]", "status": "ok", "error": null, "timing": {"median_ns": 3279523926.5, "p99_ns": 3282495649.75, "min_ns": 3273745626, "iterations": 10}, "preflight_ns": 3278632825
+ladybug-1: {"kind": "progress", "id": "benches/test_complex_queries.py::test_snb_is7[ladybug-medium]"}
+bench output:
+=== 2026-10-31T16:14:58Z run 41214897079 attempt 1 job post
+load: 1.00 1.00 0.99
+               total        used        free      shared  buff/cache   available
+Mem:           32022         646       28394          56        2981       31004
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  138 00:49 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db neug --selection
+  137 41:19 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  116 41:25 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  108 41:37 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 41:55 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "entry", "id": "benches/test_rdf.py::test_snb_rdf_is6[grafeo-small]", "status": "ok", "error": null, "timing": {"median_ns": 3279523926.5, "p99_ns": 3282495649.75, "min_ns": 3273745626, "iterations": 10}, "preflight_ns": 3278632825
+ladybug-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[ladybug-small]", "status": "ok", "error": null, "timing": null, "preflight_ns": 115526311, "answer": "disagree", "reference": "python", "answer_digest": "dabb6c7976c9f01c", "detai
+neug-1: {"kind": "start", "id": "benches/test_load.py::test_load_snb[neug-medium]"}
+bench output:
+=== 2026-10-31T16:15:59Z run 41214897079 attempt 1 job post
+load: 1.03 1.01 1.00
+               total        used        free      shared  buff/cache   available
+Mem:           32022         729       28288          56        3004       30921
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   42G  46% /
+largest processes (RSS MB, elapsed, command):
+  290 00:11 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db turingdb --selection
+  137 42:20 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  116 42:26 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  109 42:38 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 42:56 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "entry", "id": "benches/test_rdf.py::test_snb_rdf_is6[grafeo-small]", "status": "ok", "error": null, "timing": {"median_ns": 3279523926.5, "p99_ns": 3282495649.75, "min_ns": 3273745626, "iterations": 10}, "preflight_ns": 3278632825
+ladybug-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[ladybug-small]", "status": "ok", "error": null, "timing": null, "preflight_ns": 115526311, "answer": "disagree", "reference": "python", "answer_digest": "dabb6c7976c9f01c", "detai
+neug-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[neug-small]", "status": "ok", "error": null, "timing": {"median_ns": 6948399.0, "p99_ns": 7042222.03, "min_ns": 6878078, "iterations": 10}, "preflight_ns": 11789643, "answer": "ag
+turingdb-1: {"kind": "progress", "id": "benches/test_load.py::test_load_graphalytics[turingdb-medium]"}
+bench output:
+=== 2026-10-31T16:17:01Z run 41214897079 attempt 1 job post
+load: 1.01 1.01 1.00
+               total        used        free      shared  buff/cache   available
+Mem:           32022        4767       24248          56        3007       26883
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  4098 01:13 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db turingdb --selection
+  137 43:22 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  116 43:28 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  110 43:40 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 43:58 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "entry", "id": "benches/test_rdf.py::test_snb_rdf_is6[grafeo-small]", "status": "ok", "error": null, "timing": {"median_ns": 3279523926.5, "p99_ns": 3282495649.75, "min_ns": 3273745626, "iterations": 10}, "preflight_ns": 3278632825
+ladybug-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[ladybug-small]", "status": "ok", "error": null, "timing": null, "preflight_ns": 115526311, "answer": "disagree", "reference": "python", "answer_digest": "dabb6c7976c9f01c", "detai
+neug-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[neug-small]", "status": "ok", "error": null, "timing": {"median_ns": 6948399.0, "p99_ns": 7042222.03, "min_ns": 6878078, "iterations": 10}, "preflight_ns": 11789643, "answer": "ag
+turingdb-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[turingdb-small]", "status": "failed", "error": "TuringDBException: PARSE_ERROR: -------* Cypher parser\n     1 | MATCH (p1:Person {id: 'person_0'}), (p2:Person {id: 'person_549'})
+bench output:
+=== 2026-10-31T16:18:02Z run 41214897079 attempt 1 job post
+load: 1.00 1.00 1.00
+               total        used        free      shared  buff/cache   available
+Mem:           32022         774       28237          56        3010       30875
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  261 00:59 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db helixdb --selection
+  137 44:23 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  116 44:29 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  110 44:41 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 44:59 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "entry", "id": "benches/test_rdf.py::test_snb_rdf_is6[grafeo-small]", "status": "ok", "error": null, "timing": {"median_ns": 3279523926.5, "p99_ns": 3282495649.75, "min_ns": 3273745626, "iterations": 10}, "preflight_ns": 3278632825
+helixdb-1: {"kind": "start", "id": "benches/test_load.py::test_load_graphalytics[helixdb-medium]"}
+ladybug-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[ladybug-small]", "status": "ok", "error": null, "timing": null, "preflight_ns": 115526311, "answer": "disagree", "reference": "python", "answer_digest": "dabb6c7976c9f01c", "detai
+neug-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[neug-small]", "status": "ok", "error": null, "timing": {"median_ns": 6948399.0, "p99_ns": 7042222.03, "min_ns": 6878078, "iterations": 10}, "preflight_ns": 11789643, "answer": "ag
+turingdb-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[turingdb-small]", "status": "failed", "error": "TuringDBException: PARSE_ERROR: -------* Cypher parser\n     1 | MATCH (p1:Person {id: 'person_0'}), (p2:Person {id: 'person_549'})
+bench output:
+=== 2026-10-31T16:19:03Z run 41214897079 attempt 1 job post
+load: 0.97 0.99 1.00
+               total        used        free      shared  buff/cache   available
+Mem:           32022         827       28184          56        3010       30823
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  315 02:01 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db helixdb --selection
+  137 45:25 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  116 45:31 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  110 45:43 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 46:01 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "entry", "id": "benches/test_rdf.py::test_snb_rdf_is6[grafeo-small]", "status": "ok", "error": null, "timing": {"median_ns": 3279523926.5, "p99_ns": 3282495649.75, "min_ns": 3273745626, "iterations": 10}, "preflight_ns": 3278632825
+helixdb-1: {"kind": "start", "id": "benches/test_load.py::test_load_graphalytics[helixdb-medium]"}
+ladybug-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[ladybug-small]", "status": "ok", "error": null, "timing": null, "preflight_ns": 115526311, "answer": "disagree", "reference": "python", "answer_digest": "dabb6c7976c9f01c", "detai
+neug-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[neug-small]", "status": "ok", "error": null, "timing": {"median_ns": 6948399.0, "p99_ns": 7042222.03, "min_ns": 6878078, "iterations": 10}, "preflight_ns": 11789643, "answer": "ag
+turingdb-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[turingdb-small]", "status": "failed", "error": "TuringDBException: PARSE_ERROR: -------* Cypher parser\n     1 | MATCH (p1:Person {id: 'person_0'}), (p2:Person {id: 'person_549'})
+bench output:
+=== 2026-10-31T16:20:05Z run 41214897079 attempt 1 job post
+load: 1.02 1.00 1.00
+               total        used        free      shared  buff/cache   available
+Mem:           32022        1023       27988          56        3010       30627
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  513 03:02 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db helixdb --selection
+  137 46:26 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  116 46:32 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  110 46:44 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 47:02 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "entry", "id": "benches/test_rdf.py::test_snb_rdf_is6[grafeo-small]", "status": "ok", "error": null, "timing": {"median_ns": 3279523926.5, "p99_ns": 3282495649.75, "min_ns": 3273745626, "iterations": 10}, "preflight_ns": 3278632825
+helixdb-1: {"kind": "start", "id": "benches/test_load.py::test_load_graphalytics[helixdb-medium]"}
+ladybug-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[ladybug-small]", "status": "ok", "error": null, "timing": null, "preflight_ns": 115526311, "answer": "disagree", "reference": "python", "answer_digest": "dabb6c7976c9f01c", "detai
+neug-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[neug-small]", "status": "ok", "error": null, "timing": {"median_ns": 6948399.0, "p99_ns": 7042222.03, "min_ns": 6878078, "iterations": 10}, "preflight_ns": 11789643, "answer": "ag
+turingdb-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[turingdb-small]", "status": "failed", "error": "TuringDBException: PARSE_ERROR: -------* Cypher parser\n     1 | MATCH (p1:Person {id: 'person_0'}), (p2:Person {id: 'person_549'})
+bench output:
+=== 2026-10-31T16:21:06Z run 41214897079 attempt 1 job post
+load: 0.98 1.00 1.00
+               total        used        free      shared  buff/cache   available
+Mem:           32022        1105       27906          56        3010       30544
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  591 04:04 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db helixdb --selection
+  137 47:28 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  116 47:34 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  110 47:46 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 48:04 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "entry", "id": "benches/test_rdf.py::test_snb_rdf_is6[grafeo-small]", "status": "ok", "error": null, "timing": {"median_ns": 3279523926.5, "p99_ns": 3282495649.75, "min_ns": 3273745626, "iterations": 10}, "preflight_ns": 3278632825
+helixdb-1: {"kind": "start", "id": "benches/test_load.py::test_load_graphalytics[helixdb-medium]"}
+ladybug-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[ladybug-small]", "status": "ok", "error": null, "timing": null, "preflight_ns": 115526311, "answer": "disagree", "reference": "python", "answer_digest": "dabb6c7976c9f01c", "detai
+neug-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[neug-small]", "status": "ok", "error": null, "timing": {"median_ns": 6948399.0, "p99_ns": 7042222.03, "min_ns": 6878078, "iterations": 10}, "preflight_ns": 11789643, "answer": "ag
+turingdb-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[turingdb-small]", "status": "failed", "error": "TuringDBException: PARSE_ERROR: -------* Cypher parser\n     1 | MATCH (p1:Person {id: 'person_0'}), (p2:Person {id: 'person_549'})
+bench output:
+=== 2026-10-31T16:22:08Z run 41214897079 attempt 1 job post
+load: 1.00 1.00 1.00
+               total        used        free      shared  buff/cache   available
+Mem:           32022         976       28035          56        3010       30674
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  461 05:05 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db helixdb --selection
+  137 48:29 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  116 48:35 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  108 48:47 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 49:05 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "entry", "id": "benches/test_rdf.py::test_snb_rdf_is6[grafeo-small]", "status": "ok", "error": null, "timing": {"median_ns": 3279523926.5, "p99_ns": 3282495649.75, "min_ns": 3273745626, "iterations": 10}, "preflight_ns": 3278632825
+helixdb-1: {"kind": "progress", "id": "benches/test_load.py::test_load_graphalytics[helixdb-medium]"}
+ladybug-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[ladybug-small]", "status": "ok", "error": null, "timing": null, "preflight_ns": 115526311, "answer": "disagree", "reference": "python", "answer_digest": "dabb6c7976c9f01c", "detai
+neug-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[neug-small]", "status": "ok", "error": null, "timing": {"median_ns": 6948399.0, "p99_ns": 7042222.03, "min_ns": 6878078, "iterations": 10}, "preflight_ns": 11789643, "answer": "ag
+turingdb-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[turingdb-small]", "status": "failed", "error": "TuringDBException: PARSE_ERROR: -------* Cypher parser\n     1 | MATCH (p1:Person {id: 'person_0'}), (p2:Person {id: 'person_549'})
+bench output:
+=== 2026-10-31T16:23:09Z run 41214897079 attempt 1 job post
+load: 1.00 1.00 1.00
+               total        used        free      shared  buff/cache   available
+Mem:           32022        1021       27990          56        3010       30629
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  507 06:06 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db helixdb --selection
+  137 49:30 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  116 49:36 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  108 49:48 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 50:06 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "entry", "id": "benches/test_rdf.py::test_snb_rdf_is6[grafeo-small]", "status": "ok", "error": null, "timing": {"median_ns": 3279523926.5, "p99_ns": 3282495649.75, "min_ns": 3273745626, "iterations": 10}, "preflight_ns": 3278632825
+helixdb-1: {"kind": "progress", "id": "benches/test_load.py::test_load_graphalytics[helixdb-medium]"}
+ladybug-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[ladybug-small]", "status": "ok", "error": null, "timing": null, "preflight_ns": 115526311, "answer": "disagree", "reference": "python", "answer_digest": "dabb6c7976c9f01c", "detai
+neug-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[neug-small]", "status": "ok", "error": null, "timing": {"median_ns": 6948399.0, "p99_ns": 7042222.03, "min_ns": 6878078, "iterations": 10}, "preflight_ns": 11789643, "answer": "ag
+turingdb-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[turingdb-small]", "status": "failed", "error": "TuringDBException: PARSE_ERROR: -------* Cypher parser\n     1 | MATCH (p1:Person {id: 'person_0'}), (p2:Person {id: 'person_549'})
+bench output:
+=== 2026-10-31T16:24:11Z run 41214897079 attempt 1 job post
+load: 1.00 1.00 1.00
+               total        used        free      shared  buff/cache   available
+Mem:           32022        1053       27958          56        3011       30597
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  537 07:08 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db helixdb --selection
+  138 50:32 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  120 50:38 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  108 50:50 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 51:08 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "entry", "id": "benches/test_rdf.py::test_snb_rdf_is6[grafeo-small]", "status": "ok", "error": null, "timing": {"median_ns": 3279523926.5, "p99_ns": 3282495649.75, "min_ns": 3273745626, "iterations": 10}, "preflight_ns": 3278632825
+helixdb-1: {"kind": "progress", "id": "benches/test_load.py::test_load_graphalytics[helixdb-medium]"}
+ladybug-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[ladybug-small]", "status": "ok", "error": null, "timing": null, "preflight_ns": 115526311, "answer": "disagree", "reference": "python", "answer_digest": "dabb6c7976c9f01c", "detai
+neug-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[neug-small]", "status": "ok", "error": null, "timing": {"median_ns": 6948399.0, "p99_ns": 7042222.03, "min_ns": 6878078, "iterations": 10}, "preflight_ns": 11789643, "answer": "ag
+turingdb-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[turingdb-small]", "status": "failed", "error": "TuringDBException: PARSE_ERROR: -------* Cypher parser\n     1 | MATCH (p1:Person {id: 'person_0'}), (p2:Person {id: 'person_549'})
+bench output:
+=== 2026-10-31T16:25:12Z run 41214897079 attempt 1 job post
+load: 1.00 1.00 1.00
+               total        used        free      shared  buff/cache   available
+Mem:           32022        1206       27805          56        3011       30444
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  692 08:09 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db helixdb --selection
+  138 51:33 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  118 51:39 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  109 51:51 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 52:09 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "entry", "id": "benches/test_rdf.py::test_snb_rdf_is6[grafeo-small]", "status": "ok", "error": null, "timing": {"median_ns": 3279523926.5, "p99_ns": 3282495649.75, "min_ns": 3273745626, "iterations": 10}, "preflight_ns": 3278632825
+helixdb-1: {"kind": "progress", "id": "benches/test_load.py::test_load_graphalytics[helixdb-medium]"}
+ladybug-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[ladybug-small]", "status": "ok", "error": null, "timing": null, "preflight_ns": 115526311, "answer": "disagree", "reference": "python", "answer_digest": "dabb6c7976c9f01c", "detai
+neug-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[neug-small]", "status": "ok", "error": null, "timing": {"median_ns": 6948399.0, "p99_ns": 7042222.03, "min_ns": 6878078, "iterations": 10}, "preflight_ns": 11789643, "answer": "ag
+turingdb-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[turingdb-small]", "status": "failed", "error": "TuringDBException: PARSE_ERROR: -------* Cypher parser\n     1 | MATCH (p1:Person {id: 'person_0'}), (p2:Person {id: 'person_549'})
+bench output:
+=== 2026-10-31T16:26:14Z run 41214897079 attempt 1 job post
+load: 1.00 1.00 1.00
+               total        used        free      shared  buff/cache   available
+Mem:           32022        1237       27773          56        3011       30412
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  724 09:11 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db helixdb --selection
+  138 52:35 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  118 52:41 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  109 52:53 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 53:11 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "entry", "id": "benches/test_rdf.py::test_snb_rdf_is6[grafeo-small]", "status": "ok", "error": null, "timing": {"median_ns": 3279523926.5, "p99_ns": 3282495649.75, "min_ns": 3273745626, "iterations": 10}, "preflight_ns": 3278632825
+helixdb-1: {"kind": "progress", "id": "benches/test_load.py::test_load_graphalytics[helixdb-medium]"}
+ladybug-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[ladybug-small]", "status": "ok", "error": null, "timing": null, "preflight_ns": 115526311, "answer": "disagree", "reference": "python", "answer_digest": "dabb6c7976c9f01c", "detai
+neug-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[neug-small]", "status": "ok", "error": null, "timing": {"median_ns": 6948399.0, "p99_ns": 7042222.03, "min_ns": 6878078, "iterations": 10}, "preflight_ns": 11789643, "answer": "ag
+turingdb-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[turingdb-small]", "status": "failed", "error": "TuringDBException: PARSE_ERROR: -------* Cypher parser\n     1 | MATCH (p1:Person {id: 'person_0'}), (p2:Person {id: 'person_549'})
+bench output:
+=== 2026-10-31T16:27:15Z run 41214897079 attempt 1 job post
+load: 0.90 0.97 0.99
+               total        used        free      shared  buff/cache   available
+Mem:           32022        1192       27818          56        3011       30457
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  676 10:12 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db helixdb --selection
+  138 53:36 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  118 53:42 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  109 53:54 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 54:12 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "entry", "id": "benches/test_rdf.py::test_snb_rdf_is6[grafeo-small]", "status": "ok", "error": null, "timing": {"median_ns": 3279523926.5, "p99_ns": 3282495649.75, "min_ns": 3273745626, "iterations": 10}, "preflight_ns": 3278632825
+helixdb-1: {"kind": "progress", "id": "benches/test_load.py::test_load_graphalytics[helixdb-medium]"}
+ladybug-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[ladybug-small]", "status": "ok", "error": null, "timing": null, "preflight_ns": 115526311, "answer": "disagree", "reference": "python", "answer_digest": "dabb6c7976c9f01c", "detai
+neug-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[neug-small]", "status": "ok", "error": null, "timing": {"median_ns": 6948399.0, "p99_ns": 7042222.03, "min_ns": 6878078, "iterations": 10}, "preflight_ns": 11789643, "answer": "ag
+turingdb-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[turingdb-small]", "status": "failed", "error": "TuringDBException: PARSE_ERROR: -------* Cypher parser\n     1 | MATCH (p1:Person {id: 'person_0'}), (p2:Person {id: 'person_549'})
+bench output:
+=== 2026-10-31T16:28:17Z run 41214897079 attempt 1 job post
+load: 0.96 0.98 1.00
+               total        used        free      shared  buff/cache   available
+Mem:           32022        1196       27814          56        3011       30454
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  678 11:14 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db helixdb --selection
+  138 54:38 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  118 54:44 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  109 54:56 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 55:14 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "entry", "id": "benches/test_rdf.py::test_snb_rdf_is6[grafeo-small]", "status": "ok", "error": null, "timing": {"median_ns": 3279523926.5, "p99_ns": 3282495649.75, "min_ns": 3273745626, "iterations": 10}, "preflight_ns": 3278632825
+helixdb-1: {"kind": "progress", "id": "benches/test_load.py::test_load_graphalytics[helixdb-medium]"}
+ladybug-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[ladybug-small]", "status": "ok", "error": null, "timing": null, "preflight_ns": 115526311, "answer": "disagree", "reference": "python", "answer_digest": "dabb6c7976c9f01c", "detai
+neug-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[neug-small]", "status": "ok", "error": null, "timing": {"median_ns": 6948399.0, "p99_ns": 7042222.03, "min_ns": 6878078, "iterations": 10}, "preflight_ns": 11789643, "answer": "ag
+turingdb-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[turingdb-small]", "status": "failed", "error": "TuringDBException: PARSE_ERROR: -------* Cypher parser\n     1 | MATCH (p1:Person {id: 'person_0'}), (p2:Person {id: 'person_549'})
+bench output:
+=== 2026-10-31T16:29:18Z run 41214897079 attempt 1 job post
+load: 1.07 1.00 1.01
+               total        used        free      shared  buff/cache   available
+Mem:           32022        1217       27793          56        3011       30433
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  702 12:15 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db helixdb --selection
+  138 55:39 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  118 55:45 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  109 55:57 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 56:15 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "entry", "id": "benches/test_rdf.py::test_snb_rdf_is6[grafeo-small]", "status": "ok", "error": null, "timing": {"median_ns": 3279523926.5, "p99_ns": 3282495649.75, "min_ns": 3273745626, "iterations": 10}, "preflight_ns": 3278632825
+helixdb-1: {"kind": "progress", "id": "benches/test_load.py::test_load_graphalytics[helixdb-medium]"}
+ladybug-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[ladybug-small]", "status": "ok", "error": null, "timing": null, "preflight_ns": 115526311, "answer": "disagree", "reference": "python", "answer_digest": "dabb6c7976c9f01c", "detai
+neug-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[neug-small]", "status": "ok", "error": null, "timing": {"median_ns": 6948399.0, "p99_ns": 7042222.03, "min_ns": 6878078, "iterations": 10}, "preflight_ns": 11789643, "answer": "ag
+turingdb-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[turingdb-small]", "status": "failed", "error": "TuringDBException: PARSE_ERROR: -------* Cypher parser\n     1 | MATCH (p1:Person {id: 'person_0'}), (p2:Person {id: 'person_549'})
+bench output:
+=== 2026-10-31T16:30:20Z run 41214897079 attempt 1 job post
+load: 1.09 1.03 1.01
+               total        used        free      shared  buff/cache   available
+Mem:           32022        1284       27726          56        3011       30365
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  769 13:17 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db helixdb --selection
+  138 56:41 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  118 56:47 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  109 56:59 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 57:17 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "entry", "id": "benches/test_rdf.py::test_snb_rdf_is6[grafeo-small]", "status": "ok", "error": null, "timing": {"median_ns": 3279523926.5, "p99_ns": 3282495649.75, "min_ns": 3273745626, "iterations": 10}, "preflight_ns": 3278632825
+helixdb-1: {"kind": "progress", "id": "benches/test_load.py::test_load_graphalytics[helixdb-medium]"}
+ladybug-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[ladybug-small]", "status": "ok", "error": null, "timing": null, "preflight_ns": 115526311, "answer": "disagree", "reference": "python", "answer_digest": "dabb6c7976c9f01c", "detai
+neug-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[neug-small]", "status": "ok", "error": null, "timing": {"median_ns": 6948399.0, "p99_ns": 7042222.03, "min_ns": 6878078, "iterations": 10}, "preflight_ns": 11789643, "answer": "ag
+turingdb-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[turingdb-small]", "status": "failed", "error": "TuringDBException: PARSE_ERROR: -------* Cypher parser\n     1 | MATCH (p1:Person {id: 'person_0'}), (p2:Person {id: 'person_549'})
+bench output:
+=== 2026-10-31T16:31:21Z run 41214897079 attempt 1 job post
+load: 1.07 1.03 1.01
+               total        used        free      shared  buff/cache   available
+Mem:           32022        1324       27686          56        3011       30325
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  809 14:18 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db helixdb --selection
+  138 57:42 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  118 57:48 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  109 58:00 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 58:18 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "entry", "id": "benches/test_rdf.py::test_snb_rdf_is6[grafeo-small]", "status": "ok", "error": null, "timing": {"median_ns": 3279523926.5, "p99_ns": 3282495649.75, "min_ns": 3273745626, "iterations": 10}, "preflight_ns": 3278632825
+helixdb-1: {"kind": "progress", "id": "benches/test_load.py::test_load_graphalytics[helixdb-medium]"}
+ladybug-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[ladybug-small]", "status": "ok", "error": null, "timing": null, "preflight_ns": 115526311, "answer": "disagree", "reference": "python", "answer_digest": "dabb6c7976c9f01c", "detai
+neug-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[neug-small]", "status": "ok", "error": null, "timing": {"median_ns": 6948399.0, "p99_ns": 7042222.03, "min_ns": 6878078, "iterations": 10}, "preflight_ns": 11789643, "answer": "ag
+turingdb-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[turingdb-small]", "status": "failed", "error": "TuringDBException: PARSE_ERROR: -------* Cypher parser\n     1 | MATCH (p1:Person {id: 'person_0'}), (p2:Person {id: 'person_549'})
+bench output:
+=== 2026-10-31T16:32:23Z run 41214897079 attempt 1 job post
+load: 0.96 1.01 1.00
+               total        used        free      shared  buff/cache   available
+Mem:           32022        1280       27730          56        3011       30369
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   43G  46% /
+largest processes (RSS MB, elapsed, command):
+  762 15:20 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db helixdb --selection
+  138 58:44 /actions-runner/bin/Runner.Worker spawnclient 150 153
+  118 58:50 /actions-runner/bin/Runner.Listener run --jitconfig eyIucnVubmVyIjoiZXlKQloyVnVkRWxrSWpvaU1UQTNPVEVpTENKQloyVnVkRTVoYldVaU9pSkRiMlJU
+  109 59:02 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 59:20 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "entry", "id": "benches/test_rdf.py::test_snb_rdf_is6[grafeo-small]", "status": "ok", "error": null, "timing": {"median_ns": 3279523926.5, "p99_ns": 3282495649.75, "min_ns": 3273745626, "iterations": 10}, "preflight_ns": 3278632825
+helixdb-1: {"kind": "start", "id": "benches/test_load.py::test_load_graphalytics[helixdb-small]"}
+ladybug-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[ladybug-small]", "status": "ok", "error": null, "timing": null, "preflight_ns": 115526311, "answer": "disagree", "reference": "python", "answer_digest": "dabb6c7976c9f01c", "detai
+neug-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[neug-small]", "status": "ok", "error": null, "timing": {"median_ns": 6948399.0, "p99_ns": 7042222.03, "min_ns": 6878078, "iterations": 10}, "preflight_ns": 11789643, "answer": "ag
+turingdb-1: {"kind": "entry", "id": "benches/test_hops.py::test_snb_ic13[turingdb-small]", "status": "failed", "error": "TuringDBException: PARSE_ERROR: -------* Cypher parser\n     1 | MATCH (p1:Person {id: 'person_0'}), (p2:Person {id: 'person_549'})
+bench output:
