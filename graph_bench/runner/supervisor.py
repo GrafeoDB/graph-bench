@@ -54,7 +54,7 @@ import statistics
 import subprocess
 import sys
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -676,6 +676,8 @@ class _Run:
                     proc.kill()
                     proc.wait()
                 echo.pump()
+                if self.runner.mode == "codspeed":
+                    drop_empty_codspeed_result(env, proc.pid)
 
     def _follow(
         self,
@@ -769,6 +771,27 @@ def run_bench(
     return _run_all(selection, dbs, out_dir, workdir, case_timeout_s, WORKER)
 
 
+def drop_empty_codspeed_result(env: Mapping[str, str], pid: int) -> bool:
+    """Remove `<CODSPEED_PROFILE_FOLDER>/results/<pid>.json` when it lists no benchmarks; whether it did.
+
+    pytest-codspeed names the file after the pytest process (plugin.py, `pytest_sessionfinish`), and the CodSpeed
+    runner fails the job on a results file with no benchmarks ("No benchmarks found in walltime results file").
+    A file with benchmarks, an unreadable file and every other file in the folder are left alone.
+    """
+    folder = env.get("CODSPEED_PROFILE_FOLDER")
+    if not folder:
+        return False
+    path = Path(folder) / "results" / f"{pid}.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(data, dict) or data.get("benchmarks"):
+        return False
+    path.unlink()
+    return True
+
+
 def run_codspeed(
     selection: str,
     dbs: Sequence[str],
@@ -781,7 +804,9 @@ def run_codspeed(
 
     CodSpeed measures the benchmarks; results.json gets mode "codspeed": answers and `preflight_ns`, no
     timings. The environment, CODSPEED_PROFILE_FOLDER included, passes to pytest unchanged. Pytest's exit code
-    does not matter: a failed or skipped benchmark is already an entry.
+    does not matter: a failed or skipped benchmark is already an entry. A pytest process that measured nothing
+    (a relaunch left with only skipped cases) leaves a results file without benchmarks, which the CodSpeed
+    runner rejects for the whole job; `drop_empty_codspeed_result` removes that one file, and only it.
     """
     return _run_all(selection, dbs, out_dir, workdir, case_timeout_s, PYTEST)
 
