@@ -78,8 +78,10 @@ class HelixDatabase(Database):
             receipt = self.client.query(
                 write_batch().var_as("i", g().create_index_if_not_exists(spec)).returning(["i"]).to_query_request()
             )["i"]
-            if receipt.get("kind") == "accepted":
-                self._wait_index(receipt["operation_id"])
+            # A fresh database must accept the build; anything else would leave the load unindexed, so it fails.
+            if receipt.get("kind") != "accepted":
+                raise RuntimeError(f"index on {table.label}.id was not accepted: {receipt}")
+            self._wait_index(receipt["operation_id"])
         # Nodes: one `add_n` entry per row; the returned internal ids (`$id`) map (label, csv id) to the node.
         ids: dict[str, dict[Any, Any]] = {}
         for table in dataset.nodes:
