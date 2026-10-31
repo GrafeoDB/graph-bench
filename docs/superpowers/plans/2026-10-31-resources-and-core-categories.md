@@ -111,7 +111,7 @@
 
 **Decisions:** Store paths: ArcadeDB `workdir/db`; Neo4j `workdir/data` (databases and transaction logs; excludes `conf/`, `import/`, `import.report`); TuringDB the graph's own directory in the engine's `data_dir`, excluding the Parquet staging under `data/<graph>` (the implementer confirms the layout and cites it). In-memory databases report `[]` (Grafeo, LadybugDB, NeuG, FalkorDB with `save ""`, HelixDB, DuckDB, Oxigraph).
 
-**Tests:** per adapter `test_<db>_resources_ok` (one ok/agree record per push load with `peak_bytes >= max(baseline_bytes, after_bytes)`; on-disk databases `disk_bytes > 0`, in-memory `disk_bytes is None`); `test_falkordb_redis_server_in_tree` (Linux, Docker: the after-load tree holds a process named `redis-server`, `processes >= 2`); `test_neo4j_peak_includes_importer` (`processes` at peak at least 2).
+**Tests:** per adapter `test_<db>_resources_ok` (one ok/agree record per push load with `peak_bytes >= max(baseline_bytes, after_bytes)`; on-disk databases `disk_bytes > 0`, in-memory `disk_bytes is None`); `test_falkordb_redis_server_in_tree` (Linux, Docker: the after-load tree holds a process named `redis-server`, `processes >= 2`); `test_neo4j_peak_includes_importer` (`processes`, the largest process count seen during the load, at least 2).
 
 ### Task 5: Scans
 
