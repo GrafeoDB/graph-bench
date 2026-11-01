@@ -17,6 +17,7 @@ from helixdb import (
     write_batch,
 )
 
+from graph_bench.databases import PACKAGES
 from graph_bench.databases.base import Database, DatabaseInfo, NotSupported
 from graph_bench.databases.helix_queries import BUILDERS
 from graph_bench.datasets.schema import Dataset
@@ -50,7 +51,7 @@ class HelixDatabase(Database):
         # The embedded runtime is a Rust async runtime with its own worker threads; the docs
         # (https://docs.helix-db.com/database/helix-db/start-here/local-development/embedded-database) show no setting.
         note = "HelixDB exposes no thread setting"
-        return DatabaseInfo(self.name, version("helix-db"), "in-process", False, note, "in-memory")
+        return DatabaseInfo(self.name, version(PACKAGES[self.name]), "in-process", False, note, "in-memory")
 
     def _wait_index(self, operation_id: str) -> None:
         """Poll the index build until it succeeds; the docs say to poll the DDL receipt's operation until active
