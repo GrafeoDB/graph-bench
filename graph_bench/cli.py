@@ -303,7 +303,7 @@ def merge(
     """Merge the results.json files of runs over different databases into DIR/results.json and print its path.
 
     The inputs must agree on selection, mode, graph-bench commit and Grafeo source, and hold different databases.
-    The final 10x budget rule is applied once, over the merged entries, within each source.
+    The final 10x budget rule is applied once, over the merged CI entries; the local ones keep their own verdicts.
     """
     try:
         docs = [(path, Results.read(path)) for path in inputs]

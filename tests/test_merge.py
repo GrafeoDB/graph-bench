@@ -326,6 +326,24 @@ def test_merge_local_never_takes_a_roster_database_without_db(tmp_path: Path) ->
     assert merge.from_snapshot("falkordb")
 
 
+def test_merge_keeps_the_local_verdicts(tmp_path: Path) -> None:
+    """The final budget rule runs over the CI entries only. The snapshot's own run budgeted its entries over all
+    ten databases; once its roster databases are dropped, fewer than three local peers remain, and a slow roster
+    peer no longer lifts the mean. The merge keeps the snapshot's verdict, never a new ⏱."""
+    snapshot = _local(_entry("neug", 50), _entry("falkordb", 1), _entry("helixdb", 2), _entry("neo4j", 20))
+    apply_budget_rule(snapshot)  # the snapshot's own run: neo4j's budget is 10x mean(1, 2, 50)
+    assert {e.status for e in snapshot.entries} == {"ok"}
+    local = _write(tmp_path, "local", snapshot)
+    ci = _write(tmp_path, "ci", _doc(_entry("grafeo", 1)))
+    merged, _ = merge.merge([(ci, Results.read(ci))], local=(local, Results.read(local)))
+    assert {e.database: (e.status, e.error) for e in merged.entries} == {
+        "grafeo": ("ok", None),
+        "falkordb": ("ok", None),
+        "helixdb": ("ok", None),
+        "neo4j": ("ok", None),  # 13x mean(1, 2) over the local peers alone
+    }
+
+
 def test_budget_rule_never_compares_sources() -> None:
     """The 10x rule runs within each source: a very fast local timing sets no budget for a CI entry, and a CI
     timing none for a local one; within a source the rule still applies."""

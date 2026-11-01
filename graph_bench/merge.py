@@ -4,7 +4,7 @@ CI runs each database of `catalog.CI_DATABASES` in its own job, one after anothe
 each job writes a results.json for its database. The merge checks that the inputs belong together (selection, mode,
 graph-bench commit and Grafeo source agree; no database appears twice), puts the database infos in the catalog's
 order and the entries and Memory and Disk records in id order, as one run writes them, and applies the final 10x
-budget rule once over the merged entries. A database expected but without an input (its job died) is recorded
+budget rule once over the merged CI entries. A database expected but without an input (its job died) is recorded
 as a database that does not start: every id it would run ✗ with `NO_RESULTS`.
 
 `--local` adds the local snapshot (`results/local/results.json`, all ten databases on the dev box,
@@ -13,7 +13,8 @@ entry, Memory and Disk record and database info tagged `local`, and `sources` re
 come from another machine, day, graph-bench commit and Grafeo, but must share the selection and mode. Its other
 databases are dropped, and so is every roster database (`catalog.CI_DATABASES`, `from_snapshot`), with or
 without `--db`: CI measures them, and a local timing never stands in for a missing CI one. Budgets and
-ranks never compare the two sources (`supervisor.apply_budget_rule`, `report.ranking`).
+ranks never compare the two sources (`supervisor.apply_budget_rule`, `report.ranking`), and the snapshot's entries
+keep the budget verdicts of their own full run.
 """
 
 from collections.abc import Iterable, Sequence
@@ -134,9 +135,11 @@ def merge(
     # Applied once, here. Each input came from a run of one database, whose own final rule had no other database
     # to compare with and so marked nothing; its in-run cutoffs (from `--yardstick`) are `timeout` entries that
     # this rule skips. So nothing is counted twice, and the markers are those of one run over all the databases.
-    # The rule compares within each source only. The snapshot's entries already went through its own run's rule
-    # over all ten databases; a subset of them can only set larger budgets, so this marks none of them again.
-    supervisor.apply_budget_rule(merged)
+    # It runs over the CI entries only. The snapshot's entries keep the verdicts of their own run's rule over all
+    # ten databases: with its roster databases dropped, fewer than three peers can remain, so a slow peer no longer
+    # lifts the mean and the rule here could mark an entry its own run kept. The view shares the entry objects, so
+    # the marks land in `merged`.
+    supervisor.apply_budget_rule(replace(merged, entries=[e for e in merged.entries if e.source == "ci"]))
     return merged, missing
 
 
