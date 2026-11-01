@@ -88,6 +88,7 @@ from graph_bench.runner import (
     SILENCE_MARGIN_S,
     STARTUP_CHILD_TIMEOUT_S,
     TIME_BOX_S,
+    deadline_over,
     load_over,
     message,
     over_ceiling,
@@ -457,6 +458,7 @@ class LaunchRequest:
     case_ceiling_s: float = CASE_CEILING_S
     load_ceiling_s: float = LOAD_CEILING_S
     startup_timeout_s: float = STARTUP_CHILD_TIMEOUT_S
+    deadline_at: float | None = None  # wall clock (`time.time()`) after which a pytest session starts nothing new
 
 
 def worker_argv(r: LaunchRequest) -> list[str]:
@@ -489,6 +491,8 @@ def pytest_argv(r: LaunchRequest) -> list[str]:
     argv += ["--codspeed-max-rounds", str(catalog.selection(r.selection).iterations)]
     argv += ["--gb-case-ceiling", repr(r.case_ceiling_s), "--gb-load-ceiling", repr(r.load_ceiling_s)]
     argv += ["--gb-startup-timeout", repr(r.startup_timeout_s)]
+    if r.deadline_at is not None:
+        argv += ["--gb-deadline-at", repr(r.deadline_at)]
     for bench_id in r.skip:
         argv += ["--deselect", bench_id]
     for bench_id, seconds in r.budgets.items():
@@ -561,6 +565,7 @@ class _Attempt:
     phase: tuple[Kind, tuple[str, Store, str] | None, float] | None = None
     load_key: tuple[Kind, tuple[str, Store, str]] | None = None  # the load killed at its ceiling
     in_startup: bool = False  # between the Startup row's `start` and `entry` lines
+    deadline: bool = False  # set when stopped at the run deadline, between cases
 
 
 @dataclass
@@ -573,6 +578,26 @@ class _Run:
     runner: Runner = WORKER
     recorded: dict[str, Entry] = field(default_factory=dict)
     retired: set[str] = field(default_factory=set)
+    deadline_s: float | None = None  # `--deadline-s`; None: no deadline
+    deadline_at: float | None = None  # `time.monotonic()` of the deadline
+
+    def expired(self) -> bool:
+        """Whether the run deadline has passed: nothing new starts from then on."""
+        return self.deadline_at is not None and time.monotonic() >= self.deadline_at
+
+    def _deadline_error(self) -> str:
+        assert self.deadline_s is not None
+        return deadline_over(self.deadline_s)
+
+    def _mark_deadline(self, meta: dict[str, _Meta]) -> None:
+        """Every unrecorded id of `meta` that would run is timeout "run deadline: ..." (an unsupported one stays so)."""
+        for bench_id, m in meta.items():
+            if bench_id in self.recorded:
+                continue
+            if m.supported:
+                self.record(m.entry(bench_id, status="timeout", error=self._deadline_error()))
+            else:
+                self.record(m.entry(bench_id, status="not_supported", error=f"model {m.model} not supported"))
 
     def record(self, entry: Entry) -> None:
         if entry.id not in self.recorded:
@@ -580,6 +605,11 @@ class _Run:
             self.results.entries.append(entry)
 
     def database(self, db: str) -> None:
+        if self.expired():  # not even probed
+            for threads in self.sel.threads:
+                self._mark_deadline(_expected(self.sel, db, threads))
+                self._resources(db, threads, None)
+            return
         probe = _probe(db, max(self.case_timeout_s, STARTUP_TIMEOUT_S))
         for threads in self.sel.threads:
             meta = _expected(self.sel, db, threads)
@@ -618,6 +648,8 @@ class _Run:
                 if (dataset, store) not in reached:
                     error = f"model {model} not supported"
                     record = unmeasured(db, dataset, store, scale, threads, "not_supported", error)
+                elif self.expired():
+                    record = unmeasured(db, dataset, store, scale, threads, "timeout", self._deadline_error())
                 elif missing is not None:
                     record = unmeasured(db, dataset, store, scale, threads, "failed", missing)
                 elif over is not None and over.status == "timeout" and over.error == load_over(LOAD_CEILING_S):
@@ -654,6 +686,9 @@ class _Run:
         try:
             launch = any(i not in self.recorded for i in meta)
             while launch:
+                if self.expired():
+                    self._mark_deadline(meta)
+                    break
                 skip = self._skip(meta)
                 request = LaunchRequest(
                     db=db,
@@ -667,12 +702,18 @@ class _Run:
                     case_ceiling_s=CASE_CEILING_S,
                     load_ceiling_s=LOAD_CEILING_S,
                     startup_timeout_s=STARTUP_CHILD_TIMEOUT_S,
+                    deadline_at=self._deadline_epoch(),
                 )
                 argv = self.runner.argv(request)
                 attempt = self._attempt(argv, env, out, raw / f"{name}.log", db, meta, request.budgets)
                 launch = self._settle(attempt, meta) and self._again(attempt, meta)
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
+
+    def _deadline_epoch(self) -> float | None:
+        if self.deadline_at is None:
+            return None
+        return time.time() + (self.deadline_at - time.monotonic())
 
     def _again(self, attempt: _Attempt, meta: dict[str, _Meta]) -> bool:
         """Whether to relaunch after a hung or crashed attempt that `_settle` let continue.
@@ -705,6 +746,9 @@ class _Run:
 
     def _settle(self, attempt: _Attempt, meta: dict[str, _Meta]) -> bool:
         """Record what a finished attempt left open; whether to start another worker."""
+        if attempt.deadline:
+            self._mark_deadline(meta)
+            return False
         if attempt.over == "load" and attempt.load_key is not None:
             return self._settle_load(attempt, meta)
         if attempt.over == "case":
@@ -723,6 +767,10 @@ class _Run:
         else:
             status, error = "failed", f"{self.runner.name} exited without a result"
         pending = attempt.pending
+        if pending is None and not attempt.hung and not attempt.code and self.expired():
+            # A session that ended cleanly past the deadline skipped the rest of its cases (benches/conftest.py).
+            self._mark_deadline(meta)
+            return False
         if pending is None or (not attempt.hung and not attempt.code):
             for bench_id, m in meta.items():
                 if bench_id not in self.recorded:
@@ -846,6 +894,11 @@ class _Run:
             if code is not None:
                 attempt.code = code
                 return attempt
+            if self._between_cases(attempt) and self.runner.mode == "bench" and self.expired():
+                # Nothing is running and nothing new may start; `_attempt` kills the worker. (A pytest session is
+                # not killed: it would lose its CodSpeed measurements, so it skips the rest itself.)
+                attempt.deadline = True
+                return attempt
             limit = self.case_timeout_s if started else max(self.case_timeout_s, STARTUP_TIMEOUT_S)
             if attempt.phase is not None and attempt.phase[0] != "case":
                 # A load writes nothing while it runs: the load ceiling, not the silence limit, bounds it.
@@ -870,6 +923,11 @@ class _Run:
                 attempt.hung, attempt.silence_s = True, limit
                 return attempt
             time.sleep(_POLL_S)
+
+    @staticmethod
+    def _between_cases(attempt: _Attempt) -> bool:
+        """Whether the worker runs no case, load or startup row: it has just ended one or not yet begun the next."""
+        return attempt.pending is None and attempt.phase is None and not attempt.in_startup
 
     def _line(self, raw: bytes, attempt: _Attempt, db: str, meta: dict[str, _Meta]) -> str | None:
         """Handle one worker line; its kind, or None for an unreadable line.
@@ -915,13 +973,18 @@ def run_bench(
     *,
     workdir: Path,
     case_timeout_s: float = DEFAULT_CASE_TIMEOUT_S,
+    deadline_s: float | None = None,
 ) -> Results:
     """Run every database of `dbs` in order, one worker per thread setting, and write `out_dir/results.json`.
 
     Later databases get a preflight budget per case from the earlier ones; at the end `apply_budget_rule`
     marks entries far slower than the top 3. Worker lines, logs and answers go to `out_dir/raw/<db>-<threads>/`.
+
+    With `deadline_s`, counted from this call, nothing new starts once it has passed: a case, load or startup row
+    already running finishes within its own limits, every id not yet run is timeout "run deadline: ...", and
+    results.json is written as usual.
     """
-    return _run_all(selection, dbs, out_dir, workdir, case_timeout_s, WORKER)
+    return _run_all(selection, dbs, out_dir, workdir, case_timeout_s, WORKER, deadline_s)
 
 
 def drop_empty_codspeed_result(env: Mapping[str, str], pid: int) -> bool:
@@ -952,6 +1015,7 @@ def run_codspeed(
     *,
     workdir: Path,
     case_timeout_s: float = DEFAULT_CASE_TIMEOUT_S,
+    deadline_s: float | None = None,
 ) -> Results:
     """As `run_bench`, with one `pytest benches --codspeed` process per database and thread setting.
 
@@ -961,12 +1025,19 @@ def run_codspeed(
     (a relaunch left with only skipped cases) leaves a results file without benchmarks, which the CodSpeed
     runner rejects for the whole job; `drop_empty_codspeed_result` removes that one file, and only it.
     """
-    return _run_all(selection, dbs, out_dir, workdir, case_timeout_s, PYTEST)
+    return _run_all(selection, dbs, out_dir, workdir, case_timeout_s, PYTEST, deadline_s)
 
 
 def _run_all(
-    selection: str, dbs: Sequence[str], out_dir: Path, workdir: Path, case_timeout_s: float, runner: Runner
+    selection: str,
+    dbs: Sequence[str],
+    out_dir: Path,
+    workdir: Path,
+    case_timeout_s: float,
+    runner: Runner,
+    deadline_s: float | None,
 ) -> Results:
+    begun = time.monotonic()
     sel = catalog.selection(selection)
     catalog.cases(selection, dbs)  # unknown names fail here, before anything runs
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -982,6 +1053,8 @@ def _run_all(
         databases={},
     )
     run = _Run(sel, out_dir, workdir, case_timeout_s, results, runner)
+    if deadline_s is not None:
+        run.deadline_s, run.deadline_at = deadline_s, begun + deadline_s
     for db in dbs:
         run.database(db)
     results.entries.sort(key=lambda e: e.id)

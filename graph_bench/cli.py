@@ -161,6 +161,17 @@ _CASE_TIMEOUT = typer.Option(
 )
 
 
+_DEADLINE = typer.Option(
+    None,
+    "--deadline-s",
+    min=0,
+    help=(
+        "Seconds after the start of the run past which nothing new starts; every case not yet run is marked"
+        " timeout 'run deadline' and results.json is written. Default: none."
+    ),
+)
+
+
 def _run(
     run: Callable[..., Results],
     selection: str,
@@ -169,6 +180,7 @@ def _run(
     case_timeout: float,
     workdir: Path | None,
     out: Path,
+    deadline_s: float | None = None,
 ) -> None:
     """Validate the selection and databases, then install Grafeo if asked, then run and print DIR/results.json."""
     name = _check_selection(selection)
@@ -181,7 +193,7 @@ def _run(
     own_workdir = workdir is None
     work = Path(tempfile.mkdtemp(prefix="graph-bench-")) if workdir is None else workdir
     try:
-        run(name, dbs, out, workdir=work, case_timeout_s=case_timeout)
+        run(name, dbs, out, workdir=work, case_timeout_s=case_timeout, deadline_s=deadline_s)
     finally:
         if own_workdir:
             shutil.rmtree(work, ignore_errors=True)
@@ -196,9 +208,10 @@ def bench(
     case_timeout: float = _CASE_TIMEOUT,
     workdir: Path | None = _WORKDIR,
     out: Path = _OUT,
+    deadline_s: float | None = _DEADLINE,
 ) -> None:
     """Run the databases one after another, one worker process each; write and print DIR/results.json."""
-    _run(supervisor.run_bench, selection, db, grafeo, case_timeout, workdir, out)
+    _run(supervisor.run_bench, selection, db, grafeo, case_timeout, workdir, out, deadline_s)
 
 
 @app.command()
@@ -209,6 +222,7 @@ def codspeed(
     case_timeout: float = _CASE_TIMEOUT,
     workdir: Path | None = _WORKDIR,
     out: Path = _OUT,
+    deadline_s: float | None = _DEADLINE,
 ) -> None:
     """CI entry point: one `pytest benches --codspeed` process per database; write and print DIR/results.json.
 
@@ -216,7 +230,7 @@ def codspeed(
 
     Exits 0 once results.json is written, whatever pytest's exit codes.
     """
-    _run(supervisor.run_codspeed, selection, db, grafeo, case_timeout, workdir, out)
+    _run(supervisor.run_codspeed, selection, db, grafeo, case_timeout, workdir, out, deadline_s)
 
 
 def _echo_utf8(text: str) -> None:

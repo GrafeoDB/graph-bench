@@ -30,6 +30,11 @@ STARTUP_CHILD_TIMEOUT_S = 120.0
 # How far a raised silence limit lies beyond the limit it makes room for (a load's ceiling and grace, a startup
 # child's limit and grace), so that the inner limit, which records the right marker, always fires first.
 SILENCE_MARGIN_S = 1.0
+# The deadline CI passes as `--deadline-s` (Task R1). The GitHub job times out at 55 minutes and the CodSpeed
+# runner dies about 60 minutes after boot; at 48 minutes the supervisor starts nothing new, marks every case not yet
+# run ⏱ "run deadline: 48 min" and writes results.json, so a job always leaves results. `--deadline-s` has no
+# default: a local run is not limited.
+RUN_DEADLINE_S = 48 * 60
 
 
 def over_ceiling(ceiling_s: float) -> str:
@@ -42,6 +47,13 @@ def load_over(ceiling_s: float) -> str:
     if ceiling_s >= 60 and ceiling_s % 60 == 0:
         return f"load over {ceiling_s / 60:g} min"
     return f"load over {ceiling_s:g} s"
+
+
+def deadline_over(deadline_s: float) -> str:
+    """The error of a case, load or record not started because the run deadline had passed: "run deadline: 48 min"."""
+    if deadline_s >= 60:
+        return f"run deadline: {int(deadline_s // 60)} min"
+    return f"run deadline: {deadline_s:g} s"
 
 
 def message(exc: BaseException) -> str:
