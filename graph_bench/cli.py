@@ -172,8 +172,37 @@ _DEADLINE = typer.Option(
 )
 
 
+_YARDSTICK = typer.Option(
+    None,
+    "--yardstick",
+    help=(
+        "A results.json of earlier databases on the same hardware (CI's earlier per-database jobs), of the same"
+        " selection and mode; its ok/agree entries set the in-run budgets as earlier databases of this run would."
+        " Repeat for several files."
+    ),
+)
+
+
+def _yardsticks(paths: list[Path] | None, selection: str, mode: str) -> list[Results]:
+    """Read and check the `--yardstick` files; a missing, unreadable or mismatched file exits 2 naming it."""
+    docs = []
+    for path in paths or []:
+        try:
+            doc = Results.read(path)
+            supervisor.check_yardstick(doc, selection, mode)
+        except FileNotFoundError:
+            typer.echo(f"--yardstick: {path} does not exist", err=True)
+            raise typer.Exit(2) from None
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            typer.echo(f"--yardstick: {path}: {exc}", err=True)
+            raise typer.Exit(2) from None
+        docs.append(doc)
+    return docs
+
+
 def _run(
     run: Callable[..., Results],
+    mode: str,
     selection: str,
     db: str | None,
     grafeo: str | None,
@@ -181,19 +210,22 @@ def _run(
     workdir: Path | None,
     out: Path,
     deadline_s: float | None = None,
+    yardstick: list[Path] | None = None,
 ) -> None:
-    """Validate the selection and databases, then install Grafeo if asked, then run and print DIR/results.json."""
+    """Validate the selection, databases and yardsticks, then install Grafeo if asked, then run and print
+    DIR/results.json."""
     name = _check_selection(selection)
     dbs = _dbs(db)
     try:
         catalog.cases(name, dbs)
     except KeyError as exc:
         raise typer.BadParameter(str(exc.args[0]), param_hint="--db") from None
+    docs = _yardsticks(yardstick, name, mode)
     _install_requested(grafeo)
     own_workdir = workdir is None
     work = Path(tempfile.mkdtemp(prefix="graph-bench-")) if workdir is None else workdir
     try:
-        run(name, dbs, out, workdir=work, case_timeout_s=case_timeout, deadline_s=deadline_s)
+        run(name, dbs, out, workdir=work, case_timeout_s=case_timeout, deadline_s=deadline_s, yardstick=docs)
     finally:
         if own_workdir:
             shutil.rmtree(work, ignore_errors=True)
@@ -209,9 +241,10 @@ def bench(
     workdir: Path | None = _WORKDIR,
     out: Path = _OUT,
     deadline_s: float | None = _DEADLINE,
+    yardstick: list[Path] | None = _YARDSTICK,
 ) -> None:
     """Run the databases one after another, one worker process each; write and print DIR/results.json."""
-    _run(supervisor.run_bench, selection, db, grafeo, case_timeout, workdir, out, deadline_s)
+    _run(supervisor.run_bench, "bench", selection, db, grafeo, case_timeout, workdir, out, deadline_s, yardstick)
 
 
 @app.command()
@@ -223,6 +256,7 @@ def codspeed(
     workdir: Path | None = _WORKDIR,
     out: Path = _OUT,
     deadline_s: float | None = _DEADLINE,
+    yardstick: list[Path] | None = _YARDSTICK,
 ) -> None:
     """CI entry point: one `pytest benches --codspeed` process per database; write and print DIR/results.json.
 
@@ -230,7 +264,7 @@ def codspeed(
 
     Exits 0 once results.json is written, whatever pytest's exit codes.
     """
-    _run(supervisor.run_codspeed, selection, db, grafeo, case_timeout, workdir, out, deadline_s)
+    _run(supervisor.run_codspeed, "codspeed", selection, db, grafeo, case_timeout, workdir, out, deadline_s, yardstick)
 
 
 def _echo_utf8(text: str) -> None:

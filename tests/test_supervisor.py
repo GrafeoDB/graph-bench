@@ -261,6 +261,57 @@ def test_in_run_floor_keeps_cold_first_runs() -> None:
     assert set(supervisor._budgets(fast, "fake", meta).values()) == {supervisor.IN_RUN_FLOOR_S}
 
 
+def test_yardstick_sets_the_in_run_budget(bench_env: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`--yardstick FILE`: earlier databases' results.json from another job seed the in-run budget exactly as
+    earlier databases of the same run would. They add no entry or database to this run, and the final 10x rule
+    does not compare with them (that runs once at `graph-bench merge`): with 1 ns yardsticks a 10x rule over them
+    would mark every fake case."""
+    launches = _recording_launches(bench_env)
+    earlier = _results([_entry("a", 1e-6), _entry("b", 1e-6), _entry("c", 1e-6), _entry("d", 1e-6, answer="disagree")])
+    first = tmp_path / "a.json"
+    earlier.write(first)
+    second = tmp_path / "b.json"
+    _results([_entry("e", 1e-6)]).write(second)
+    out = tmp_path / "out"
+    argv = ["bench", "--selection", "push", "--db", "fake", "--out", str(out)]
+    result = CliRunner().invoke(app, [*argv, "--yardstick", str(first), "--yardstick", str(second)])
+    assert result.exit_code == 0, result.output
+    meta = supervisor._expected(catalog.selection("push"), "fake", 1)
+    expected = supervisor._budgets([*earlier.entries, _entry("e", 1e-6)], "fake", meta)
+    assert expected == {_id("snb_ic13"): supervisor.IN_RUN_FLOOR_S}
+    budget = launches[0][launches[0].index("--budget") + 1 :]
+    assert budget == [f"{i}={s!r}" for i, s in expected.items()]
+    results = Results.read(out / "results.json")
+    assert set(results.databases) == {"fake"}
+    assert {e.database for e in results.entries} == {"fake"}
+    assert _by_id(results)[_id("snb_ic13")].status == "ok"
+
+
+def test_yardstick_must_match_the_run(bench_env: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A yardstick of another selection or mode, or a missing file, stops the command before anything runs."""
+    launches = _recording_launches(bench_env)
+    other_selection = tmp_path / "full.json"
+    dataclasses.replace(_results([_entry("a", 1)]), selection="full").write(other_selection)
+    other_mode = tmp_path / "codspeed.json"
+    _results([_entry("a", 1)], mode="codspeed").write(other_mode)
+    out = tmp_path / "out"
+    for command, path, words in [
+        ("bench", other_selection, ("selection", "full", "push")),
+        ("bench", other_mode, ("mode", "codspeed", "bench")),
+        ("codspeed", tmp_path / "missing.json", ("missing.json",)),
+    ]:
+        argv = [command, "--selection", "push", "--db", "fake", "--out", str(out), "--yardstick", str(path)]
+        result = CliRunner().invoke(app, argv)
+        assert result.exit_code == 2, result.output
+        assert all(word in result.output for word in words), result.output
+        if path.exists():
+            assert path.name in result.output
+    assert launches == []
+    assert not (out / "results.json").exists()
+    with pytest.raises(ValueError, match="selection"):
+        supervisor.check_yardstick(Results.read(other_selection), "push", "bench")
+
+
 def test_in_run_cutoff_kills_a_slow_preflight(bench_env: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """3 fast earlier databases give a 4th an in-run budget; its slow preflight is killed at that budget.
 

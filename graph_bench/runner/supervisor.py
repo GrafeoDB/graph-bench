@@ -17,14 +17,15 @@ the limit is at least `STARTUP_TIMEOUT_S`.
 
 Time budgets (spec rule 8): a case gets an in-run `--budget` only when at least 3 earlier databases have an
 ok/agree preflight for it: 30x the mean of their 3 fastest, a runaway guard on first (cold) runs. This cutoff
-depends on which databases ran earlier. The supervisor enforces it too: it arms the cutoff on the case's `run`
-line, which the worker writes immediately before the preflight's database call, and disarms it on the next line
-(the `progress` line right after the call). A worker silent for longer than the budget in that window is killed
-and the case becomes `timeout` ("too slow: cut off at ..."); harness work (reference loading, the answer check)
-is outside the window. At the end `apply_budget_rule` compares every entry with the other databases only, at
-10x on the final timings; that decides the marker, and that final rule does not depend on the run order. Startup and
-both load rows (`types.BUDGET_EXEMPT`) and the answer-only items (`catalog.answer_only`) have no budget, in the run or
-at the end, and are no yardstick.
+depends on which databases ran earlier; with `yardstick` (`--yardstick`: the results of CI's earlier
+per-database jobs on the same hardware) their entries count as earlier databases too. The supervisor enforces it
+too: it arms the cutoff on the case's `run` line, which the worker writes immediately before the preflight's
+database call, and disarms it on the next line (the `progress` line right after the call). A worker silent for
+longer than the budget in that window is killed and the case becomes `timeout` ("too slow: cut off at ...");
+harness work (reference loading, the answer check) is outside the window. At the end `apply_budget_rule`
+compares every entry with the other databases only, at 10x on the final timings; that decides the marker, and
+that final rule does not depend on the run order. Startup and both load rows (`types.BUDGET_EXEMPT`) and the
+answer-only items (`catalog.answer_only`) have no budget, in the run or at the end, and are no yardstick.
 
 Ceilings (Task T, `graph_bench.runner`): every case stops `CASE_CEILING_S` after its `start` line and every load
 `LOAD_CEILING_S` after its start, for every database at any position in the run order. The worker stops itself
@@ -283,6 +284,44 @@ def _budgets(entries: Sequence[Entry], db: str, meta: dict[str, _Meta]) -> dict[
         if values and len(values) >= 3 and m.category not in BUDGET_EXEMPT and not catalog.answer_only(m.benchmark):
             budgets[bench_id] = max(IN_RUN_FACTOR * _top3_mean(values) / 1e9, IN_RUN_FLOOR_S)
     return budgets
+
+
+def check_yardstick(doc: Results, selection: str, mode: str) -> None:
+    """Raise ValueError unless `doc`, a `--yardstick` results.json, is of `selection` and `mode`.
+
+    A yardstick's entries count as those of earlier databases of the run (`_budgets`), so they must measure the
+    same cases the same way: preflight times of another selection or mode would set a wrong budget.
+    """
+    for name, value, expected in (("selection", doc.selection, selection), ("mode", doc.mode, mode)):
+        if value != expected:
+            raise ValueError(f"its {name} is {value!r}, this run's is {expected!r}")
+
+
+def failed_database(sel: Selection, db: str, error: str) -> tuple[list[Entry], list[Resource]]:
+    """The entries and Memory and Disk records of a database that did not run, at every thread setting.
+
+    Every id it would run is `failed` with `error`, every id its models do not reach `not_supported`, as for a
+    database whose driver does not import; `graph-bench merge` records a database without results the same way.
+    """
+    entries: list[Entry] = []
+    resources: list[Resource] = []
+    for threads in sel.threads:
+        for bench_id, m in _expected(sel, db, threads).items():
+            if m.supported:
+                entries.append(m.entry(bench_id, status="failed", error=error))
+            else:
+                entries.append(m.entry(bench_id, status="not_supported", error=f"model {m.model} not supported"))
+        if not sel.resources:
+            continue
+        reached = set(catalog.load_keys(sel.name, model_support(db)))
+        for (dataset, store), model in catalog.all_load_keys(sel.name).items():
+            for scale in sel.scales:
+                if (dataset, store) in reached:
+                    resources.append(unmeasured(db, dataset, store, scale, threads, "failed", error))
+                else:
+                    unsupported = f"model {model} not supported"
+                    resources.append(unmeasured(db, dataset, store, scale, threads, "not_supported", unsupported))
+    return entries, resources
 
 
 def apply_budget_rule(results: Results) -> None:
@@ -580,6 +619,9 @@ class _Run:
     retired: set[str] = field(default_factory=set)
     deadline_s: float | None = None  # `--deadline-s`; None: no deadline
     deadline_at: float | None = None  # `time.monotonic()` of the deadline
+    # `--yardstick` entries: earlier databases' results from other jobs on the same hardware. They count in the
+    # in-run budget as entries of earlier databases of this run would, and are never recorded here.
+    yardstick: list[Entry] = field(default_factory=list)
 
     def expired(self) -> bool:
         """Whether the run deadline has passed: nothing new starts from then on."""
@@ -611,30 +653,24 @@ class _Run:
                 self._resources(db, threads, None)
             return
         probe = _probe(db, max(self.case_timeout_s, STARTUP_TIMEOUT_S))
+        if "error" in probe:
+            entries, resources = failed_database(self.sel, db, _not_installed_reason(probe["error"]))
+            for entry in entries:
+                self.record(entry)
+            self.results.resources.extend(resources)
+            return
         for threads in self.sel.threads:
             meta = _expected(self.sel, db, threads)
-            if "error" in probe:
-                self._not_installed(meta, probe["error"])
-                self._resources(db, threads, None, missing=_not_installed_reason(probe["error"]))
-            else:
-                extra_env = probe["env"][_tag(threads)]
-                self._worker(db, threads, meta, extra_env)
-                self._resources(db, threads, extra_env)
+            extra_env = probe["env"][_tag(threads)]
+            self._worker(db, threads, meta, extra_env)
+            self._resources(db, threads, extra_env)
 
-    def _not_installed(self, meta: dict[str, _Meta], error: str) -> None:
-        for bench_id, m in meta.items():
-            if m.supported:
-                self.record(m.entry(bench_id, status="failed", error=_not_installed_reason(error)))
-            else:
-                self.record(m.entry(bench_id, status="not_supported", error=f"model {m.model} not supported"))
-
-    def _resources(
-        self, db: str, threads: int | None, extra_env: dict[str, str] | None, *, missing: str | None = None
-    ) -> None:
+    def _resources(self, db: str, threads: int | None, extra_env: dict[str, str] | None) -> None:
         """The Memory and Disk records of one database and thread setting, after its worker finished.
 
         Every (dataset, store) of the selection at every scale gets one: measured in a fresh child where the
-        database's models reach the load, ⊘ where they do not, ✗ with `missing` when the database is not installed.
+        database's models reach the load, ⊘ where they do not (a database that is not installed gets its records
+        from `failed_database`).
         """
         if not self.sel.resources:
             return
@@ -648,8 +684,6 @@ class _Run:
                 if (dataset, store) not in reached:
                     error = f"model {model} not supported"
                     record = unmeasured(db, dataset, store, scale, threads, "not_supported", error)
-                elif missing is not None:
-                    record = unmeasured(db, dataset, store, scale, threads, "failed", missing)
                 elif over is not None and over.status == "timeout" and over.error == load_over(LOAD_CEILING_S):
                     record = unmeasured(db, dataset, store, scale, threads, "timeout", over.error)
                 elif self.expired():
@@ -681,7 +715,7 @@ class _Run:
         raw.mkdir(parents=True, exist_ok=True)
         out = raw / f"{name}.jsonl"
         workdir = self.workdir / f"{db}-{_tag(threads)}"
-        budgets = _budgets(self.results.entries, db, meta)
+        budgets = _budgets([*self.yardstick, *self.results.entries], db, meta)
         env = {**os.environ, **dict(self.runner.env), **extra_env}
         try:
             launch = any(i not in self.recorded for i in meta)
@@ -980,6 +1014,7 @@ def run_bench(
     workdir: Path,
     case_timeout_s: float = DEFAULT_CASE_TIMEOUT_S,
     deadline_s: float | None = None,
+    yardstick: Sequence[Results] = (),
 ) -> Results:
     """Run every database of `dbs` in order, one worker per thread setting, and write `out_dir/results.json`.
 
@@ -989,8 +1024,13 @@ def run_bench(
     With `deadline_s`, counted from this call, nothing new starts once it has passed: a case, load or startup row
     already running finishes within its own limits, every id not yet run is timeout "run deadline: ...", and
     results.json is written as usual.
+
+    `yardstick` holds results of earlier databases from other runs on the same hardware (CI runs one database per
+    job): their ok/agree entries set the in-run budgets as earlier databases of this run would (`_budgets`). They
+    are not part of this run's results, and the final rule does not compare with them; `graph-bench merge`
+    applies it over the merged runs. Each must be of this selection and mode (`check_yardstick`).
     """
-    return _run_all(selection, dbs, out_dir, workdir, case_timeout_s, WORKER, deadline_s)
+    return _run_all(selection, dbs, out_dir, workdir, case_timeout_s, WORKER, deadline_s, yardstick)
 
 
 def drop_empty_codspeed_result(env: Mapping[str, str], pid: int) -> bool:
@@ -1022,6 +1062,7 @@ def run_codspeed(
     workdir: Path,
     case_timeout_s: float = DEFAULT_CASE_TIMEOUT_S,
     deadline_s: float | None = None,
+    yardstick: Sequence[Results] = (),
 ) -> Results:
     """As `run_bench`, with one `pytest benches --codspeed` process per database and thread setting.
 
@@ -1031,7 +1072,7 @@ def run_codspeed(
     (a relaunch left with only skipped cases) leaves a results file without benchmarks, which the CodSpeed
     runner rejects for the whole job; `drop_empty_codspeed_result` removes that one file, and only it.
     """
-    return _run_all(selection, dbs, out_dir, workdir, case_timeout_s, PYTEST, deadline_s)
+    return _run_all(selection, dbs, out_dir, workdir, case_timeout_s, PYTEST, deadline_s, yardstick)
 
 
 def _run_all(
@@ -1042,10 +1083,13 @@ def _run_all(
     case_timeout_s: float,
     runner: Runner,
     deadline_s: float | None,
+    yardstick: Sequence[Results] = (),
 ) -> Results:
     begun = time.monotonic()
     sel = catalog.selection(selection)
     catalog.cases(selection, dbs)  # unknown names fail here, before anything runs
+    for doc in yardstick:
+        check_yardstick(doc, selection, runner.mode)
     out_dir.mkdir(parents=True, exist_ok=True)
     started_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     cache.prepare(selection)  # generate data now, so no worker spends its silence budget on it
@@ -1059,6 +1103,7 @@ def _run_all(
         databases={},
     )
     run = _Run(sel, out_dir, workdir, case_timeout_s, results, runner)
+    run.yardstick = [e for doc in yardstick for e in doc.entries]
     if deadline_s is not None:
         run.deadline_s, run.deadline_at = deadline_s, begun + deadline_s
     for db in dbs:
@@ -1077,6 +1122,8 @@ __all__ = [
     "LaunchRequest",
     "Runner",
     "apply_budget_rule",
+    "check_yardstick",
+    "failed_database",
     "grafeo_source",
     "graph_bench_commit",
     "machine",
