@@ -178,11 +178,14 @@ one version string.
   Oxigraph, DuckDB + DuckPGQ and Grafeo, in that order. The macro runner dies about an hour after boot, so each
   selection is a matrix with one job per database, each on a fresh box, one at a time: Grafeo runs last, so its
   in-run budgets come from the others' results on the same hardware (each job passes the earlier jobs' results as
-  `--yardstick`). Every job stops starting cases at the run deadline (`--deadline-s`, 48 minutes, under the job's
-  55-minute timeout), so it always leaves its results.json; the cases it did not reach are ⏱ `run deadline`. A
-  final job on `ubuntu-latest` merges the jobs' results (`graph-bench merge`), which applies the 10x budget rule
-  once over all databases, so the markers are those of one run over the whole roster; a job that left no results
-  shows its database as ✗ "no results". CodSpeed merges the push jobs of one run itself. One concurrency group,
+  `--yardstick`). The grafeo version is resolved once per run and every job installs exactly it. Every job stops
+  starting cases at the run deadline (`--deadline-s`: what is left of 48 minutes counted from the job's start, so
+  setup counts too, under the job's 55-minute timeout), so it always leaves its results.json; the cases it did not
+  reach are ⏱ `run deadline`. A final job on `ubuntu-latest` merges the jobs' results (`graph-bench merge`), which
+  applies the 10x budget rule once over all databases, so the markers are those of one run over the whole roster;
+  a job that left no results shows its database as ✗ "no results". A cancelled run merges nothing. A release run
+  whose merged results hold no Grafeo posts and records nothing, so the next daily run tries again. CodSpeed merges
+  the push jobs of one run itself. One concurrency group,
   `macro-runner`, on both bench.yml and release.yml keeps their macro-runner jobs from ever running at once; a
   newer queued run replaces an older pending one.
 - `.github/workflows/pins.yml`: weekly (and on demand), checks for a newer stable Neo4j Community release and a
