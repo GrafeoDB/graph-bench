@@ -143,6 +143,30 @@ def merge(
     return merged, missing
 
 
+def earlier_legs(db: str, paths: Iterable[Path]) -> tuple[list[Path], list[tuple[Path, str]]]:
+    """The leg results among `paths` a CI leg of `db` takes as yardsticks, in roster order, and the unreadable ones
+    with their error.
+
+    A file is taken when every database it holds comes before `db` in `catalog.CI_DATABASES`: a re-run leg, or one
+    GitHub started out of matrix order, never takes a later leg's results. Raises ValueError when `db` is not in the
+    roster.
+    """
+    roster = list(catalog.CI_DATABASES)
+    if db not in roster:
+        raise ValueError(f"{db} is not in the CI roster ({', '.join(roster)})")
+    taken: list[tuple[int, Path]] = []
+    unreadable: list[tuple[Path, str]] = []
+    for path in paths:
+        try:
+            dbs = _databases(Results.read(path))
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            unreadable.append((path, str(exc) or type(exc).__name__))
+            continue
+        if dbs and all(name in roster[: roster.index(db)] for name in dbs):
+            taken.append((max(roster.index(name) for name in dbs), path))
+    return [path for _, path in sorted(taken, key=lambda t: t[0])], unreadable
+
+
 def local_databases(results: Results) -> list[str]:
     """The databases of `results` that come from the local snapshot, in its database order."""
     return [name for name, info in results.databases.items() if info.source == "local"]
@@ -154,6 +178,7 @@ __all__ = [
     "NO_RESULTS",
     "MergeError",
     "database_order",
+    "earlier_legs",
     "from_snapshot",
     "local_databases",
     "merge",

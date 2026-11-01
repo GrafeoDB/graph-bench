@@ -370,6 +370,26 @@ def ci_settings() -> None:
     typer.echo("databases=" + ",".join(catalog.CI_DATABASES))
 
 
+_YARDSTICK_DB = typer.Option(..., "--db", help="The leg's database, one of the CI roster.")
+_YARDSTICK_DIR = typer.Argument(..., help="Where the leg downloaded the run's results: DIR/<artifact>/results.json.")
+
+
+@app.command("ci-yardsticks")
+def ci_yardsticks(db: str = _YARDSTICK_DB, directory: Path = _YARDSTICK_DIR) -> None:
+    """Print a CI leg's `--yardstick FILE` arguments on one line: each DIR/*/results.json whose databases all come
+    before DB in the roster (`catalog.CI_DATABASES`), so a re-run leg, or one started out of matrix order, never
+    measures against a later leg. Nothing when there is none; an unreadable file is skipped with a warning on
+    stderr; a DB outside the roster exits 2."""
+    try:
+        taken, unreadable = merge_module.earlier_legs(db, sorted(directory.glob("*/results.json")))
+    except ValueError as exc:
+        typer.echo(f"ci-yardsticks: {exc}", err=True)
+        raise typer.Exit(2) from None
+    for path, error in unreadable:
+        typer.echo(f"ci-yardsticks: skipping {path}: {error}", err=True)
+    typer.echo(" ".join(f"--yardstick {path}" for path in taken))
+
+
 def _echo_utf8(text: str) -> None:
     """Write `text` to stdout as UTF-8, whatever the console code page (the report uses symbols such as ⊘)."""
     buffer = getattr(sys.stdout, "buffer", None)

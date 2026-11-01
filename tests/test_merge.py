@@ -222,6 +222,37 @@ def test_ci_settings_prints_the_deadline_and_the_roster() -> None:
     assert result.output.splitlines() == [f"deadline_s={RUN_DEADLINE_S}", "databases=" + ",".join(catalog.CI_DATABASES)]
 
 
+def test_ci_yardsticks_takes_only_earlier_legs(tmp_path: Path) -> None:
+    """A leg's yardsticks are the results of the roster databases before it in `catalog.CI_DATABASES`, never a
+    later leg's: a re-run leg, or one GitHub started out of matrix order, finds the later legs' artifacts too.
+    The arguments come on one line, in roster order; an unreadable file is skipped with a warning."""
+    roster = catalog.CI_DATABASES
+    directory = tmp_path / "yardstick"
+    for db in reversed(roster):
+        _write(directory, f"results-full-{db}", _doc(_entry(db, 1)))
+    broken = directory / "results-full-broken" / "results.json"
+    broken.parent.mkdir()
+    broken.write_text("{", encoding="utf-8")
+
+    def args(db: str, where: Path = directory) -> str:
+        result = CliRunner().invoke(app, ["ci-yardsticks", "--db", db, str(where)])
+        assert result.exit_code == 0, result.output
+        return result.stdout.strip()
+
+    def files(dbs: tuple[str, ...]) -> str:
+        return " ".join(f"--yardstick {directory / f'results-full-{db}' / 'results.json'}" for db in dbs)
+
+    assert args(roster[0]) == ""
+    assert args(roster[2]) == files(roster[:2])
+    assert args(roster[-1]) == files(roster[:-1])
+    assert roster[-1] == "grafeo"
+    assert args(roster[0], tmp_path / "none") == ""  # the first leg downloads nothing
+    result = CliRunner().invoke(app, ["ci-yardsticks", "--db", roster[2], str(directory)])
+    assert str(broken) in result.stderr
+    unknown = CliRunner().invoke(app, ["ci-yardsticks", "--db", "falkordb", str(directory)])
+    assert unknown.exit_code == 2
+
+
 LOCAL_MACHINE = {"cpu": "Ryzen 9", "cores": 16, "os": "Linux 6.6 (Docker)"}
 
 
