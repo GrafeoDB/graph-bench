@@ -91,8 +91,8 @@ the plans or the per-row costs leave room to improve. They carry no `- id:` line
   adding `-[:KNOWS]-(a)` takes 9 s (19 s without the WHERE). The time is in closing the cycle on the already bound
   `a`: each open path seems to expand the whole KNOWS adjacency of `d` (hubs have up to 608 edges) and then keep the
   rows that reach `a`, where an edge-existence check or an intersection with `a`'s adjacency would do.
-- The SQL/PGQ twin `pattern_square_sql` (same pattern) agrees in about 15 s on the same Grafeo, against DuckDB's
-  165 ms; the triangle (`pattern_triangle`, closing after 2 hops) agrees in 0.88 s against NeuG's 4.3 ms.
+- The SQL/PGQ twin `pattern_square_sql` (same pattern) is slow for the same reason (its own section below); the
+  triangle (`pattern_triangle`, closing after 2 hops) agrees in 0.88 s against NeuG's 4.3 ms.
 - Reference answer: matched.
 - Cause: Grafeo engine (cyclic pattern planning: the closing edge to a bound node). The analytics brief tracks the
   worst-case-optimal join for grafeo 0.6.3 (T-hub, T-all); this case is its median-degree guard. Not rewritten.
@@ -104,10 +104,14 @@ the plans or the per-row costs leave room to improve. They carry no `- id:` line
 - These agree with the reference, but since the case ceiling of FAIRNESS.md rule 9 (2026-10-31) a case stops 60 s
   after it starts and needs at least 3 timed runs by then; the adapter test runs Grafeo alone, so the ceiling, not
   the budget rule, marks them there.
-- grafeo 0.6.1 branch build e8b04ed2, Windows, adapter test: `pm_two_hop_top10` preflight 31.3 s for its 10 cuts,
-  `pattern_square_sql` 17.0 s for 10 bindings; neither has room for 3 timed runs before 60 s (⏱ "too slow: over
-  60 s"). `pattern_square_sql` is at the edge: at about 15 s per run its third run ends at 60 s and it keeps a
-  timing (an allowlisted id may agree).
+- `pm_two_hop_top10` (A2): on Grafeo 0.6.0 16.9 s for 10 cuts (LadybugDB 139 ms, NeuG 450 ms, TuringDB 688 ms),
+  20.4 s in the push run (⏱ by the budget rule, 17.2x). On the grafeo 0.6.1 branch build e8b04ed2 (Windows, adapter
+  test) its preflight takes 31.3 s, which leaves no room for 3 timed runs before 60 s: ⏱ ("too slow: over 60 s").
+- `pattern_square_sql`: on Grafeo 0.6.0 about 15 s alone against DuckDB's 165 ms, 38.8 s in the push run (⏱ by the
+  budget rule, 262x; DuckDB 148 ms). The observed run, e8b04ed2's adapter test: a preflight of 17.0 s for 10
+  bindings, no room for 3 timed runs, ⏱ ("too slow: over 60 s"). It is at the edge, though: where a run takes
+  about 15 s or less, 3 timed runs can end within the 60 s and the case keeps a timing, so the allowlisted id may
+  also agree.
 - Cause: for `pm_two_hop_top10`, every path materialized to be counted (A1 and A2, in the section below); for
   `pattern_square_sql`, the 4-cycle closing on a bound node (T-hub and T-all, in the section above). Not rewritten.
 
@@ -124,13 +128,12 @@ other databases:
   run (⏱, 64.8x). Same cause as `pattern_square` above; tracked as T-hub and T-all (leapfrog join, grafeo 0.6.3).
 - `pattern_common` 61 ms (⏱, 16.0x; LadybugDB 2.7 ms, Neo4j 2.3 ms, NeuG 6.5 ms) and `pattern_join` 96 ms (⏱,
   29.0x; NeuG 0.21 ms, LadybugDB 3.4 ms, ArcadeDB 6.3 ms) in the push run; 34 ms and 74 ms on an idle machine.
-- `pm_two_hop_count` (A1) 2.27 s (LadybugDB 1.5 ms, NeuG 4.3 ms, TuringDB 24 ms) and `pm_two_hop_top10` (A2) 16.9 s
-  for 10 cuts (LadybugDB 139 ms, NeuG 450 ms, TuringDB 688 ms): every one of the 4,367,196 paths is materialized to
-  be counted (analytics brief A1, A2: count pushdown, grafeo 0.6.3); in the push run 2.9 s (⏱, 41.4x) and 20.4 s
-  (⏱, 17.2x). `agg_out_degree_top10` (A3) is 8.5 ms in the push run against NeuG's 0.70 ms, LadybugDB's 2.3 ms and
-  Neo4j's 7.4 ms, within the rule.
-- `pattern_square_sql` about 15 s alone, 38.8 s in the push run (⏱, 262x; DuckDB 148 ms) and `pattern_join_sql` 1.5 s for the join the openCypher
-  `pattern_join` answers in 74 ms on the same Grafeo (DuckDB cannot run it, so no budget applies there).
+- `pm_two_hop_count` (A1) 2.27 s (LadybugDB 1.5 ms, NeuG 4.3 ms, TuringDB 24 ms): every one of the 4,367,196 paths
+  is materialized to be counted (analytics brief A1, A2: count pushdown, grafeo 0.6.3; A2, `pm_two_hop_top10`, is
+  past the case ceiling, section above); in the push run 2.9 s (⏱, 41.4x). `agg_out_degree_top10` (A3) is 8.5 ms
+  in the push run against NeuG's 0.70 ms, LadybugDB's 2.3 ms and Neo4j's 7.4 ms, within the rule.
+- `pattern_join_sql` 1.5 s for the join the openCypher `pattern_join` answers in 74 ms on the same Grafeo (DuckDB
+  cannot run it, so no budget applies there). `pattern_square_sql` is past the case ceiling (section above).
 - `pattern_join_rdf` 3.0 s against Oxigraph's 0.36 s (8.2x; at the edge of the rule).
 
 ## Grafeo: medium-scale RDF and IC13 (not allowlisted)
@@ -529,7 +532,8 @@ so there is no Disk size.
 - The answers agree, but the 10 bindings take 6.6 to 11.1 s per run in the Docker push runs and 17.9 s in the
   adapter test of 2026-10-31 (Docker, on a host shared with the Windows test suite). The preflight, the warm-up and
   3 timed runs then take 33 to 90 s, so the case is ⏱ ("too slow: over 60 s") when the host is busy and keeps a
-  timing when it is not; allowlisted for that reason (an allowlisted id may agree).
+  timing when it is not; allowlisted for that reason (an allowlisted id may agree). In those Docker push runs with
+  TuringDB it is also ⏱ by the budget rule, 250x to 348x TuringDB's 26 to 32 ms.
 - Cause: FalkorDB engine (variable-length expand from a hub, about 3.5 s for that one binding) and the per-call
   overhead of the out-of-process server. Not rewritten.
 
@@ -546,8 +550,7 @@ budget applies and they must agree.
   milliseconds per call.
 - Cause: FalkorDB engine and the out-of-process server (per-call overhead); `snb_is6` and `snb_ic6` also include
   variable-length traversals. The adapter uses the `id` indexes it creates in the load and no query cache.
-- Hops: `hop_1` and `hop_2` are within the budget; `hop_var` agrees but takes 6.6 to 11.1 s for 10 bindings (Docker runs
-  with TuringDB, 250x to 348x its 26 to 32 ms), about 3.5 s for the one binding from a hub.
+- Hops: `hop_1` and `hop_2` are within the budget; `hop_var` is allowlisted for the case ceiling (section above).
 
 ## FalkorDB: BFS is slow under the 10x budget rule (not allowlisted)
 
@@ -736,7 +739,8 @@ alone, where no budget applies and they must agree.
   times, deduplicated once at the end; see the budget section below).
 - The 10 bindings take 67 to 70 s per run on Windows, so the preflight alone runs past the 60 s case ceiling
   (FAIRNESS.md rule 9): ⏱ ("too slow: over 60 s", answer unchecked), in the adapter test too, where HelixDB runs
-  alone. Seen in the test suite of 2026-10-31.
+  alone. Seen in the test suite of 2026-10-31. Before the ceiling it agreed and was ⏱ by the budget rule in
+  `bench --selection push` (Windows, eight databases), 49x to 51x over two runs.
 - Cause: HelixDB DSL (every walk expanded, no intermediate deduplication). Not rewritten.
 
 ## HelixDB: slow under the 10x budget rule (not allowlisted)
@@ -754,11 +758,10 @@ Aggregation section). Every filtered scan reads the label's nodes and filters th
 created on `creationDate` or `length`, as no other database gets one.
 
 The Hops it runs agree and are ⏱ by the same rule in `bench --selection push` (Windows, eight databases): `hop_1`
-22 to 38 ms for 10 bindings (37x to 65x), `hop_2` 1.7 to 3.7 s (78x to 124x) and `hop_var` 67 to 70 s (49x to
-51x), over two runs. The builders follow the
-shared texts: every walk is expanded (`both("KNOWS")` per step, `repeat` three times for `hop_var`) and deduplicated
-once at the end, as `count(DISTINCT f.id)`; no step deduplicates the intermediate persons, which the texts do not
-ask for either. Since the 60 s case ceiling (Task T) `hop_var` is ⏱ in the adapter test as well (above).
+22 to 38 ms for 10 bindings (37x to 65x) and `hop_2` 1.7 to 3.7 s (78x to 124x), over two runs; `hop_var` is past
+the case ceiling (section above). The builders follow the shared texts: every walk is expanded (`both("KNOWS")` per
+step, `repeat` three times for `hop_var`) and deduplicated once at the end, as `count(DISTINCT f.id)`; no step
+deduplicates the intermediate persons, which the texts do not ask for either.
 
 Pattern matching: `pattern_common` agrees within the rule (16.8 ms); `pm_two_hop_count` agrees but is ⏱ (1.27 s,
 17.9x; LadybugDB 1.6 ms, NeuG 2.9 ms): the builder streams every one of the 4,367,196 walks to count them.
