@@ -897,6 +897,20 @@ def test_deadline_writes_results(bench_env: pytest.MonkeyPatch, tmp_path: Path) 
     }
 
 
+def test_deadline_zero_still_writes_results(bench_env: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`--deadline-s 0`, what CI passes when the job's setup took the whole deadline: the command exits 0 without
+    launching a worker and writes results.json with every case ⏱ "run deadline: 0 s"."""
+    launches = _recording_launches(bench_env)
+    out = tmp_path / "out"
+    argv = ["bench", "--selection", "push", "--db", "fake", "--out", str(out), "--deadline-s", "0"]
+    result = CliRunner().invoke(app, argv)
+    assert result.exit_code == 0, result.output
+    assert launches == []
+    results = Results.read(out / "results.json")
+    assert {e.id for e in results.entries} == _expected_ids("fake")
+    assert {(e.status, e.error) for e in results.entries} == {("timeout", "run deadline: 0 s")}
+
+
 def test_running_case_keeps_its_ceiling_past_the_deadline(tmp_path: Path) -> None:
     """A case that started before the deadline is not cut at it: it records its own entry, and only then does the
     run stop."""
