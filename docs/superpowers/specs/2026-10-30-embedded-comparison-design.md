@@ -124,7 +124,7 @@ These go into FAIRNESS.md, which is trimmed to embedded use.
 | `graph-bench codspeed --selection S --out DIR` | CI entry point: one `pytest benches/ --codspeed --db X` process per database, keeps `CODSPEED_PROFILE_FOLDER`, then writes `DIR/results.json` (answers, no timings) |
 | `graph-bench report --format summary\|readme\|overview --in results.json` | summary block for grafeo's README / full section for graph-bench's README / the overview page `docs/results.md` (every version, source, machine and run date, then every per-case table; `--write` writes the whole file) |
 | `graph-bench merge --out DIR [--db a,b] [--local FILE] IN...` | one results.json from CI's per-database results; `--local` adds the local snapshot's databases that are not in the inputs, tagged `local` |
-| `graph-bench local-check --local FILE` | prints the databases whose installed version differs from the local snapshot's, one per line; exits 0 |
+| `graph-bench local-check --local FILE` | prints the snapshot's databases outside the CI roster whose newest stable PyPI release (Neo4j: `pins.NEO4J_VERSION`) differs from the version it measured, one per line; a failed lookup is unknown; exits 0 |
 
 - Benchmark names: `benches/test_<category>.py::test_<benchmark>[<db>-<scale>]`, e.g. `benches/test_complex_queries.py::test_snb_is1[ladybug-small]`, `benches/test_load.py::test_load_<dataset>[<db>-<scale>]`, `benches/test_load_ql.py::test_load_ql_<dataset>[<db>-<scale>]` and `benches/test_startup.py::test_startup[<db>-empty]` (the Startup row's scale is `empty`). Names must be unique across processes.
 - Selections:
@@ -217,7 +217,7 @@ grafeo's README never names other graph databases unless the user decides on tha
   (`.github/scripts/local-bench.sh`), refreshed by hand. The README job merges its non-roster databases in
   (`merge --local`): the CI columns first, the local ones after, each marked `†` with a footnote naming the
   snapshot's date and machine. Budgets and ranks stay within each source. `graph-bench local-check` raises a
-  notice in that job when an installed version differs from the snapshot's.
+  notice in that job when the newest stable release of a non-roster database differs from the snapshot's version.
 - **grafeo README:** at each grafeo release (from 0.6.1), the pre-release checklist runs `setup --grafeo <wheel>`, `bench --selection full` and `report --format summary` locally, and commits the block on grafeo's release branch. No automation writes to grafeo.
 - **Workflow switch-on:** the grafeo-side workflow trigger is gone; the graph-bench workflow is enabled once the adapters and the answer check have settled.
 
