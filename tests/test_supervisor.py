@@ -593,3 +593,122 @@ def test_budget_rule_exempts_answer_only_items() -> None:
     ]
     assert set(supervisor._budgets(earlier, "fake", meta)) == {a1}
     assert not [i for i in meta if "multigraph" in i]  # no Load or Load (query language) entry for the fixture
+
+
+def _recording_launches(mp: pytest.MonkeyPatch) -> list[list[str]]:
+    launches: list[list[str]] = []
+    launch = supervisor._launch
+
+    def recording(argv: list[str], *args: Any) -> Any:
+        launches.append(list(argv))
+        return launch(argv, *args)
+
+    mp.setattr(supervisor, "_launch", recording)
+    return launches
+
+
+def test_case_over_the_ceiling_is_too_slow(bench_env: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Cooperative path: `slow:snb_is2` takes 2 s per run (10 bindings at 0.2 s), past a 1 s ceiling already in
+    its preflight; the worker then starts no further run, records ⏱ "too slow: over 1 s" itself and goes on, so the
+    worker is never killed or relaunched. The grace is long, so only the worker can have stopped it."""
+    bench_env.setenv("GRAPH_BENCH_FAKE", "slow:snb_is2")
+    bench_env.setattr(supervisor, "CASE_CEILING_S", 1.0)
+    bench_env.setattr(supervisor, "CEILING_GRACE_S", 30.0)
+    launches = _recording_launches(bench_env)
+    results = run_bench("push", ["fake"], tmp_path / "out", workdir=tmp_path / "work", case_timeout_s=60)
+    entries = _by_id(results)
+    slow = entries.pop(_id("snb_is2"))
+    assert (slow.status, slow.error, slow.answer) == ("timeout", "too slow: over 1 s", "agree"), slow
+    assert slow.timing is None
+    assert slow.preflight_ns is not None and slow.preflight_ns > 1e9
+    assert len(launches) == 1
+    assert "--case-ceiling" in launches[0] and launches[0][launches[0].index("--case-ceiling") + 1] == "1.0"
+    assert all(e.status == "ok" for e in entries.values()), [e for e in entries.values() if e.status != "ok"]
+
+
+# A stand-in worker: argv is out file, bench id. Its preflight returns at once; then one single call (a timed run)
+# stays silent for 5 s.
+_LONG_CALL_WORKER = """\
+import json, sys, time
+out, bench_id = sys.argv[1:3]
+def emit(**line):
+    with open(out, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(line) + "\\n")
+emit(kind="database", name="fake", version="1", process="in-process", threads_configurable=False,
+     threads_note="", storage="in-memory")
+emit(kind="start", id=bench_id)
+emit(kind="run", id=bench_id)
+emit(kind="progress", id=bench_id)
+time.sleep(5.0)
+emit(kind="entry", id=bench_id, status="ok", answer="agree", preflight_ns=1000)
+"""
+
+
+def test_single_call_past_the_ceiling_is_killed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hard path: a single call that runs past the ceiling (and its grace) cannot be stopped in the worker, so the
+    supervisor kills it there, well inside the silence limit, records ⏱ "too slow: over ..." and relaunches."""
+    monkeypatch.setattr(supervisor, "CASE_CEILING_S", 0.5)
+    monkeypatch.setattr(supervisor, "CEILING_GRACE_S", 0.2)
+    sel = catalog.selection("push")
+    run = supervisor._Run(sel, tmp_path, tmp_path, 30.0, _results([]))
+    meta = supervisor._expected(sel, "fake", 1)
+    bench_id = _id("snb_is2")
+    out = tmp_path / "worker.jsonl"
+    argv = [sys.executable, "-c", _LONG_CALL_WORKER, str(out), bench_id]
+    started = time.monotonic()
+    attempt = run._attempt(argv, dict(os.environ), out, tmp_path / "worker.log", "fake", meta, {})
+    assert time.monotonic() - started < 4.5
+    assert (attempt.hung, attempt.over, attempt.pending) == (True, "case", bench_id)
+    assert run._settle(attempt, meta)  # relaunch for the rest
+    assert (run.recorded[bench_id].status, run.recorded[bench_id].error) == ("timeout", "too slow: over 0.5 s")
+
+
+def test_first_database_gets_the_ceiling(bench_env: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The first database has no in-run budgets (no earlier databases), yet a hung case stops at the ceiling, not
+    at the silence limit; the relaunched worker runs the rest."""
+    bench_env.setenv("GRAPH_BENCH_FAKE", "hang:snb_is4")
+    bench_env.setattr(supervisor, "CASE_CEILING_S", 1.0)
+    bench_env.setattr(supervisor, "CEILING_GRACE_S", 0.5)
+    launches = _recording_launches(bench_env)
+    started = time.monotonic()
+    results = run_bench("push", ["fake"], tmp_path / "out", workdir=tmp_path / "work", case_timeout_s=120)
+    assert time.monotonic() - started < 120
+    assert all("--budget" not in argv for argv in launches)
+    assert len(launches) == 2
+    entries = _by_id(results)
+    assert set(entries) == _expected_ids("fake")
+    hung = entries.pop(_id("snb_is4"))
+    assert (hung.status, hung.error, hung.timing) == ("timeout", "too slow: over 1 s", None)
+    assert all(e.status == "ok" for e in entries.values()), [e for e in entries.values() if e.status != "ok"]
+
+
+def test_load_over_the_ceiling_marks_the_dataset(bench_env: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A load still running at the load ceiling is killed: its Load entry, every case of that dataset and store,
+    the dataset's Load (query language) entry and its Memory and Disk record are ⏱ "load over ..." without being
+    run; the RDF store's load and the other datasets run as usual."""
+    bench_env.setenv("GRAPH_BENCH_FAKE", "hang:load_snb")
+    bench_env.setitem(catalog.SELECTIONS, "push", dataclasses.replace(catalog.SELECTIONS["push"], resources=True))
+    bench_env.setattr(supervisor, "LOAD_CEILING_S", 1.0)
+    bench_env.setattr(supervisor, "CEILING_GRACE_S", 0.5)
+    launches = _recording_launches(bench_env)
+    results = run_bench("push", ["fake"], tmp_path / "out", workdir=tmp_path / "work", case_timeout_s=60)
+    entries = _by_id(results)
+    assert set(entries) == _expected_ids("fake")
+    over = ("timeout", "load over 1 s")
+    load_id = catalog.load_id("snb", "fake", "small", 1)
+    assert (entries[load_id].status, entries[load_id].error) == over
+    ql_id = catalog.load_ql_id("snb", "fake", "small", 1)
+    assert (entries[ql_id].status, entries[ql_id].error) == over
+    graph_cases = {i.id for i in catalog.ITEMS if (i.dataset, i.store) == ("snb", "graph")}
+    for entry in entries.values():
+        if entry.id in (load_id, ql_id):
+            continue
+        if entry.benchmark in graph_cases:
+            assert (entry.status, entry.error) == over, entry
+        else:
+            assert entry.status == "ok", entry
+    records = {r.id: r for r in results.resources}
+    snb = records[catalog.resource_id("snb", "fake", "small", 1, "graph")]
+    assert (snb.status, snb.error, snb.peak_bytes) == ("timeout", "load over 1 s", None)
+    assert records[catalog.resource_id("snb", "fake", "small", 1, "rdf")].status == "ok"
+    assert len(launches) == 2
