@@ -10,9 +10,11 @@ the multigraph fixture `multigraph-small`).
 The `- id: <database>/<benchmark>` line of each section is read by the adapter tests as an allowlist: those
 entries may fail without failing the test.
 
-## Grafeo: IC13 shortest path does not finish (OPTIONAL MATCH shortestPath)
+## Grafeo: IC13 shortest path did not finish on 0.6.0 (OPTIONAL MATCH shortestPath; fixed on the 0.6.1 branch)
 
-- id: grafeo/snb_ic13
+- Not allowlisted any more: on the grafeo 0.6.1 branch builds e8b04ed2 and 7c93b4c3 `snb_ic13` agrees (e8b04ed2:
+  median 0.69 ms for the 10 bindings in the adapter test), so the `- id:` line is removed. The 0.6.0 analysis
+  below stays for the record; PyPI 0.6.0 skips the Grafeo agreement tests (`grafeo_is_measured`).
 - Query: `snb_ic13` (IC13 shortest path), the shared openCypher text, no Grafeo override.
 - Dataset: `snb-small`.
 - Binding: `{"person1Id": "person_0", "person2Id": "person_549"}` (the first of 10; none of them finishes).
@@ -181,9 +183,8 @@ queries agree afterwards), but slower than the batch API. It is not a disagreeme
   (about 2 us per index probe), compared with `batch_create_edges` on internal ids. Grafeo has no documented
   bulk path for edges keyed by an external id that avoids the per-row probe.
 
-## Grafeo: SQL/PGQ label disjunction and ANY SHORTEST do not parse yet (IS4, IS6, IC13)
+## Grafeo: SQL/PGQ ANY SHORTEST does not parse yet (IS6, IC13; IS4's label disjunction fixed on the 0.6.1 branch)
 
-- id: grafeo/snb_sql_is4
 - id: grafeo/snb_sql_is6
 - id: grafeo/snb_sql_ic13
 - Queries: the SQL/PGQ texts in `graph_bench/suites/snb_sql.py`, standard SQL/PGQ (ISO/IEC 9075-16), one text for
@@ -194,6 +195,7 @@ queries agree afterwards), but slower than the batch API. It is not a disagreeme
 - Grafeo 0.6.0 (local build of release/0.6.1, `D:\gb-grafeo-0.6.1` at 5048055b) outcome: these three fail at parse
   time (✗), on the first binding:
   - `snb_sql_is4`: `GRAFEO-Q001: syntax error: [SQL/PGQ] Expected RParen, found Pipe` at `MATCH (m:Post|Comment)`.
+    It parses and agrees on the 0.6.1 branch builds e8b04ed2 and 7c93b4c3, so its `- id:` line is removed.
   - `snb_sql_is6`: `Expected LParen, found Identifier` at `MATCH ANY SHORTEST (m:Post|Comment)-[r:REPLY_OF]->*(p:Post)`.
   - `snb_sql_ic13`: `Expected LParen, found Identifier` at `MATCH path = ANY SHORTEST (p1:Person)-[k:KNOWS]-+(p2:Person)`.
 - Reference answers: the openCypher SNB references (`snb_is4`, `snb_is6`, `snb_ic13`), the same bindings and rows.
