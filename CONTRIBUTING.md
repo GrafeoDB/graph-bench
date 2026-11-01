@@ -176,6 +176,34 @@ skipped with a log line, so a later run posts the version. Never put the URL in 
 tests use fake placeholders and a fake HTTP layer. To try it, run the workflow by hand with `force` set; to preview
 the payload, run `uv run --no-sync graph-bench report --format discord --in out/results.json`.
 
+## The local snapshot
+
+CI measures Grafeo against a fixed roster (`catalog.CI_DATABASES`). The other four databases of the README come
+from a local snapshot of all ten, `results/local/results.json`, which is committed and refreshed by hand on the
+dev box. One command produces it, with Docker running:
+
+```bash
+bash .github/scripts/local-bench.sh
+# Docker Desktop through another context:
+DOCKER="docker --context desktop-linux" bash .github/scripts/local-bench.sh
+```
+
+It runs `graph-bench bench --selection full` over every built-in database in one Linux (x86-64) container
+(`ubuntu:24.04`, with uv), at the newest stable release of each database (set `GRAFEO_VERSION` to pin grafeo). The
+repository is mounted read-only and copied in, and the run's output stays in the container until it ends, since
+appending to a Windows bind mount fails with ENODATA; only results.json is copied out. The dataset cache is kept
+in the Docker volume `graph-bench-local-cache`. Commit the new results.json; the next `readme-results` job of
+bench.yml merges its non-roster databases into the README section and `docs/results.md`
+(`graph-bench merge --local`), marked `†` and never budgeted or ranked against the CI columns.
+
+That job also runs `graph-bench local-check --local results/local/results.json`, which lists the databases whose
+installed version differs from the snapshot's and raises a notice; refresh the snapshot when it does. To check by
+hand, after installing the databases:
+
+```bash
+uv run --no-sync graph-bench local-check --local results/local/results.json
+```
+
 ## Style
 
 - Python 3.12 or later, `ruff` with a line length of 120 (`ruff check .` and `ruff format .`).
