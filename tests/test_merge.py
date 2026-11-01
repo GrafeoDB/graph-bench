@@ -301,6 +301,20 @@ def test_merge_local_never_fills_a_missing_ci_database(tmp_path: Path) -> None:
     assert merged.databases["falkordb"].source == "local"
 
 
+def test_merge_local_never_takes_a_roster_database_without_db(tmp_path: Path) -> None:
+    """Without `--db` nothing is "missing", yet a roster database (`catalog.CI_DATABASES`) is still never taken
+    from the snapshot: it belongs to CI, with or without a CI input."""
+    ci = _write(tmp_path, "ci", _doc(_entry("grafeo", 1)))
+    snapshot = _local(_entry("neug", 1), _entry("ladybug", 1), _entry("falkordb", 1))
+    local = _write(tmp_path, "local", snapshot)
+    merged, missing = merge.merge([(ci, Results.read(ci))], local=(local, Results.read(local)))
+    assert missing == []
+    assert list(merged.databases) == ["grafeo", "falkordb"]
+    assert {e.database for e in merged.entries} == {"grafeo", "falkordb"}
+    assert [db for db in catalog.CI_DATABASES if merge.from_snapshot(db)] == []
+    assert merge.from_snapshot("falkordb")
+
+
 def test_budget_rule_never_compares_sources() -> None:
     """The 10x rule runs within each source: a very fast local timing sets no budget for a CI entry, and a CI
     timing none for a local one; within a source the rule still applies."""

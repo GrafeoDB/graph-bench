@@ -11,7 +11,8 @@ as a database that does not start: every id it would run ✗ with `NO_RESULTS`.
 `.github/scripts/local-bench.sh`): its databases that are neither in a CI input nor expected join the merge, each
 entry, Memory and Disk record and database info tagged `local`, and `sources` records both runs. The snapshot may
 come from another machine, day, graph-bench commit and Grafeo, but must share the selection and mode. Its other
-databases are dropped: CI measured them, and a local timing never stands in for a missing CI one. Budgets and
+databases are dropped, and so is every roster database (`catalog.CI_DATABASES`, `from_snapshot`), with or
+without `--db`: CI measures them, and a local timing never stands in for a missing CI one. Budgets and
 ranks never compare the two sources (`supervisor.apply_budget_rule`, `report.ranking`).
 """
 
@@ -47,6 +48,12 @@ def _databases(doc: Results) -> set[str]:
     return {*doc.databases, *(e.database for e in doc.entries), *(r.database for r in doc.resources)}
 
 
+def from_snapshot(db: str) -> bool:
+    """Whether `merge --local` may take `db` from the local snapshot: any database outside the CI roster.
+    `graph-bench local-check` checks the same databases."""
+    return db not in catalog.CI_DATABASES
+
+
 def _local_part(
     first_path: Path, first: Results, local_path: Path, local: Results, taken: set[str]
 ) -> tuple[list[str], Results]:
@@ -58,7 +65,7 @@ def _local_part(
                 f"the local snapshot disagrees on {name}: {first_path} has {getattr(first, name)!r},"
                 f" {local_path} has {getattr(local, name)!r}"
             )
-    added = [db for db in database_order(_databases(local)) if db not in taken]
+    added = [db for db in database_order(_databases(local)) if db not in taken and from_snapshot(db)]
     keep = set(added)
     part = replace(
         local,
@@ -138,4 +145,13 @@ def local_databases(results: Results) -> list[str]:
     return [name for name, info in results.databases.items() if info.source == "local"]
 
 
-__all__ = ["AGREE", "LOCAL_AGREE", "NO_RESULTS", "MergeError", "database_order", "local_databases", "merge"]
+__all__ = [
+    "AGREE",
+    "LOCAL_AGREE",
+    "NO_RESULTS",
+    "MergeError",
+    "database_order",
+    "from_snapshot",
+    "local_databases",
+    "merge",
+]
