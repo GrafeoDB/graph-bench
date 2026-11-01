@@ -122,7 +122,10 @@ def test_bench_workflow_shape() -> None:
     pr = next(step for step in merged["steps"] if step.get("uses", "").startswith("peter-evans/create-pull-request@"))
     assert pr["with"]["branch"] == "bot/results"
     assert pr["with"]["title"] == "Update benchmark results"
-    assert pr["with"]["add-paths"] == "README.md"
+    assert pr["with"]["add-paths"].split() == ["README.md", "docs/results.md"]
+    # The overview page is written next to the README section, from the same merged results.
+    overview = next(i for i, run in enumerate(runs) if "graph-bench report --format overview" in run)
+    assert "--in merged/results.json" in runs[overview] and "--write docs/results.md" in runs[overview]
 
 
 def test_bench_workflow_measures_released_databases() -> None:
@@ -438,16 +441,68 @@ def test_merge_jobs_run_on_ubuntu_after_every_leg() -> None:
         assert "always()" not in job["if"], merge_name
         steps = _steps(job)
         download = next(step for step in steps if step.get("uses", "").startswith("actions/download-artifact@"))
-        assert download["with"] == {"pattern": f"{prefix}-*", "path": "results"}, merge_name
+        # Not into results/: the committed local snapshot, results/local/results.json, would match the glob.
+        assert download["with"] == {"pattern": f"{prefix}-*", "path": "legs"}, merge_name
         merge = next(run for run in _runs(job) if "graph-bench merge" in run)
         assert 'graph-bench merge --out merged --db "${{ steps.ci.outputs.databases }}"' in merge, merge_name
-        assert "results/*/results.json" in merge and "::error" in merge and "exit 1" in merge, merge_name
+        assert "legs/*/results.json" in merge and "::error" in merge and "exit 1" in merge, merge_name
+        assert "results/*/results.json" not in merge, merge_name
         assert any('graph-bench ci-settings >> "$GITHUB_OUTPUT"' in run for run in _runs(job)), merge_name
-        # The merge needs graph-bench only, not the databases or the datasets.
-        assert not any("install-databases.sh" in run or "data prepare" in run for run in _runs(job)), merge_name
+        # The merge needs graph-bench only, not the databases or the datasets; only the version check of the
+        # local snapshot installs the databases, after the merge, to read their versions.
+        others = [run for run in _runs(job) if "graph-bench local-check" not in run]
+        assert not any("install-databases.sh" in run or "data prepare" in run for run in others), merge_name
         upload = next(step for step in steps if step.get("uses", "").startswith("actions/upload-artifact@"))
         expected = {"name": prefix, "path": "merged/results.json", "if-no-files-found": "warn", "overwrite": True}
         assert upload["with"] == expected, merge_name
+
+
+def test_readme_results_mixes_in_the_local_snapshot() -> None:
+    """The README job merges the local snapshot when it is committed (and only then), and checks the installed
+    versions against it: the databases that differ become a `::notice`, and the check never fails the job."""
+    job = _load("bench.yml")["jobs"]["readme-results"]
+    merge = next(run for run in _runs(job) if "graph-bench merge" in run)
+    assert "if [ -f results/local/results.json ]" in merge
+    assert "--local results/local/results.json" in merge
+    steps = _steps(job)
+    check_at = next(i for i, step in enumerate(steps) if "graph-bench local-check" in step.get("run", ""))
+    check = steps[check_at]
+    assert "graph-bench local-check --local results/local/results.json" in check["run"]
+    assert "if [ ! -f results/local/results.json ]" in check["run"]
+    assert "bash .github/scripts/install-databases.sh" in check["run"]
+    assert "::notice title=Local snapshot out of date::" in check["run"]
+    assert check.get("continue-on-error") is True
+    # Every database at the run's grafeo version, as the legs installed it.
+    assert check["env"]["GRAFEO_VERSION"] == "${{ needs.resolve.outputs.grafeo }}"
+    assert "resolve" in job["needs"]
+    pr_at = next(i for i, step in enumerate(steps) if step.get("uses", "").startswith("peter-evans/"))
+    merge_at = next(i for i, step in enumerate(steps) if "graph-bench merge" in step.get("run", ""))
+    assert merge_at < check_at < pr_at
+    # The other merge jobs never mix in the snapshot.
+    for name, _, merge_name, _ in MATRIX_JOBS:
+        if merge_name != "readme-results":
+            assert not any("--local" in run for run in _runs(_load(name)["jobs"][merge_name])), merge_name
+
+
+def test_local_bench_script_runs_all_ten_in_one_linux_container() -> None:
+    """local-bench.sh: one ubuntu:24.04 container, the repo mounted read-only and copied in, the full selection
+    over every built-in database (no --db), the output kept in the container and copied out at the end (a Windows
+    bind mount fails appends with ENODATA), to results/local/results.json, which git keeps."""
+    script = (SCRIPTS / "local-bench.sh").read_text(encoding="utf-8")
+    assert "ubuntu:24.04" in script
+    assert ":/src:ro" in script
+    assert "graph-bench bench --selection full --out /work/out" in script
+    assert "--db" not in script
+    assert "install-databases.sh" in script
+    assert " cp " in script and "results/local/results.json" in script
+    assert "/work/out/results.json" in script
+    ignore = Path(__file__).resolve().parent.parent / ".gitignore"
+    lines = ignore.read_text(encoding="utf-8").splitlines()
+    assert lines.index("results/*") < lines.index("!results/local/") < lines.index("!results/local/results.json")
+    if shutil.which("bash") is not None:
+        # A relative path, so a Windows bash (Git Bash or WSL) reads it too.
+        done = subprocess.run(["bash", "-n", "local-bench.sh"], cwd=SCRIPTS, capture_output=True, text=True)
+        assert done.returncode == 0, done.stderr
 
 
 def test_macro_runner_jobs_end_before_the_runner_does() -> None:

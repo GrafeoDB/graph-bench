@@ -239,10 +239,10 @@ jobs:
         continue-on-error: true
         with:
           pattern: results-release-*
-          path: results
+          path: legs
       - name: Merge the results
         run: |
-          set -- results/*/results.json
+          set -- legs/*/results.json
           if [ ! -f "$1" ]; then
             echo "::error title=No results::no leg of this run left a results.json; nothing is posted"
             exit 1
