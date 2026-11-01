@@ -21,7 +21,8 @@ from typing import Any
 import pytest
 
 from benches._cases import Bench, LoadCase, LoadQlCase, StartupCase, case_key
-from graph_bench.runner.worker import DEFAULT_CASE_TIMEOUT_S, parse_budget
+from graph_bench.runner import CASE_CEILING_S, DEFAULT_CASE_TIMEOUT_S, LOAD_CEILING_S
+from graph_bench.runner.worker import parse_budget
 from graph_bench.suites import Write, catalog
 from graph_bench.suites.catalog import Case
 
@@ -52,6 +53,20 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         metavar="SECONDS",
         help="Preflight budget of a case without --gb-budget.",
     )
+    group.addoption(
+        "--gb-case-ceiling",
+        type=float,
+        default=CASE_CEILING_S,
+        metavar="SECONDS",
+        help="Wall time of a case from its start line.",
+    )
+    group.addoption(
+        "--gb-load-ceiling",
+        type=float,
+        default=LOAD_CEILING_S,
+        metavar="SECONDS",
+        help="Wall time of a load from its start; a load past it takes its dataset's cases with it.",
+    )
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -71,6 +86,8 @@ def pytest_configure(config: pytest.Config) -> None:
         Path(workdir) if workdir else None,
         dict(config.getoption("--gb-budget")),
         config.getoption("--case-timeout"),
+        config.getoption("--gb-case-ceiling"),
+        config.getoption("--gb-load-ceiling"),
     )
 
 
