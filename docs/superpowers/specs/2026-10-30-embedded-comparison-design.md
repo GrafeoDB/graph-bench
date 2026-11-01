@@ -122,7 +122,9 @@ These go into FAIRNESS.md, which is trimmed to embedded use.
 | `graph-bench list --selection S` | stable, sorted plan: one benchmark id per line |
 | `graph-bench bench --selection S [--db a,b] [--grafeo PATH] --out DIR` | local and pre-release run: one worker process per database, writes `DIR/results.json` |
 | `graph-bench codspeed --selection S --out DIR` | CI entry point: one `pytest benches/ --codspeed --db X` process per database, keeps `CODSPEED_PROFILE_FOLDER`, then writes `DIR/results.json` (answers, no timings) |
-| `graph-bench report --format summary\|readme --in results.json` | summary block for grafeo's README / full section for graph-bench's README |
+| `graph-bench report --format summary\|readme\|overview --in results.json` | summary block for grafeo's README / full section for graph-bench's README / the overview page `docs/results.md` (every version, source, machine and run date, then every per-case table; `--write` writes the whole file) |
+| `graph-bench merge --out DIR [--db a,b] [--local FILE] IN...` | one results.json from CI's per-database results; `--local` adds the local snapshot's databases that are not in the inputs, tagged `local` |
+| `graph-bench local-check --local FILE` | prints the databases whose installed version differs from the local snapshot's, one per line; exits 0 |
 
 - Benchmark names: `benches/test_<category>.py::test_<benchmark>[<db>-<scale>]`, e.g. `benches/test_complex_queries.py::test_snb_is1[ladybug-small]`, `benches/test_load.py::test_load_<dataset>[<db>-<scale>]`, `benches/test_load_ql.py::test_load_ql_<dataset>[<db>-<scale>]` and `benches/test_startup.py::test_startup[<db>-empty]` (the Startup row's scale is `empty`). Names must be unique across processes.
 - Selections:
@@ -133,12 +135,16 @@ These go into FAIRNESS.md, which is trimmed to embedded use.
 ### results.json
 
 Top level:
-- `schema_version` (2; a schema 1 file, without `resources` and `machine.memory_bytes`, still reads)
+- `schema_version` (3; a schema 1 or 2 file still reads: without `resources` and `machine.memory_bytes`, and
+  without `source`, which then reads as `ci`)
 - `graph_bench_commit`
 - `grafeo` `{version, source, sha}`
 - `machine` `{cpu, cores, os, memory_bytes}`
 - `selection`, `mode` (`bench` | `codspeed`), `started_at`
-- `databases` `{name: {version, process, storage, threads_configurable, threads_note, java}}`
+- `databases` `{name: {version, process, storage, threads_configurable, threads_note, java, source}}`
+- `sources` `{source: {started_at, machine, graph_bench_commit, grafeo, selection, mode}}`: the run behind each
+  source when a local snapshot is merged in (`merge --local`); empty for a plain run, whose top-level fields are
+  the `ci` run's
 
 `entries[]`, one per (category, benchmark, database, scale, threads):
 - `id`, `category`, `model` (`property_graph` | `sql_pgq` | `rdf`), `benchmark`, `database`, `scale`, `threads`
@@ -152,6 +158,8 @@ Top level:
 - `reference`: `python` | `networkx`
 - `answer_digest`
 - `detail`
+- `source`: `ci` | `local` (the local snapshot's databases after `merge --local`); budgets and ranks never
+  compare two sources
 
 `resources[]`, one per (database, dataset, store, scale, threads), the Memory and Disk records (never in CodSpeed):
 - `id` (`resources::<load benchmark>[<db>-<scale>]`, e.g. `resources::load_snb_rdf[grafeo-small]`), `database`,
@@ -163,6 +171,7 @@ Top level:
   samples in that window), `sample_interval_ms` (nominal), `processes` (the largest process count seen during
   the load, not the count at the peak reading)
 - `disk_bytes` (the store's files after `close()`; null for an in-memory store)
+- `source`, as in `entries[]`
 
 The grafeo side annotates entries that match `database == "grafeo" and answer == "disagree"`.
 
@@ -187,6 +196,10 @@ grafeo's README never names other graph databases unless the user decides on tha
 - "DBs" counts the databases with at least one correct result in that row.
 - "Grafeo fastest" is `k / n`: n is the number of benchmarks where Grafeo's answer agreed, ⏱ included (a load counts when it completed and its count check did not disagree; an entry that failed after its answer agreed does not count), and k the number where Grafeo has the lowest median time.
 - "Median rank" is Grafeo's median position over those benchmarks.
+- Grafeo is ranked only against the databases of its own source. With a local snapshot merged in, the header
+  reads `<N> embedded databases (<k>† from a local snapshot)` and a footer line names the snapshot's date and
+  machine. A last footer line always links the overview page,
+  `https://github.com/GrafeoDB/graph-bench/blob/main/docs/results.md`.
 - When Grafeo itself has a marker, a line under the table names the benchmark and the marker, e.g. `Grafeo: ≠ on snb_ic6`, so Grafeo's own gaps are never hidden. The legend line `⊘ not available · ✗ failing · ≠ wrong answer · ⏱ beyond 10x the top-3 average` is added only when such a line exists.
 
 ## CI and publishing
@@ -196,7 +209,15 @@ grafeo's README never names other graph databases unless the user decides on tha
 - **Grafeo build:** the workflow measures the latest PyPI release of grafeo, like every other database; grafeo's own CodSpeed suite covers main. This is the user's choice (2026-10-31). `setup --grafeo <path>` stays a local option.
 - **Database versions:** before each benchmark run the workflow syncs the non-database extras from the lock, then installs each database package of the `embedded` extra on its own at its newest stable release (`graph-bench packages`, `.github/scripts/install-databases.sh`), without changing uv.lock. A package with no installable build for the runner is logged with the installer's reason and does not stop the job; its database then shows as failed ("not installed") for every case, since vendors fix their own platform gaps. FalkorDB is the one such gap on this runner: falkordblite 0.11.0 ships only `manylinux_2_38` wheels and the runner has glibc 2.35. Neo4j's Temurin JRE is pinned for linux x86_64, linux aarch64 and windows amd64. The test CI stays on the lock.
 - **Pins:** `pins.yml` checks weekly for a newer stable Neo4j Community release and a newer Temurin JRE of the Java major Neo4j requires, and opens a pull request on `bot/pins` that updates `graph_bench/databases/pins.py`.
-- **graph-bench README:** a scheduled `full` run regenerates its results section and opens a bot PR.
+- **graph-bench README:** a scheduled `full` run regenerates its results section and `docs/results.md` and opens
+  a bot PR.
+- **CI roster and local snapshot (user, 2026-10-31):** CI measures Grafeo against a fixed roster
+  (`catalog.CI_DATABASES`: NeuG, LadybugDB, TuringDB, Oxigraph, DuckDB + DuckPGQ). The other databases come from
+  `results/local/results.json`, a committed run of all ten in one Linux container on the dev box
+  (`.github/scripts/local-bench.sh`), refreshed by hand. The README job merges its non-roster databases in
+  (`merge --local`): the CI columns first, the local ones after, each marked `†` with a footnote naming the
+  snapshot's date and machine. Budgets and ranks stay within each source. `graph-bench local-check` raises a
+  notice in that job when an installed version differs from the snapshot's.
 - **grafeo README:** at each grafeo release (from 0.6.1), the pre-release checklist runs `setup --grafeo <wheel>`, `bench --selection full` and `report --format summary` locally, and commits the block on grafeo's release branch. No automation writes to grafeo.
 - **Workflow switch-on:** the grafeo-side workflow trigger is gone; the graph-bench workflow is enabled once the adapters and the answer check have settled.
 
