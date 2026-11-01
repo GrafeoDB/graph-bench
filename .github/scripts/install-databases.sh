@@ -5,11 +5,16 @@
 # shows that database as failed ("not installed") instead of the whole job stopping. uv.lock is not touched, and
 # uv never picks a pre-release. Wheels only (--only-binary :all:): a package with no wheel for this platform fails at
 # once with uv's reason, instead of falling back to a source build that needs a compiler and may not finish.
+# GRAFEO_VERSION, when set, pins grafeo to that exact version (the workflows resolve it once per run, so every
+# per-database job measures the same grafeo); unset, grafeo too goes to its newest stable release.
 set -u
 uv run --no-sync graph-bench packages > database-requirements.txt
 : > install-failures.txt
 while IFS= read -r requirement; do
   [ -n "$requirement" ] || continue
+  if [ -n "${GRAFEO_VERSION:-}" ] && [ "${requirement%% *}" = "grafeo" ]; then
+    requirement="grafeo==$GRAFEO_VERSION${requirement#grafeo}"
+  fi
   if uv pip install --upgrade --only-binary :all: "$requirement" > install-attempt.log 2>&1; then
     echo "installed: $requirement"
   else

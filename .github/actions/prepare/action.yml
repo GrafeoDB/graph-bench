@@ -1,5 +1,6 @@
 # The steps every benchmark job shares, after `actions/checkout`: uv and Python, the locked sync, the databases at
-# their newest stable releases (grafeo from PyPI included), the dataset cache and the benchmark plan.
+# their newest stable releases (grafeo from PyPI included, or the exact `grafeo-version` given), the dataset cache
+# and the benchmark plan.
 # Used by bench.yml (both jobs) and release.yml, so the install steps live in one place.
 name: Prepare the benchmark run
 description: Install graph-bench and the databases, and prepare the datasets of a selection.
@@ -7,6 +8,10 @@ inputs:
   selection:
     description: "The selection to prepare: push or full."
     required: true
+  grafeo-version:
+    description: "The exact grafeo version to install, resolved once per run; default: the newest stable."
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -20,9 +25,12 @@ runs:
       # The lockfile keeps the repo reproducible; a benchmark run measures the databases as released today
       # (grafeo from PyPI too). One package at a time, so a package with no build for this runner (falkordblite
       # needs glibc 2.38, Ubuntu 22.04 has 2.35) does not stop the job: it is logged and its database shows as
-      # failed. uv never picks a pre-release here, and uv.lock is not touched.
+      # failed. uv never picks a pre-release here, and uv.lock is not touched. With `grafeo-version`, grafeo is
+      # installed at exactly that version, so every leg of a run measures the same grafeo.
       run: bash .github/scripts/install-databases.sh
       shell: bash
+      env:
+        GRAFEO_VERSION: ${{ inputs.grafeo-version }}
     - name: Dataset cache key
       id: data-key
       run: echo "key=$(uv run --no-sync graph-bench data key --selection ${{ inputs.selection }})" >> "$GITHUB_OUTPUT"
