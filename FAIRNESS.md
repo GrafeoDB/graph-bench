@@ -76,19 +76,21 @@ benchmark, servers included, is kept in [legacy/](legacy/README.md).
    - **Load ceiling, 5 min, per Load row.** Each Load row (one dataset in one store, such as snb in the graph
      store or snb in the RDF store) has its own ceiling. A load of it (the Load row's own, the Memory and Disk
      record's, or the one the queries run on) not finished 5 minutes after it started is stopped: it is ⏱ ("load
-     over 5 min"), and so is every case that reads that Load row's data for that database, the dataset's Load
-     (query language) row and its Memory and Disk record, none of them run. The other Load rows of the same
-     dataset (another store) are not affected.
-   - **Time box, 5 s.** A case does its warm-ups, then timed runs up to the selection's count, but starts no
-     further timed run once its timed runs total 5 s and at least 3 ran (loads: at least 1). Fast cases keep all
-     their runs; the recorded number of runs is what ran, and the median is over those. In
-     `graph-bench codspeed` the same 5 s box goes to pytest-codspeed (`--codspeed-max-time`, with
-     `--codspeed-max-rounds` at the selection's iteration count, so fast cases stop there too) for the queries, and
-     a write gets as many rounds as 5 s hold at its preflight's duration (at least 3).
+     over 5 min"), and so is every case that reads that Load row's data for that database and its Memory and Disk
+     record, and for a graph-store load the dataset's Load (query language) row (that row exists only for the
+     graph store), none of them run. The other Load rows of the same dataset (another store) are not affected.
+   - **Time box, 5 s.** In `graph-bench bench` a case or load does its warm-ups, then timed runs up to the
+     selection's count, but starts no further timed run once its timed runs total 5 s and at least 3 ran (loads:
+     at least 1). Fast cases keep all their runs; the recorded number of runs is what ran, and the median is over
+     those. In `graph-bench codspeed` the same 5 s box goes to pytest-codspeed (`--codspeed-max-time`, with
+     `--codspeed-max-rounds` at the selection's iteration count, so fast cases stop there too) for the queries
+     and algorithms, and a write gets as many rounds as 5 s hold at its preflight's duration (at least 3).
+     CodSpeed loads have no box: they run the selection's fixed number of load rounds.
    - **Run deadline (CI only).** `--deadline-s`, counted from the start of the run (CI: 48 min), is the same for
      every database: once it has passed nothing new starts, a case or load already running keeps its own ceiling,
-     and every case not yet run is ⏱ ("run deadline: 48 min"), so a run that would not fit leaves results. The Startup row is atomic and runs first, so a deadline that passes
-     during it waits for the row to end.
+     and every supported case not yet run is ⏱ ("run deadline: 48 min"; an unsupported one stays ⊘), so a run
+     that would not fit leaves results. The Startup row is atomic and runs first, so a deadline that passes during
+     it waits for the row to end.
    - **Only these rules stop a case.** Database-side query and socket timeouts are disabled or raised wherever the
      setting is public (FalkorDB's client socket timeout, Grafeo's 30 s query timeout from 0.6.1 on), so no client
      or engine default fails a case with its own ✗; the other databases have no default timeout below the ceiling.
@@ -103,10 +105,11 @@ benchmark, servers included, is kept in [legacy/](legacy/README.md).
   box, in one Linux container, with the full selection (CONTRIBUTING.md). That run applies the same rules to all
   ten: the same ceilings, the same budget rule over all ten, the same answer checks.
 - **Two sources are never compared.** Every result carries its source (`ci` or `local`, with the run's date and
-  machine). The budget rule runs within each source, and every rank (bold in the README, Grafeo's counts in the
-  summary block) is within one source: a timing from the dev box is never set against one from the CI runner. The
-  README puts the CI columns first and the local ones after, each marked `†` with a footnote naming the snapshot's
-  date and machine, and `docs/results.md` lists every database's version, source, machine and run date.
+  machine). The budget rule runs within each source (the merge applies it to the CI entries only; the snapshot keeps
+  the verdicts of its own run over all ten), and every rank (bold in the README, Grafeo's counts in the summary block)
+  is within one source: a timing from the dev box is never set against one from the CI runner. The README puts the CI
+  columns first and the local ones after, each marked `†` with a footnote naming the snapshot's date and machine, and
+  `docs/results.md` lists every database's version, source, machine and run date.
 - **A roster database is never taken from the snapshot.** One whose CI job left no results shows as ✗ "no
   results", not with its local timing, and `merge --local` takes only databases outside `catalog.CI_DATABASES`.
 - **The snapshot is refreshed when versions change.** CI installs the newest stable release of every database,
