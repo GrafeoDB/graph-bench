@@ -7,6 +7,7 @@
 # Usage: heartbeat.sh OUT_DIR [BENCH_LOG]   (started in the background next to `graph-bench bench`)
 # Pushes through the checkout's credentials (needs `contents: write`). It never fails the job: every error is
 # reported once on stderr and the loop goes on. HEARTBEAT_ONCE=1 writes and pushes a single beat (tests).
+# Process arguments are redacted after a credential flag, since bot/heartbeat is public.
 set -u
 
 out=${1:?usage: heartbeat.sh OUT_DIR [BENCH_LOG]}
@@ -21,13 +22,35 @@ warned=""
 export GIT_AUTHOR_NAME="graph-bench heartbeat" GIT_AUTHOR_EMAIL="heartbeat@graph-bench.invalid"
 export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME" GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
 
+# `rss etime args` lines, largest first; HEARTBEAT_PS names a file to read them from instead (tests).
+processes() {
+  if [ -n "${HEARTBEAT_PS:-}" ]; then cat "$HEARTBEAT_PS"; else ps -eo rss=,etime=,args= --sort=-rss 2>/dev/null; fi
+}
+
 beat() {
   echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) run ${GITHUB_RUN_ID:-local} attempt ${GITHUB_RUN_ATTEMPT:-1} job ${GITHUB_JOB:-local}"
   echo "load: $(cut -d' ' -f1-3 /proc/loadavg 2>/dev/null)"
   free -m 2>/dev/null | sed -n '1,2p'
   df -h / "${RUNNER_TEMP:-/tmp}" "$out" 2>/dev/null | awk '!seen[$0]++'
   echo "largest processes (RSS MB, elapsed, command):"
-  ps -eo rss=,etime=,args= --sort=-rss 2>/dev/null | head -5 | awk '{printf "  %d %s", $1 / 1024, $2; for (i = 3; i <= NF && i < 9; i++) printf " %s", substr($i, 1, 80); print ""}'
+  # The branch is public: an argument after a credential flag (the runner's --jitconfig) and any long base64-like
+  # string are replaced by [redacted].
+  processes | head -5 | awk '
+    {
+      printf "  %d %s", $1 / 1024, $2
+      for (i = 3; i <= NF && i < 9; i++) {
+        arg = $i
+        if (secret || arg ~ /^[A-Za-z0-9+\/=_-]{40,}$/) arg = "[redacted]"
+        secret = 0
+        if (arg ~ /^--?(jitconfig|token|password|secret)/) {
+          if (arg ~ /=/) sub(/=.*/, "=[redacted]", arg)
+          else secret = 1
+        }
+        printf " %s", substr(arg, 1, 80)
+      }
+      secret = 0
+      print ""
+    }'
   for log in "$out"/raw/*/worker.jsonl; do
     [ -f "$log" ] || continue
     echo "$(basename "$(dirname "$log")"): $(tail -n 1 "$log" | cut -c1-240)"
