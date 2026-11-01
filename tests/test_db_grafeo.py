@@ -1,5 +1,6 @@
 """Grafeo adapter: the push selection agrees with the references, except the recorded known disagreements."""
 
+import json
 import re
 from collections.abc import Callable
 from pathlib import Path
@@ -14,9 +15,11 @@ from graph_bench.datasets import cache, rdf
 from graph_bench.results import Results
 from graph_bench.types import Model
 from tests.conftest import (
+    GRAFEO_SKIP_REASON,
     assert_loads_agree,
     assert_resources_ok,
     assert_startup_agrees,
+    grafeo_is_measured,
     not_yet_implemented,
     run_push,
     warn_if_fixed,
@@ -27,6 +30,10 @@ MODEL_GATE = re.compile(f"model ({'|'.join(get_args(Model))}) not supported")
 
 pytestmark = pytest.mark.grafeo
 
+# The database-agreement tests (the push run: push, startup, load, resources) run only on a grafeo graph-bench
+# measures (`grafeo_is_measured`); the unit tests below them run on any.
+measured = pytest.mark.skipif(not grafeo_is_measured(), reason=GRAFEO_SKIP_REASON)
+
 
 @pytest.fixture(scope="module")
 def push(push_data_dir: Path, tmp_path_factory: pytest.TempPathFactory) -> Results:
@@ -34,6 +41,7 @@ def push(push_data_dir: Path, tmp_path_factory: pytest.TempPathFactory) -> Resul
     return run_push("grafeo", tmp_path_factory.mktemp("push-grafeo"), push_data_dir, 60)
 
 
+@measured
 def test_grafeo_push_agrees(push: Results, known_disagreements: Callable[[str], set[str]]) -> None:
     results = push
     known = known_disagreements("grafeo")
@@ -56,19 +64,43 @@ def test_grafeo_push_agrees(push: Results, known_disagreements: Callable[[str], 
     assert not failing, "\n".join(failing)
 
 
+@measured
 def test_grafeo_startup_agrees(push: Results) -> None:
     """The Startup row: every child opens an empty database and answers the probe as expected."""
     assert_startup_agrees(push, "grafeo")
 
 
+@measured
 def test_grafeo_load_unchanged(push: Results) -> None:
     """The loads still load the whole dataset (their counts agree) with `open_empty` split out."""
     assert_loads_agree(push, "grafeo")
 
 
+@measured
 def test_grafeo_resources_ok(push: Results) -> None:
     """Memory and Disk: one ok, agreeing record per load with ordered readings; in memory."""
     assert_resources_ok(push, "grafeo", on_disk=False)
+
+
+class _Dist:
+    """A stand-in for an installed distribution: its version and, for a file install, its `direct_url.json`."""
+
+    def __init__(self, version: str, url: str | None = None) -> None:
+        self.version = version
+        self.url = url
+
+    def read_text(self, name: str) -> str | None:
+        assert name == "direct_url.json"
+        return None if self.url is None else json.dumps({"url": self.url, "archive_info": {}})
+
+
+def test_grafeo_is_measured_by_its_distribution() -> None:
+    """A file install is a 0.6.1-branch build (it reports 0.6.0): measured; a registry 0.6.0 is not, 0.6.1 is."""
+    branch = _Dist("0.6.0", "file:///D:/gb-wheels-e8b04ed/grafeo-0.6.0-cp312-abi3-win_amd64.whl")
+    assert grafeo_is_measured(branch)  # type: ignore[arg-type]
+    assert not grafeo_is_measured(_Dist("0.6.0"))  # type: ignore[arg-type]
+    assert grafeo_is_measured(_Dist("0.6.1"))  # type: ignore[arg-type]
+    assert not grafeo_is_measured(_Dist("0.6.0", "https://example.org/grafeo-0.6.0.whl"))  # type: ignore[arg-type]
 
 
 def test_grafeo_single_thread_env() -> None:
@@ -159,3 +191,25 @@ def test_grafeo_rdf_load_reads_the_prepared_file(
         assert db.counts() == (ds.node_count, ds.edge_count)
     finally:
         db.close()
+
+
+@pytest.mark.parametrize("public", [True, False], ids=["query_timeout", "no-setting"])
+def test_grafeo_runs_without_a_query_timeout(public: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only the harness's rules stop a case: a grafeo whose constructor takes `query_timeout` (0.6.1 on) gets None,
+    no limit; one without the setting (0.6.0) is opened as before."""
+    from graph_bench.databases import grafeo as adapter
+
+    calls: list[dict[str, Any]] = []
+
+    def with_timeout(*, query_timeout: Any = ...) -> str:
+        calls.append({"query_timeout": query_timeout})
+        return "db"
+
+    def without(**kwargs: Any) -> str:
+        calls.append(kwargs)
+        return "db"
+
+    monkeypatch.setattr(adapter.grafeo, "GrafeoDB", with_timeout if public else without)
+    db = get_database("grafeo")(tmp_path, 1)
+    db.open_empty()
+    assert calls == ([{"query_timeout": None}] if public else [{}])

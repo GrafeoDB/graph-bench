@@ -1,5 +1,6 @@
 """Grafeo, embedded and in memory: batch loading, Cypher, SQL/PGQ and SPARQL queries and the native algorithms."""
 
+import inspect
 from collections.abc import Iterator, Mapping
 from itertools import islice
 from pathlib import Path
@@ -102,8 +103,17 @@ class GrafeoDatabase(Database):
         return DatabaseInfo(self.name, grafeo.__version__, "in-process", True, note, "in-memory")
 
     def open_empty(self) -> None:
-        """An empty in-memory `grafeo.GrafeoDB()`: what both loads do before their first data."""
-        self.db = grafeo.GrafeoDB()
+        """An empty in-memory `grafeo.GrafeoDB()`: what both loads do before their first data.
+
+        Without a query timeout, so only the harness's rules stop a case (FAIRNESS.md rule 9), not Grafeo's default
+        of 30 s (✗ `GRAFEO-Q003`). grafeo's package README (its PyPI project description,
+        https://pypi.org/project/grafeo/) documents `GrafeoDB("./path", query_timeout=5)  # queries fail after 5 s
+        (None: no limit)`. grafeo 0.6.0 has no such argument (no public setting); it keeps its default there.
+        """
+        if "query_timeout" in inspect.signature(grafeo.GrafeoDB).parameters:
+            self.db = grafeo.GrafeoDB(query_timeout=None)
+        else:
+            self.db = grafeo.GrafeoDB()
 
     def load(self, dataset: Dataset) -> None:
         self.open_empty()

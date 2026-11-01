@@ -1,4 +1,6 @@
 import dataclasses
+import importlib.metadata
+import json
 import re
 import warnings
 from collections.abc import Callable, Iterator, Mapping
@@ -6,6 +8,7 @@ from pathlib import Path
 from typing import get_args
 
 import pytest
+from packaging.version import Version
 
 from graph_bench.datasets import cache
 from graph_bench.results import Entry, Resource, Results
@@ -18,6 +21,25 @@ from graph_bench.types import Model
 HANG_TIMEOUT_S = 12.0
 
 KNOWN_DISAGREEMENTS = Path(__file__).resolve().parent.parent / "docs" / "known-disagreements.md"
+
+
+GRAFEO_SKIP_REASON = "graph-bench 0.3.0 measures grafeo 0.6.1 and later; local 0.6.1 builds until it is released"
+
+
+def grafeo_is_measured(dist: importlib.metadata.Distribution | None = None) -> bool:
+    """Whether the installed grafeo (or `dist`) is one graph-bench 0.3.0 measures, so its agreement tests run.
+
+    A grafeo installed from a local file (its dist-info holds a `direct_url.json` whose url starts with `file:`)
+    is a 0.6.1-branch build, which still reports version 0.6.0: measured. A registry install is measured from
+    version 0.6.1 on, so PyPI 0.6.0 (which CI installs from uv.lock until 0.6.1 is released) is not, and the skip
+    turns itself off once 0.6.1 is on PyPI.
+    """
+    if dist is None:
+        dist = importlib.metadata.distribution("grafeo")
+    direct = dist.read_text("direct_url.json")
+    if direct and str(json.loads(direct).get("url", "")).startswith("file:"):
+        return True
+    return Version(dist.version) >= Version("0.6.1")
 
 
 def resources_off(mp: pytest.MonkeyPatch, name: str = "push") -> None:
