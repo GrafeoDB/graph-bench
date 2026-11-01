@@ -151,6 +151,8 @@ benchmark moves to `legacy/` untouched and is deleted once the new comparison re
   database's fastest documented bulk load, its vendor-recommended API, checked answers and the budget rule.
 - **README and CONTRIBUTING**: rewritten for the new comparison and for adding a database adapter.
 - **Dependencies**: the extras are `grafeo`, `ladybug`, `embedded` (both), `bench` (pytest-codspeed) and `dev`.
+- **Release post floor**: the Discord release post skips grafeo releases below 0.6.1, the first one graph-bench
+  0.3.0 measures (`graph_bench.release.MEASURED_FROM`); `force` does not override it.
 
 ### Removed
 
