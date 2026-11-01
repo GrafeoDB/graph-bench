@@ -1,7 +1,7 @@
 """The worker: runs one database over a selection in its own process and streams JSON lines.
 
 `python -m graph_bench.runner.worker --db NAME --selection S --threads (1|all) --workdir DIR --out FILE.jsonl
-[--skip ID ...] [--budget ID=SECONDS ...] [--case-timeout SECONDS]`
+[--skip ID ...] [--budget ID=SECONDS ...] [--case-timeout SECONDS] [--deadline-at EPOCH]`
 
 Lines, appended to `--out` and flushed one by one:
 
@@ -18,7 +18,10 @@ Lines, appended to `--out` and flushed one by one:
   cases run on (after the Load row's `start` line, if reported), so a supervisor can stop a load at the load ceiling
   and knows which cases it takes with it;
 - `{"kind": "entry", "id": ..., "status": ..., ...}` with a case's result, a load's `load_ns` and its count
-  check (`answer` and `detail`, see `load_entry`), or the startup's (see `runner.startup.startup_entry`).
+  check (`answer` and `detail`, see `load_entry`), or the startup's (see `runner.startup.startup_entry`);
+- `{"kind": "deadline"}`, last, when the run deadline (`--deadline-at`, a `time.time()` value) had passed before a
+  case, a load, a Load (query language) entry or the startup could start: the worker starts nothing more and
+  returns, and the supervisor marks every id not yet recorded ⏱ "run deadline".
 
 The order: the startup first (before any load, after `Database.provision()`, untimed), then per (dataset, store,
 scale) its load, its read cases, its write cases and, once that instance is released, its Load (query language)
@@ -623,6 +626,21 @@ class LoadOverCeiling(Exception):
     """A load (with its count check) ended past its deadline: the load ceiling (Task T)."""
 
 
+class DeadlinePassed(Exception):
+    """The run deadline had passed before a case, load or startup row could start: the worker stops (`run`)."""
+
+
+def _now() -> float:
+    """The wall clock the run deadline is compared with (`time.time()`, as the supervisor passes it)."""
+    return time.time()
+
+
+def _check_deadline(deadline_at: float | None) -> None:
+    """Raise `DeadlinePassed` once the run deadline has passed; called before anything new starts."""
+    if deadline_at is not None and _now() >= deadline_at:
+        raise DeadlinePassed
+
+
 def _boxed(times: list[int]) -> bool:
     """Whether a load's time box is full: at least `MIN_LOAD_ITERATIONS` loads, together `TIME_BOX_S` or more."""
     return len(times) >= MIN_LOAD_ITERATIONS and sum(times) >= TIME_BOX_S * 1e9
@@ -828,6 +846,7 @@ class _Settings:
     case_timeout_s: float
     case_ceiling_s: float = CASE_CEILING_S
     load_ceiling_s: float = LOAD_CEILING_S
+    deadline_at: float | None = None
 
 
 def start_case(
@@ -860,7 +879,9 @@ def start_case(
 
 
 def _run_case(case: Case, db: Database, base: Path, settings: _Settings, emit: Emit) -> None:
-    """Preflight, then time the case within its limits; its ceiling counts from its `start` line."""
+    """Preflight, then time the case within its limits; its ceiling counts from its `start` line. Past the run
+    deadline it does not start (`DeadlinePassed`)."""
+    _check_deadline(settings.deadline_at)
     budget = settings.budgets.get(case.bench_id, settings.case_timeout_s)
     deadline = time.monotonic() + settings.case_ceiling_s
     pf, entry = start_case(case, db, base, settings.out, budget, emit)
@@ -911,87 +932,110 @@ def run(
     case_ceiling_s: float = CASE_CEILING_S,
     load_ceiling_s: float = LOAD_CEILING_S,
     startup_timeout_s: float = STARTUP_CHILD_TIMEOUT_S,
+    deadline_at: float | None = None,
 ) -> None:
-    """Run every case of the selection for one database and thread setting, appending JSON lines to `out`."""
+    """Run every case of the selection for one database and thread setting, appending JSON lines to `out`.
+
+    With `deadline_at` (a `time.time()` value) nothing new starts once it has passed: the worker writes a
+    `deadline` line and returns.
+    """
     sel = catalog.selection(selection_name)
     db_cls = get_database(db_name)
-    settings = _Settings(sel, out, budgets or {}, case_timeout_s, case_ceiling_s, load_ceiling_s)
+    settings = _Settings(sel, out, budgets or {}, case_timeout_s, case_ceiling_s, load_ceiling_s, deadline_at)
     out.parent.mkdir(parents=True, exist_ok=True)
     workdir.mkdir(parents=True, exist_ok=True)
     with out.open("a", encoding="utf-8", newline="\n") as fh:
         emit = emitter(fh)
         emit(database_line(db_cls, workdir, threads))
+        try:
+            _run_all(db_cls, db_name, sel, threads, workdir, skip, settings, emit, startup_timeout_s)
+        except DeadlinePassed:
+            emit({"kind": "deadline"})
 
-        startup_id = catalog.startup_id(db_name, threads)
-        if startup_id in catalog.startup_ids(sel.name, [db_name]) and startup_id not in skip:
-            iterations = sel.startup_iterations
-            run_startup(db_cls, db_name, threads, iterations, workdir, startup_id, emit, startup_timeout_s)
 
-        # Every (dataset, store, scale) with a supported item gets a load; the selection's other loads are ⊘, as
-        # in `catalog.load_ids`.
-        groups: dict[tuple[str, Store, str], list[Case]] = {}
-        if threads in sel.threads:
-            for dataset, store in catalog.load_keys(sel.name, db_cls.models):
-                for scale in sel.scales:
-                    groups[(dataset, store, scale)] = []
-        for case in catalog.cases(sel.name, [db_name]):
-            if case.threads != threads or case.bench_id in skip:
-                continue
-            item = case.item
-            if item.supported_by(db_cls.models):
-                groups[(item.dataset, item.store, case.scale)].append(case)
-            else:
-                emit(case_entry(case, status="not_supported", error=f"model {item.model} not supported"))
+def _run_all(
+    db_cls: type[Database],
+    db_name: str,
+    sel: Selection,
+    threads: int | None,
+    workdir: Path,
+    skip: frozenset[str],
+    settings: _Settings,
+    emit: Emit,
+    startup_timeout_s: float,
+) -> None:
+    """`run` after the `database` line: the startup row, then each dataset's loads and cases."""
+    startup_id = catalog.startup_id(db_name, threads)
+    if startup_id in catalog.startup_ids(sel.name, [db_name]) and startup_id not in skip:
+        _check_deadline(settings.deadline_at)
+        iterations = sel.startup_iterations
+        run_startup(db_cls, db_name, threads, iterations, workdir, startup_id, emit, startup_timeout_s)
 
-        load_ids: dict[tuple[str, Store, str], str] = {}
-        if "load" in sel.categories and threads in sel.threads:
-            for (dataset, store), model in catalog.all_load_keys(sel.name).items():
-                for scale in sel.scales:
-                    key = (dataset, store, scale)
-                    load_id = catalog.load_id(dataset, db_name, scale, threads, store)
-                    if key in groups:
-                        load_ids[key] = load_id
-                    elif load_id not in skip:
-                        emit(unsupported_load_entry(load_id, model))
-        load_ql_ids: dict[tuple[str, Store, str], str] = {}
-        if "load_ql" in sel.categories and threads in sel.threads:
-            for dataset, model in catalog.load_ql_keys(sel.name).items():
-                for scale in sel.scales:
-                    key = (dataset, "graph", scale)
-                    load_ql_id = catalog.load_ql_id(dataset, db_name, scale, threads)
-                    if load_ql_id in skip:
-                        continue
-                    if key in groups:
-                        load_ql_ids[key] = load_ql_id
-                    else:
-                        emit(unsupported_load_entry(load_ql_id, model))
-        reported = {key: load_id for key, load_id in load_ids.items() if load_id not in skip}
-        # An answer-only fixture last: its load is unreported (no `start` line), so a crash while loading it leaves
-        # no open id, and the resume rule then fails only what is still unrecorded, its own cases.
-        order = sorted(groups, key=lambda key: (key[0] in catalog.ANSWER_ONLY_DATASETS, key))
-        needed = [key for key in order if groups[key] or key in reported or key in load_ql_ids]
-        if not needed:
-            return
-        datasets = cache.prepare(sel.name)
-        base = cache.data_dir() / cache.dataset_key(sel.name)
-        setup_error = prepare_environment(db_cls)
-        for key in needed:
-            dataset, store, scale = key
-            data = datasets[(dataset, scale)]
-            _run_dataset(
-                db_cls,
-                data,
-                store,
-                reads_first(groups[key]),
-                reported.get(key),
-                threads,
-                workdir,
-                base,
-                settings,
-                emit,
-                setup_error,
-                load_ql_ids.get(key),
-            )
+    # Every (dataset, store, scale) with a supported item gets a load; the selection's other loads are ⊘, as
+    # in `catalog.load_ids`.
+    groups: dict[tuple[str, Store, str], list[Case]] = {}
+    if threads in sel.threads:
+        for dataset, store in catalog.load_keys(sel.name, db_cls.models):
+            for scale in sel.scales:
+                groups[(dataset, store, scale)] = []
+    for case in catalog.cases(sel.name, [db_name]):
+        if case.threads != threads or case.bench_id in skip:
+            continue
+        item = case.item
+        if item.supported_by(db_cls.models):
+            groups[(item.dataset, item.store, case.scale)].append(case)
+        else:
+            emit(case_entry(case, status="not_supported", error=f"model {item.model} not supported"))
+
+    load_ids: dict[tuple[str, Store, str], str] = {}
+    if "load" in sel.categories and threads in sel.threads:
+        for (dataset, store), model in catalog.all_load_keys(sel.name).items():
+            for scale in sel.scales:
+                key = (dataset, store, scale)
+                load_id = catalog.load_id(dataset, db_name, scale, threads, store)
+                if key in groups:
+                    load_ids[key] = load_id
+                elif load_id not in skip:
+                    emit(unsupported_load_entry(load_id, model))
+    load_ql_ids: dict[tuple[str, Store, str], str] = {}
+    if "load_ql" in sel.categories and threads in sel.threads:
+        for dataset, model in catalog.load_ql_keys(sel.name).items():
+            for scale in sel.scales:
+                key = (dataset, "graph", scale)
+                load_ql_id = catalog.load_ql_id(dataset, db_name, scale, threads)
+                if load_ql_id in skip:
+                    continue
+                if key in groups:
+                    load_ql_ids[key] = load_ql_id
+                else:
+                    emit(unsupported_load_entry(load_ql_id, model))
+    reported = {key: load_id for key, load_id in load_ids.items() if load_id not in skip}
+    # An answer-only fixture last: its load is unreported (no `start` line), so a crash while loading it leaves
+    # no open id, and the resume rule then fails only what is still unrecorded, its own cases.
+    order = sorted(groups, key=lambda key: (key[0] in catalog.ANSWER_ONLY_DATASETS, key))
+    needed = [key for key in order if groups[key] or key in reported or key in load_ql_ids]
+    if not needed:
+        return
+    datasets = cache.prepare(sel.name)
+    base = cache.data_dir() / cache.dataset_key(sel.name)
+    setup_error = prepare_environment(db_cls)
+    for key in needed:
+        dataset, store, scale = key
+        data = datasets[(dataset, scale)]
+        _run_dataset(
+            db_cls,
+            data,
+            store,
+            reads_first(groups[key]),
+            reported.get(key),
+            threads,
+            workdir,
+            base,
+            settings,
+            emit,
+            setup_error,
+            load_ql_ids.get(key),
+        )
 
 
 def _run_dataset(
@@ -1016,6 +1060,7 @@ def _run_dataset(
     """
     over = False
     if cases or load_id is not None:
+        _check_deadline(settings.deadline_at)
         over = _load_and_run(
             db_cls, dataset, store, cases, load_id, threads, workdir, base, settings, emit, setup_error
         )
@@ -1024,6 +1069,7 @@ def _run_dataset(
             emit({"kind": "start", "id": load_ql_id})
             emit({"kind": "entry", "id": load_ql_id, "status": "timeout", "error": load_over(settings.load_ceiling_s)})
             return
+        _check_deadline(settings.deadline_at)
         iterations = settings.selection.load_iterations
         run_load_ql(
             db_cls,
@@ -1160,6 +1206,13 @@ def _parser() -> argparse.ArgumentParser:
         metavar="SECONDS",
         help="How long a startup child may take to answer before it is killed.",
     )
+    parser.add_argument(
+        "--deadline-at",
+        type=float,
+        default=None,
+        metavar="EPOCH",
+        help="Run deadline (time.time()): no case, load or startup row starts past it; default: none.",
+    )
     return parser
 
 
@@ -1180,6 +1233,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             case_ceiling_s=args.case_ceiling,
             load_ceiling_s=args.load_ceiling,
             startup_timeout_s=args.startup_timeout,
+            deadline_at=args.deadline_at,
         )
     finally:
         if own_workdir:

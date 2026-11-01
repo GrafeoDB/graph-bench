@@ -590,6 +590,65 @@ def test_only_queries_and_algorithms_seed_the_first_run_with_the_preflight(
     assert seeds == {"query": 2.0, "write": None}
 
 
+def _deadline_worker(
+    push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, keep: set[str], deadline_at: float
+) -> tuple[Lines, list[float]]:
+    """`worker.run` in this process on the fake database, every id but `keep` skipped, with `worker._now` a clock
+    the test moves: it reads 1000 until the first case's entry is written, then 2000. Returns the lines in order."""
+    monkeypatch.setenv("GRAPH_BENCH_DATA_DIR", str(push_data_dir))
+    monkeypatch.setenv("GRAPH_BENCH_FAKE", "")
+    clock = [1000.0]
+    monkeypatch.setattr(worker, "_now", lambda: clock[0])
+    lines: Lines = []
+    real = worker.emitter
+
+    def emitter(fh: Any) -> worker.Emit:
+        emit = real(fh)
+
+        def hooked(line: dict[str, Any]) -> None:
+            emit(line)
+            lines.append(line)
+            if line["kind"] == "entry" and "test_snb_is" in line["id"]:
+                clock[0] = 2000.0  # the deadline passes as the case writes its entry
+
+        return hooked
+
+    monkeypatch.setattr(worker, "emitter", emitter)
+    ids = catalog.all_ids("push", ["fake"])
+    assert keep <= set(ids)
+    out = tmp_path / "w.jsonl"
+    worker.run(
+        "fake", "push", 1, workdir=tmp_path / "work", out=out, skip=frozenset(set(ids) - keep), deadline_at=deadline_at
+    )
+    assert lines == [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
+    return lines, clock
+
+
+def test_worker_starts_nothing_past_the_deadline(
+    push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The deadline passes as a case writes its entry, the moment the supervisor may read that entry and the next
+    `start` in one batch. The worker starts nothing more (no case, no load of the dataset or of another one, no
+    Load (query language) entry): it writes a `deadline` line and returns, and the supervisor marks the rest."""
+    load_snb = catalog.load_id("snb", "fake", "small", 1)
+    keep = {_id("snb_is2"), _id("snb_is3"), load_snb, catalog.load_id("snb", "fake", "small", 1, "rdf")}
+    keep.add(catalog.load_ql_id("snb", "fake", "small", 1))
+    lines, _ = _deadline_worker(push_data_dir, tmp_path, monkeypatch, keep, deadline_at=1500.0)
+    starts = [line["id"] for line in lines if line["kind"] == "start"]
+    assert starts[0] == load_snb and len(starts) == 2 and starts[1] in (_id("snb_is2"), _id("snb_is3")), starts
+    ended = next(i for i, line in enumerate(lines) if line["kind"] == "entry" and line["id"] == starts[1])
+    assert lines[ended + 1 :] == [{"kind": "deadline"}]
+
+
+def test_worker_past_the_deadline_starts_no_startup_row(
+    push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    keep = {catalog.startup_id("fake", 1), _id("snb_is2"), catalog.load_id("snb", "fake", "small", 1)}
+    lines, _ = _deadline_worker(push_data_dir, tmp_path, monkeypatch, keep, deadline_at=500.0)
+    assert [line["kind"] for line in lines if line["kind"] in ("start", "load", "deadline")] == ["deadline"]
+    assert lines[0]["kind"] == "database"
+
+
 # Load (query language) ------------------------------------------------------------------------------------------
 
 
