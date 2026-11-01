@@ -494,6 +494,9 @@ def test_local_bench_script_runs_all_ten_in_one_linux_container() -> None:
     # A failed run still copies out what it left, before the EXIT trap removes the container, and keeps its status.
     assert '"$IMAGE" bash -c "$inside" || status=$?' in script
     assert script.index("|| status=$?") < script.index("$DOCKER cp") < script.rindex('exit "$status"')
+    # ...but never over the committed snapshot: a failed run's file is results.partial.json.
+    assert "results/local/results.partial.json" in script
+    assert script.index("results.partial.json") < script.index("$DOCKER cp")
     ignore = Path(__file__).resolve().parent.parent / ".gitignore"
     lines = ignore.read_text(encoding="utf-8").splitlines()
     assert lines.index("results/*") < lines.index("!results/local/") < lines.index("!results/local/results.json")

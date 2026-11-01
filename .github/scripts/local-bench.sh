@@ -57,8 +57,15 @@ $DOCKER run --name "$NAME" --platform linux/amd64 \
   "$IMAGE" bash -c "$inside" || status=$?
 
 mkdir -p "$root/results/local"
-if (cd "$root" && $DOCKER cp "$NAME:/work/out/results.json" results/local/results.json); then
-  echo "wrote $root/results/local/results.json; commit it, then regenerate the README (bench.yml, readme-results)"
+# A failed run never replaces the committed snapshot: what it left goes next to it, for inspection.
+target=results/local/results.json
+[ "$status" -eq 0 ] || target=results/local/results.partial.json
+if (cd "$root" && $DOCKER cp "$NAME:/work/out/results.json" "$target"); then
+  if [ "$status" -eq 0 ]; then
+    echo "wrote $root/$target; commit it, then regenerate the README (bench.yml, readme-results)"
+  else
+    echo "local-bench: the run failed; its partial results are in $root/$target (not a snapshot, do not commit)" >&2
+  fi
 else
   echo "local-bench: the run left no results.json" >&2
   [ "$status" -ne 0 ] || status=1
