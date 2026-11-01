@@ -860,3 +860,46 @@ def test_running_case_keeps_its_ceiling_past_the_deadline(tmp_path: Path) -> Non
     assert time.monotonic() - started > 2.4  # waited for the case, well past the 1 s deadline
     assert attempt.deadline
     assert (run.recorded[bench_id].status, run.recorded[bench_id].error) == ("ok", None)
+
+
+def _expired_run(tmp_path: Path, runner: supervisor.Runner = supervisor.WORKER) -> supervisor._Run:
+    run = supervisor._Run(catalog.selection("push"), tmp_path, tmp_path, 30.0, _results([]), runner)
+    run.deadline_s, run.deadline_at = 60.0, time.monotonic() - 1
+    return run
+
+
+def test_codspeed_failed_session_marks_the_skipped_cases_run_deadline(tmp_path: Path) -> None:
+    """A pytest session that exits 1 because a case failed, then skipped the rest at the deadline: the failed case
+    keeps its verdict, the skipped ones are timeout "run deadline". A bench worker that exits 0 without results
+    stays "exited without a result"."""
+    meta = supervisor._expected(catalog.selection("push"), "fake", 1)
+    failed_id = _id("snb_is2")
+    run = _expired_run(tmp_path, supervisor.PYTEST)
+    run.record(meta[failed_id].entry(failed_id, status="failed", error="boom"))
+    assert not run._settle(supervisor._Attempt(code=supervisor.PYTEST_TESTS_FAILED), meta)
+    assert (run.recorded[failed_id].status, run.recorded[failed_id].error) == ("failed", "boom")
+    for bench_id, entry in run.recorded.items():
+        if bench_id != failed_id and meta[bench_id].supported:
+            assert (entry.status, entry.error) == ("timeout", "run deadline: 1 min"), entry
+    crashed = _expired_run(tmp_path, supervisor.PYTEST)
+    assert not crashed._settle(supervisor._Attempt(code=2), meta)
+    assert all(e.status != "timeout" for e in crashed.recorded.values() if meta[e.id].supported)
+
+    bench = _expired_run(tmp_path)
+    assert not bench._settle(supervisor._Attempt(code=0), meta)
+    errors = {e.error for e in bench.recorded.values() if meta[e.id].supported}
+    assert errors == {"worker exited without a result"}
+
+
+def test_known_load_verdict_survives_the_deadline(tmp_path: Path) -> None:
+    run = _expired_run(tmp_path)
+    run.sel = dataclasses.replace(run.sel, resources=True)
+    load_id = catalog.load_id("snb", "fake", "small", 1)
+    meta = supervisor._expected(run.sel, "fake", 1)
+    run.record(meta[load_id].entry(load_id, status="timeout", error=supervisor.load_over(supervisor.LOAD_CEILING_S)))
+    run._resources("fake", 1, None)
+    records = {r.id: r for r in run.results.resources}
+    snb = records[catalog.resource_id("snb", "fake", "small", 1, "graph")]
+    assert (snb.status, snb.error) == ("timeout", "load over 5 min")
+    rdf = records[catalog.resource_id("snb", "fake", "small", 1, "rdf")]
+    assert (rdf.status, rdf.error) == ("timeout", "run deadline: 1 min")

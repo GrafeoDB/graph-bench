@@ -648,12 +648,12 @@ class _Run:
                 if (dataset, store) not in reached:
                     error = f"model {model} not supported"
                     record = unmeasured(db, dataset, store, scale, threads, "not_supported", error)
-                elif self.expired():
-                    record = unmeasured(db, dataset, store, scale, threads, "timeout", self._deadline_error())
                 elif missing is not None:
                     record = unmeasured(db, dataset, store, scale, threads, "failed", missing)
                 elif over is not None and over.status == "timeout" and over.error == load_over(LOAD_CEILING_S):
                     record = unmeasured(db, dataset, store, scale, threads, "timeout", over.error)
+                elif self.expired():
+                    record = unmeasured(db, dataset, store, scale, threads, "timeout", self._deadline_error())
                 else:
                     name = f"{catalog.load_benchmark(dataset, store)}-{scale}"
                     try:
@@ -767,8 +767,10 @@ class _Run:
         else:
             status, error = "failed", f"{self.runner.name} exited without a result"
         pending = attempt.pending
-        if pending is None and not attempt.hung and not attempt.code and self.expired():
-            # A session that ended cleanly past the deadline skipped the rest of its cases (benches/conftest.py).
+        clean = self.runner.mode == "codspeed" and attempt.code in (0, PYTEST_TESTS_FAILED)
+        if pending is None and not attempt.hung and clean and self.expired():
+            # A pytest session that ended on its own past the deadline (exit 0, or 1 when a test failed) skipped
+            # the rest of its cases (benches/conftest.py). A worker that exits 0 without results stays a failure.
             self._mark_deadline(meta)
             return False
         if pending is None or (not attempt.hung and not attempt.code):
@@ -926,7 +928,11 @@ class _Run:
 
     @staticmethod
     def _between_cases(attempt: _Attempt) -> bool:
-        """Whether the worker runs no case, load or startup row: it has just ended one or not yet begun the next."""
+        """Whether the worker runs no case, load or startup row: it has just ended one or not yet begun the next.
+
+        The Startup row counts as one running unit: it is atomic and runs first, so a deadline that passes during it
+        waits for its children (each limited by `STARTUP_CHILD_TIMEOUT_S`); nothing after it starts.
+        """
         return attempt.pending is None and attempt.phase is None and not attempt.in_startup
 
     def _line(self, raw: bytes, attempt: _Attempt, db: str, meta: dict[str, _Meta]) -> str | None:
