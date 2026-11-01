@@ -6,9 +6,10 @@ from typer.testing import CliRunner
 
 from graph_bench.cli import app
 from graph_bench.databases.base import DatabaseInfo
+from graph_bench.report.overview import render_overview
 from graph_bench.report.ranking import rank
 from graph_bench.report.readme import render_readme, update_readme
-from graph_bench.report.summary import render_summary
+from graph_bench.report.summary import OVERVIEW_URL, render_summary
 from graph_bench.results import Entry, Resource, Results
 from graph_bench.types import AnswerVerdict, Category, Status, Timing
 
@@ -30,6 +31,8 @@ Grafeo: ≠ on snb_ic6
 ⊘ not available · ✗ failing · ≠ wrong answer · ⏱ beyond 10x the top-3 average, over 60 s or load over 5 min
 
 Full results, with every database named: https://github.com/GrafeoDB/graph-bench#results
+
+Every database's version, source and run: https://github.com/GrafeoDB/graph-bench/blob/main/docs/results.md
 <!-- graph-bench:end -->
 """
 
@@ -186,9 +189,9 @@ def test_summary_scale_follows_grafeo(results: Results) -> None:
 def test_summary_footer_lines_are_separate_paragraphs(results: Results) -> None:
     lines = render_summary(results).splitlines()
     footer = lines[lines.index("| Algorithms | 2 | 1 / 2 | 1.5 |") + 1 : -1]
-    assert footer[0::2] == ["", "", "", ""]
+    assert footer[0::2] == ["", "", "", "", ""]
     assert all(footer[1::2])
-    assert len(footer) == 8
+    assert len(footer) == 10
 
 
 def test_summary_label_keeps_dirty_marker(results: Results) -> None:
@@ -587,3 +590,158 @@ def test_answer_only_case_shows_its_answer_but_is_never_ranked(results: Results)
 
 def test_answer_only_note_only_with_an_answer_only_case(results: Results) -> None:
     assert "answer-check-only" not in render_readme(results)
+
+
+# ── The local snapshot mixed in (graph-bench merge --local) ──────────────────────────────────────────────────
+
+LOCAL_RUN = {
+    "started_at": "2026-10-20T10:00:00Z",
+    "machine": {"cpu": "Ryzen 9", "cores": 16, "os": "Linux 6.6"},
+    "graph_bench_commit": "10ca1beef",
+    "grafeo": {"version": "0.6.0", "source": "pypi", "sha": None},
+    "selection": "push",
+    "mode": "bench",
+}
+FOOTNOTE = (
+    "† From the local snapshot of 2026-10-20 on Ryzen 9, 16 cores, Linux 6.6, not from CI: these columns are"
+    " budgeted and ranked only among themselves, never against the CI columns, and bold marks the fastest of"
+    " each group."
+)
+OVERVIEW_LINK = "Every database's version, source, machine and run date: [docs/results.md](docs/results.md)"
+
+
+def _mixed(results: Results) -> Results:
+    """The fixture's three CI databases plus two from a local snapshot, both faster than every CI database."""
+    cq: Category = "complex_queries"
+    algo: Category = "algorithms"
+    local = [
+        _entry(cq, "snb_is1", "falkordb", "ok", "agree", 0.1),
+        _entry(cq, "snb_is1", "helixdb", "ok", "agree", 0.2),
+        _entry(cq, "snb_ic6", "falkordb", "ok", "agree", 1.0),
+        _entry(cq, "snb_ic6", "helixdb", "ok", "disagree", 0.5),
+        _entry(algo, "graphalytics_bfs", "falkordb", "ok", "agree", 0.01),
+        _entry(algo, "graphalytics_pr", "helixdb", "ok", "agree", 0.02),
+    ]
+    results.entries += [dataclasses.replace(e, source="local") for e in local]
+    for name in ("falkordb", "helixdb"):
+        results.databases[name] = dataclasses.replace(_info(name), version=f"{name}-9", source="local")
+    results.sources = {"ci": results.run("ci"), "local": LOCAL_RUN}  # type: ignore[dict-item]
+    return results
+
+
+def test_readme_puts_the_ci_columns_first_then_the_marked_local_ones(results: Results) -> None:
+    text = render_readme(_mixed(results))
+    assert _row(text, "Category") == ["Grafeo", "fake", "LadybugDB", "FalkorDB†", "HelixDB†"]
+    assert _row(text, "Benchmark") == ["Grafeo", "fake", "LadybugDB", "FalkorDB†", "HelixDB†"]
+    assert _row(text, "FalkorDB†") == ["falkordb-9", "in-process", "in-memory", "falkordb threads note"]
+
+
+def test_readme_footnote_names_the_snapshot_and_links_the_overview(results: Results) -> None:
+    lines = render_readme(_mixed(results)).splitlines()
+    assert FOOTNOTE in lines
+    assert lines.index(FOOTNOTE) < lines.index("| Category | Grafeo | fake | LadybugDB | FalkorDB† | HelixDB† |")
+    assert OVERVIEW_LINK in lines
+    assert "Local snapshot†: graph-bench 10ca1be · Grafeo 0.6.0 (pypi) · Ryzen 9, 16 cores, Linux 6.6 · 2026-10-20" in (
+        " ".join(lines)
+    )
+
+
+def test_readme_without_local_has_no_footnote_but_the_overview_link(results: Results) -> None:
+    text = render_readme(results)
+    assert "†" not in text
+    assert OVERVIEW_LINK in text.splitlines()
+
+
+def test_readme_never_ranks_across_sources(results: Results) -> None:
+    """Bold marks the fastest of each source: FalkorDB† at 0.1 ms is faster than every CI database, yet Grafeo
+    stays the fastest of the CI columns."""
+    text = render_readme(_mixed(results))
+    # Columns: Grafeo, fake, LadybugDB, FalkorDB†, HelixDB†.
+    assert _row(text, "IS1 person profile") == ["**0.395**", "✗", "1.20", "**0.100**", "0.200"]
+    assert _row(text, "IC6 tag co-occurrence") == ["≠", "⏱", "**45.2**", "**1.00**", "≠"]
+    assert _row(text, "BFS") == ["2.00", "⊘", "**1.50**", "**0.0100**", ""]
+
+
+def test_rank_positions_stay_within_a_source(results: Results) -> None:
+    is1 = next(r for r in rank(_mixed(results)) if r.benchmark == "snb_is1")
+    assert is1.position("grafeo") == 1
+    assert is1.position("ladybug") == 2
+    assert is1.position("falkordb") == 1
+    assert is1.position("helixdb") == 2
+    assert is1.fastest() == {"grafeo", "falkordb"}
+    assert is1.peers("grafeo") == ["grafeo", "ladybug"]
+
+
+def test_readme_memory_lowest_per_source(results: Results) -> None:
+    _with_resources(_mixed(results))
+    results.resources.append(
+        dataclasses.replace(_resource("falkordb", "snb", "graph", loaded=1, peak=2), source="local")
+    )
+    text = render_readme(results)
+    # Columns: Grafeo, fake, LadybugDB, FalkorDB†, HelixDB†; fake disagrees, so Grafeo's 10 is the CI lowest.
+    assert _row(text, "LDBC SNB, loaded") == ["**10.0**", "≠", "20.0", "**1.00**", ""]
+
+
+def test_summary_marks_the_local_databases_and_ranks_grafeo_within_ci(results: Results) -> None:
+    """The summary block counts the local databases in its header, marked, and ranks Grafeo against the CI ones
+    only: it stays fastest on IS1 and PageRank, though a local database is faster on both."""
+    text = render_summary(_mixed(results))
+    assert "· 5 embedded databases (2† from a local snapshot)" in text.splitlines()[1]
+    assert _row(text, "Complex queries") == ["2", "1 / 1", "1"]
+    assert _row(text, "Algorithms") == ["2", "1 / 2", "1.5"]
+    assert (
+        "† 2 of the 5 databases come from a local snapshot (2026-10-20, Ryzen 9, 16 cores, Linux 6.6): Grafeo is"
+        " ranked only against the databases measured with it."
+    ) in text.splitlines()
+    assert f"Every database's version, source and run: {OVERVIEW_URL}" in text.splitlines()
+    assert "falkordb" not in text.lower() and "helix" not in text.lower()
+
+
+def test_overview_lists_every_version_then_every_case(results: Results) -> None:
+    text = render_overview(_mixed(results))
+    lines = text.splitlines()
+    assert lines[0] == "# graph-bench: full results"
+    assert _row(text, "Database") == ["Version", "Source", "Machine", "Run date"]
+    assert _row(text, "Grafeo") == ["1.0", "CI", "Test CPU, 8 cores, TestOS 1", "2026-10-30"]
+    assert _row(text, "FalkorDB†") == ["falkordb-9", "local snapshot", "Ryzen 9, 16 cores, Linux 6.6", "2026-10-20"]
+    assert _row(text, "Source") == ["Machine", "Run date", "graph-bench", "Grafeo", "Selection", "Mode"]
+    assert _row(text, "CI") == [
+        "Test CPU, 8 cores, TestOS 1",
+        "2026-10-30",
+        "0123456",
+        "Grafeo 0.6.1 (abcdef1)",
+        "push",
+        "bench",
+    ]
+    assert _row(text, "local snapshot") == [
+        "Ryzen 9, 16 cores, Linux 6.6",
+        "2026-10-20",
+        "10ca1be",
+        "Grafeo 0.6.0 (pypi)",
+        "push",
+        "bench",
+    ]
+    # The per-case tables, as in the README, without a link to itself.
+    assert "### Complex queries (small scale, ms)" in lines
+    assert _row(text, "IS1 person profile") == ["**0.395**", "✗", "1.20", "**0.100**", "0.200"]
+    assert FOOTNOTE in lines
+    assert "docs/results.md" not in text
+
+
+def test_overview_of_a_plain_run(results: Results) -> None:
+    text = render_overview(results)
+    assert _row(text, "LadybugDB") == ["1.0", "CI", "Test CPU, 8 cores, TestOS 1", "2026-10-30"]
+    assert "local snapshot" not in text
+    assert "†" not in text
+
+
+def test_cli_report_overview_writes_the_whole_page(results: Results, tmp_path: Path) -> None:
+    path = tmp_path / "results.json"
+    _mixed(results).write(path)
+    page = tmp_path / "docs" / "results.md"
+    out = CliRunner().invoke(app, ["report", "--format", "overview", "--in", str(path), "--write", str(page)])
+    assert out.exit_code == 0, out.output
+    assert page.read_text(encoding="utf-8") == render_overview(Results.read(path))
+    printed = CliRunner().invoke(app, ["report", "--format", "overview", "--in", str(path)])
+    assert printed.exit_code == 0, printed.output
+    assert "# graph-bench: full results" in printed.output

@@ -11,7 +11,7 @@ from typer.testing import CliRunner
 from graph_bench import merge
 from graph_bench.cli import app
 from graph_bench.databases.base import DatabaseInfo
-from graph_bench.results import Entry, Results
+from graph_bench.results import Entry, Resource, Results
 from graph_bench.runner import RUN_DEADLINE_S, supervisor
 from graph_bench.runner.supervisor import apply_budget_rule, run_bench
 from graph_bench.suites import catalog
@@ -209,3 +209,121 @@ def test_ci_settings_prints_the_deadline_and_the_roster() -> None:
     result = CliRunner().invoke(app, ["ci-settings"])
     assert result.exit_code == 0, result.output
     assert result.output.splitlines() == [f"deadline_s={RUN_DEADLINE_S}", "databases=" + ",".join(catalog.CI_DATABASES)]
+
+
+LOCAL_MACHINE = {"cpu": "Ryzen 9", "cores": 16, "os": "Linux 6.6 (Docker)"}
+
+
+def _local(*entries: Entry) -> Results:
+    """A local snapshot: another machine, another day, another graph-bench commit and Grafeo."""
+    return _doc(
+        *entries,
+        machine=LOCAL_MACHINE,
+        started_at="2026-10-20T10:00:00Z",
+        graph_bench_commit="10ca1",
+        grafeo={"version": "0.6.3", "source": "pypi", "sha": None, "git_sha": None},
+    )
+
+
+def _resource(db: str) -> Resource:
+    return Resource(
+        id=f"resources::load_snb[{db}-small]",
+        database=db,
+        dataset="snb",
+        store="graph",
+        scale="small",
+        threads=1,
+        status="ok",
+        footprint_bytes=1 << 20,
+    )
+
+
+def test_merge_local_adds_the_snapshot_databases_not_in_ci(tmp_path: Path) -> None:
+    """`--local`: the snapshot's databases that no CI input holds join the merge, every entry, record and info
+    tagged `local`; its other databases are dropped (CI measured them); `sources` keeps both runs."""
+    ci = [_write(tmp_path, "neug", _doc(_entry("neug", 1))), _write(tmp_path, "grafeo", _doc(_entry("grafeo", 2)))]
+    snapshot = _local(_entry("neug", 9), _entry("grafeo", 9), _entry("falkordb", 3), _entry("helixdb", 4))
+    snapshot.resources = [_resource("falkordb"), _resource("neug")]
+    local = _write(tmp_path, "local", snapshot)
+    out = tmp_path / "out"
+    result = CliRunner().invoke(app, ["merge", "--out", str(out), "--local", str(local), *map(str, ci)])
+    assert result.exit_code == 0, result.output
+    assert "local: falkordb" in result.output and "local: helixdb" in result.output
+    assert "local: neug" not in result.output
+    merged = Results.read(out / "results.json")
+    assert list(merged.databases) == ["neug", "grafeo", "falkordb", "helixdb"]
+    sources = {name: info.source for name, info in merged.databases.items()}
+    assert sources == {"neug": "ci", "grafeo": "ci", "falkordb": "local", "helixdb": "local"}
+    assert {(e.database, e.source, e.preflight_ns) for e in merged.entries} == {
+        ("neug", "ci", 1_000_000),
+        ("grafeo", "ci", 2_000_000),
+        ("falkordb", "local", 3_000_000),
+        ("helixdb", "local", 4_000_000),
+    }
+    assert [(r.database, r.source) for r in merged.resources] == [("falkordb", "local")]
+    # The top level stays the CI run's; each source's date and machine are in `sources`.
+    assert (merged.machine, merged.started_at) == (_doc().machine, _doc().started_at)
+    assert merged.run("ci")["machine"] == _doc().machine
+    assert merged.run("local")["machine"] == LOCAL_MACHINE
+    assert merged.run("local")["started_at"] == "2026-10-20T10:00:00Z"
+    assert merged.run("local")["graph_bench_commit"] == "10ca1"
+
+
+def test_merge_without_local_has_no_sources(tmp_path: Path) -> None:
+    path = _write(tmp_path, "neug", _doc(_entry("neug", 1)))
+    merged, _ = merge.merge([(path, Results.read(path))])
+    assert merged.sources == {}
+    assert {e.source for e in merged.entries} == {"ci"}
+
+
+@pytest.mark.parametrize(("field", "value"), [("selection", "full"), ("mode", "codspeed")])
+def test_merge_local_must_measure_the_same_way(tmp_path: Path, field: str, value: object) -> None:
+    """The snapshot may come from another machine, day, commit and Grafeo, not another selection or mode."""
+    ci = _write(tmp_path, "ci", _doc(_entry("neug", 1)))
+    local = _write(tmp_path, "local", dataclasses.replace(_local(_entry("falkordb", 1)), **{field: value}))
+    with pytest.raises(merge.MergeError, match=field):
+        merge.merge([(ci, Results.read(ci))], local=(local, Results.read(local)))
+    result = CliRunner().invoke(app, ["merge", "--out", str(tmp_path / "out"), "--local", str(local), str(ci)])
+    assert result.exit_code == 2
+    assert field in result.output
+
+
+def test_merge_local_never_fills_a_missing_ci_database(tmp_path: Path) -> None:
+    """A roster database whose CI job left no results stays ✗ "no results": a local timing never stands in for a
+    CI one."""
+    ci = _write(tmp_path, "ci", _doc(_entry("fake", 1)))
+    local = _write(tmp_path, "local", _local(_entry("fake2", 1), _entry("falkordb", 1)))
+    merged, missing = merge.merge([(ci, Results.read(ci))], ["fake", "fake2"], local=(local, Results.read(local)))
+    assert missing == ["fake2"]
+    fake2 = [e for e in merged.entries if e.database == "fake2"]
+    assert fake2 and {e.source for e in fake2} == {"ci"}
+    assert {e.status for e in fake2} <= {"failed", "not_supported"}
+    assert merged.databases["falkordb"].source == "local"
+
+
+def test_budget_rule_never_compares_sources() -> None:
+    """The 10x rule runs within each source: a very fast local timing sets no budget for a CI entry, and a CI
+    timing none for a local one; within a source the rule still applies."""
+    entries = [
+        _entry("neug", 1),
+        _entry("ladybug", 1.2),
+        _entry("grafeo", 5),  # 4.5x the CI top-3: within budget, though 5000x the local falkordb
+        dataclasses.replace(_entry("falkordb", 0.001), source="local"),
+        dataclasses.replace(_entry("helixdb", 0.002), source="local"),
+        dataclasses.replace(_entry("neo4j", 0.5), source="local"),  # 333x the local top-3: marked
+        dataclasses.replace(_entry("oxigraph", 0.0001, item="hop_1"), source="local"),
+        _entry("duckdb", 3, item="hop_1"),  # alone in CI on hop_1: no budget, whatever the local timing
+    ]
+    doc = _doc(*entries)
+    apply_budget_rule(doc)
+    status = {e.database: e.status for e in doc.entries}
+    assert status == {
+        "neug": "ok",
+        "ladybug": "ok",
+        "grafeo": "ok",
+        "falkordb": "ok",
+        "helixdb": "ok",
+        "neo4j": "timeout",
+        "oxigraph": "ok",
+        "duckdb": "ok",
+    }
