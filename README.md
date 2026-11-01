@@ -143,8 +143,8 @@ graph-bench commit and Grafeo) into one, as a single run over all of them would 
 budget rule once; with `--db`, a listed database without an input shows as "no results". `--local FILE` adds the
 local snapshot's databases that are not in the inputs, tagged `local` (see [Results](#results)).
 `graph-bench report --format overview --in FILE --write docs/results.md` writes the full overview page, and
-`graph-bench local-check --local results/local/results.json` lists the databases whose installed version differs
-from the snapshot's.
+`graph-bench local-check --local results/local/results.json` lists the snapshot's databases outside the roster
+whose newest stable release (Neo4j: its pinned release) differs from the version the snapshot measured.
 `GRAPH_BENCH_GRAFEO=<path>` installs that Grafeo at the start of `bench` and `codspeed`, like `--grafeo`.
 
 ### Grafeo's README summary
@@ -191,8 +191,8 @@ one version string.
   applies the 10x budget rule once over all databases, so the markers are those of one run over the whole roster;
   a job that left no results shows its database as ✗ "no results". The README job then mixes in the committed
   local snapshot of all ten (`graph-bench merge --local`; its non-roster databases only, marked `†`), writes the
-  section and `docs/results.md`, and raises a notice listing the databases whose installed version differs from
-  the snapshot's (`graph-bench local-check`). A cancelled run merges nothing. A release run
+  section and `docs/results.md`, and raises a notice listing the snapshot's databases whose newest stable release
+  differs from the version it measured (`graph-bench local-check`). A cancelled run merges nothing. A release run
   whose merged results hold no Grafeo posts and records nothing, so the next daily run tries again. CodSpeed merges
   the push jobs of one run itself. One concurrency group,
   `macro-runner`, on both bench.yml and release.yml keeps their macro-runner jobs from ever running at once; a

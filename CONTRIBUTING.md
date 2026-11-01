@@ -196,9 +196,10 @@ in the Docker volume `graph-bench-local-cache`. Commit the new results.json; the
 bench.yml merges its non-roster databases into the README section and `docs/results.md`
 (`graph-bench merge --local`), marked `†` and never budgeted or ranked against the CI columns.
 
-That job also runs `graph-bench local-check --local results/local/results.json`, which lists the databases whose
-installed version differs from the snapshot's and raises a notice; refresh the snapshot when it does. To check by
-hand, after installing the databases:
+That job also runs `graph-bench local-check --local results/local/results.json`, which lists the snapshot's
+databases outside the roster whose newest stable release on PyPI (Neo4j: its pinned release in pins.py) differs
+from the version the snapshot measured, and raises a notice; refresh the snapshot when it does. It installs
+nothing; a failed lookup shows that database as unknown. To check by hand:
 
 ```bash
 uv run --no-sync graph-bench local-check --local results/local/results.json

@@ -107,10 +107,12 @@ benchmark, servers included, is kept in [legacy/](legacy/README.md).
   summary block) is within one source: a timing from the dev box is never set against one from the CI runner. The
   README puts the CI columns first and the local ones after, each marked `†` with a footnote naming the snapshot's
   date and machine, and `docs/results.md` lists every database's version, source, machine and run date.
-- **A missing CI result is never filled from the snapshot.** A roster database whose CI job left no results shows
-  as ✗ "no results", not with its local timing.
+- **A roster database is never taken from the snapshot.** One whose CI job left no results shows as ✗ "no
+  results", not with its local timing, and `merge --local` takes only databases outside `catalog.CI_DATABASES`.
 - **The snapshot is refreshed when versions change.** CI installs the newest stable release of every database,
-  and `graph-bench local-check` reports the databases whose installed version differs from the snapshot's.
+  and `graph-bench local-check` reports the snapshot's databases outside the roster whose newest stable release on
+  PyPI (Neo4j: its pinned release, which pins.yml keeps at the newest stable) differs from the version the
+  snapshot measured.
 
 ## The preflight
 
