@@ -102,8 +102,17 @@ jobs:
             echo "::error title=Version comparison failed::cannot compare $latest with ${posted:-none}"
             exit 1
           fi
+          # graph-bench 0.3.0 measures grafeo 0.6.1 and later (graph_bench.release.MEASURED_FROM).
+          measured=0
+          uv run --no-project python -m graph_bench.release measured "$latest" || measured=$?
+          if [ "$measured" -gt 1 ]; then
+            echo "::error title=Version check failed::cannot read $latest"
+            exit 1
+          fi
           run=false
-          if [ "$FORCE" = "true" ]; then
+          if [ "$measured" -eq 1 ]; then
+            echo "grafeo $latest is below the release graph-bench measures; nothing to do"
+          elif [ "$FORCE" = "true" ]; then
             run=true
             echo "forced: running for $latest"
           elif [ "$newer" -eq 1 ]; then

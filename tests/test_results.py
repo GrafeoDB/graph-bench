@@ -288,3 +288,12 @@ def test_results_run_of_a_source_without_a_record_raises() -> None:
     assert results.run("ci")["started_at"] == "2026-10-30T03:00:00Z"
     with pytest.raises(ValueError, match="no record of the local run"):
         results.run("local")
+
+
+def test_read_rejects_a_document_that_is_not_an_object(tmp_path: Path) -> None:
+    """Valid JSON that is not an object (a list, a number) is not a results document: ValueError, never a crash."""
+    for text in ("[]", "3"):
+        path = tmp_path / "results.json"
+        path.write_text(text, encoding="utf-8")
+        with pytest.raises(ValueError, match="not a results document"):
+            Results.read(path)

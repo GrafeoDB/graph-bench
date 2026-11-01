@@ -208,4 +208,7 @@ class Results:
 
     @classmethod
     def read(cls, path: Path) -> "Results":
-        return cls.from_dict(json.loads(path.read_text(encoding="utf-8")))
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(doc, dict):
+            raise ValueError(f"{path}: not a results document (a JSON {type(doc).__name__}, not an object)")
+        return cls.from_dict(doc)

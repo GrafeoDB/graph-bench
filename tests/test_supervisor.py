@@ -967,6 +967,10 @@ def test_deadline_message_names_the_total(bench_env: pytest.MonkeyPatch, tmp_pat
     }
     alone = CliRunner().invoke(app, [command, "--selection", "push", "--db", "fake", "--deadline-total-s", "2880"])
     assert alone.exit_code == 2
+    # A total below the cutoff would name a deadline earlier than the real one.
+    smaller = CliRunner().invoke(app, [*argv[:-1], "10", "--deadline-total-s", "5"])
+    assert smaller.exit_code == 2
+    assert launches == []
 
 
 def test_deadline_zero_still_writes_results(bench_env: pytest.MonkeyPatch, tmp_path: Path) -> None:
