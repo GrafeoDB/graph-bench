@@ -50,9 +50,10 @@ def load_over(ceiling_s: float) -> str:
 
 
 def deadline_over(deadline_s: float) -> str:
-    """The error of a case, load or record not started because the run deadline had passed: "run deadline: 48 min"."""
-    if deadline_s >= 60:
-        return f"run deadline: {int(deadline_s // 60)} min"
+    """The error of a case, load or record not started because the run deadline had passed: "run deadline: 48 min"
+    for a whole number of minutes, else seconds ("run deadline: 90 s")."""
+    if deadline_s >= 60 and deadline_s % 60 == 0:
+        return f"run deadline: {deadline_s / 60:g} min"
     return f"run deadline: {deadline_s:g} s"
 
 

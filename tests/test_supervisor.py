@@ -880,6 +880,15 @@ def test_deadline_marks_the_remaining_cases(bench_env: pytest.MonkeyPatch, tmp_p
             assert (entry.status, entry.error) == ("timeout", "run deadline: 1 s"), entry
 
 
+def test_deadline_over_names_whole_minutes_only() -> None:
+    """A deadline that is a whole number of minutes is named in minutes, any other in seconds."""
+    assert supervisor.deadline_over(48 * 60) == "run deadline: 48 min"
+    assert supervisor.deadline_over(60) == "run deadline: 1 min"
+    assert supervisor.deadline_over(90) == "run deadline: 90 s"
+    assert supervisor.deadline_over(60.5) == "run deadline: 60.5 s"
+    assert supervisor.deadline_over(1) == "run deadline: 1 s"
+
+
 def test_deadline_writes_results(bench_env: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """results.json is written as usual when the deadline has passed, with every entry and Memory and Disk record
     of the database marked, and the CLI takes `--deadline-s`."""
