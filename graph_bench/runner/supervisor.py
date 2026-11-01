@@ -501,7 +501,7 @@ class LaunchRequest:
     case_ceiling_s: float = CASE_CEILING_S
     load_ceiling_s: float = LOAD_CEILING_S
     startup_timeout_s: float = STARTUP_CHILD_TIMEOUT_S
-    deadline_at: float | None = None  # wall clock (`time.time()`) after which a pytest session starts nothing new
+    deadline_at: float | None = None  # wall clock (`time.time()`) after which a worker or pytest starts nothing new
 
 
 def worker_argv(r: LaunchRequest) -> list[str]:
@@ -511,6 +511,8 @@ def worker_argv(r: LaunchRequest) -> list[str]:
     argv += ["--case-timeout", repr(r.case_timeout_s)]
     argv += ["--case-ceiling", repr(r.case_ceiling_s), "--load-ceiling", repr(r.load_ceiling_s)]
     argv += ["--startup-timeout", repr(r.startup_timeout_s)]
+    if r.deadline_at is not None:
+        argv += ["--deadline-at", repr(r.deadline_at)]
     if r.skip:
         argv += ["--skip", *r.skip]
     if r.budgets:
@@ -608,7 +610,7 @@ class _Attempt:
     phase: tuple[Kind, tuple[str, Store, str] | None, float] | None = None
     load_key: tuple[Kind, tuple[str, Store, str]] | None = None  # the load killed at its ceiling
     in_startup: bool = False  # between the Startup row's `start` and `entry` lines
-    deadline: bool = False  # set when stopped at the run deadline, between cases
+    deadline: bool = False  # set when stopped at the run deadline, between cases, by the supervisor or the worker
 
 
 @dataclass
@@ -979,7 +981,7 @@ class _Run:
         Every line resets the silence timer in `_follow`; that is all a `progress` line does, and a `run` line
         also arms the in-run cutoff there. A `start` line starts a case's or a load's ceiling clock
         (`_Attempt.phase`; the startup has its own limits), a `load` line an unreported load's, and an `entry`
-        line stops it.
+        line stops it. A `deadline` line says the worker stopped at the run deadline (`_Attempt.deadline`).
         """
         try:
             line = json.loads(raw)
@@ -998,6 +1000,8 @@ class _Run:
                 attempt.phase = (m.kind, None if m.kind == "case" else (m.dataset, m.store, m.scale), now)
         elif kind == "load":
             attempt.phase = ("load", (line["dataset"], line["store"], line["scale"]), now)
+        elif kind == "deadline":  # the worker stopped before a new case or load: the deadline had passed
+            attempt.deadline = True
         elif kind == "entry":
             attempt.phase = None
             attempt.in_startup = False

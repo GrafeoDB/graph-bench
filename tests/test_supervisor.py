@@ -880,6 +880,50 @@ def test_deadline_marks_the_remaining_cases(bench_env: pytest.MonkeyPatch, tmp_p
             assert (entry.status, entry.error) == ("timeout", "run deadline: 1 s"), entry
 
 
+def test_worker_argv_passes_the_deadline() -> None:
+    """A bench worker gets the deadline as codspeed's pytest does, and stops before a new case or load past it."""
+    request = supervisor.LaunchRequest("fake", "push", 1, Path("w"), Path("o.jsonl"), 5.0, [], {}, deadline_at=123.5)
+    argv = supervisor.worker_argv(request)
+    assert argv[argv.index("--deadline-at") + 1] == "123.5"
+    assert "--deadline-at" not in supervisor.worker_argv(dataclasses.replace(request, deadline_at=None))
+    from graph_bench.runner import worker
+
+    assert worker._parser().parse_args(argv[3:]).deadline_at == 123.5
+
+
+_DEADLINE_WORKER = """\
+import json, sys
+out, bench_id = sys.argv[1], sys.argv[2]
+with open(out, "a", encoding="utf-8") as fh:
+    for line in [
+        dict(kind="database", name="fake", version="1", process="in-process", threads_configurable=False,
+             threads_note="", storage="in-memory"),
+        dict(kind="start", id=bench_id),
+        dict(kind="entry", id=bench_id, status="ok", answer="agree", preflight_ns=1000),
+        dict(kind="deadline"),
+    ]:
+        fh.write(json.dumps(line) + "\\n")
+"""
+
+
+def test_worker_stopped_at_the_deadline_marks_the_rest(tmp_path: Path) -> None:
+    """A worker that writes a `deadline` line and exits 0 stopped at the run deadline: the recorded case keeps its
+    verdict, the rest are ⏱ "run deadline", and nothing is relaunched (not "exited without a result")."""
+    meta = supervisor._expected(catalog.selection("push"), "fake", 1)
+    run = _deadline_run(tmp_path, 3600.0)
+    bench_id = _id("snb_is2")
+    out = tmp_path / "worker.jsonl"
+    argv = [sys.executable, "-c", _DEADLINE_WORKER, str(out), bench_id]
+    attempt = run._attempt(argv, dict(os.environ), out, tmp_path / "worker.log", "fake", meta, {})
+    assert attempt.deadline and attempt.code == 0
+    assert not run._settle(attempt, meta)
+    assert run.recorded[bench_id].status == "ok"
+    assert set(run.recorded) == set(meta)
+    for other, entry in run.recorded.items():
+        if other != bench_id and meta[other].supported:
+            assert (entry.status, entry.error) == ("timeout", "run deadline: 60 min"), entry
+
+
 def test_deadline_over_names_whole_minutes_only() -> None:
     """A deadline that is a whole number of minutes is named in minutes, any other in seconds."""
     assert supervisor.deadline_over(48 * 60) == "run deadline: 48 min"
