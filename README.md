@@ -140,14 +140,20 @@ per database, under the CodSpeed runner. `graph-bench data key --selection S` pr
 hardware: their correct results set the in-run budgets as earlier databases of the same run would. `graph-bench
 merge --out DIR IN...` merges results.json files of runs over different databases (same selection, mode,
 graph-bench commit and Grafeo) into one, as a single run over all of them would write it, and applies the final
-budget rule once; with `--db`, a listed database without an input shows as "no results".
+budget rule once; with `--db`, a listed database without an input shows as "no results". `--local FILE` adds the
+local snapshot's databases that are not in the inputs, tagged `local` (see [Results](#results)).
+`graph-bench report --format overview --in FILE --write docs/results.md` writes the full overview page, and
+`graph-bench local-check --local results/local/results.json` lists the databases whose installed version differs
+from the snapshot's.
 `GRAPH_BENCH_GRAFEO=<path>` installs that Grafeo at the start of `bench` and `codspeed`, like `--grafeo`.
 
 ### Grafeo's README summary
 
 grafeo's README carries a summary block (between `<!-- graph-bench:start -->` and `<!-- graph-bench:end -->`)
 with counts per category: how many databases took part, on how many benchmarks Grafeo was fastest, and its
-median rank. It names no other database; this README names them all. At each Grafeo release the pre-release
+median rank. It names no other database; this README names them all. Grafeo is ranked only against the databases
+of its own run: with the local snapshot merged in, the header counts its databases, marked `†`, and a footer line
+names its date and machine. The block links to `docs/results.md`. At each Grafeo release the pre-release
 checklist runs, locally:
 
 ```bash
@@ -183,7 +189,10 @@ one version string.
   setup counts too, under the job's 55-minute timeout), so it always leaves its results.json; the cases it did not
   reach are ⏱ `run deadline`. A final job on `ubuntu-latest` merges the jobs' results (`graph-bench merge`), which
   applies the 10x budget rule once over all databases, so the markers are those of one run over the whole roster;
-  a job that left no results shows its database as ✗ "no results". A cancelled run merges nothing. A release run
+  a job that left no results shows its database as ✗ "no results". The README job then mixes in the committed
+  local snapshot of all ten (`graph-bench merge --local`; its non-roster databases only, marked `†`), writes the
+  section and `docs/results.md`, and raises a notice listing the databases whose installed version differs from
+  the snapshot's (`graph-bench local-check`). A cancelled run merges nothing. A release run
   whose merged results hold no Grafeo posts and records nothing, so the next daily run tries again. CodSpeed merges
   the push jobs of one run itself. One concurrency group,
   `macro-runner`, on both bench.yml and release.yml keeps their macro-runner jobs from ever running at once; a
@@ -203,6 +212,13 @@ one version string.
   already posted.
 
 ## Results
+
+The table mixes two sources, never compared with each other. The CI columns come first: Grafeo and the fixed
+roster, measured by the scheduled `full` run on the Graviton runner. The other databases follow, each marked `†`:
+they come from the local snapshot of all ten (`results/local/results.json`, refreshed by hand, see
+CONTRIBUTING.md), and the footnote names its date and machine. Budgets and bold (the fastest) apply within each
+source only. [docs/results.md](docs/results.md) lists every database's version, source, machine and run date, with
+the complete per-case tables.
 
 <!-- results:start -->
 No results yet: this section is written by the scheduled `full` run (`graph-bench report --format readme`).

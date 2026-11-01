@@ -93,6 +93,25 @@ benchmark, servers included, is kept in [legacy/](legacy/README.md).
      setting is public (FalkorDB's client socket timeout, Grafeo's 30 s query timeout from 0.6.1 on), so no client
      or engine default fails a case with its own ✗; the other databases have no default timeout below the ceiling.
 
+## The CI roster and the local snapshot
+
+- **CI compares Grafeo with a fixed roster** chosen by the user: NeuG, LadybugDB, TuringDB, Oxigraph and
+  DuckDB + DuckPGQ (`catalog.CI_DATABASES`), the fastest in the local run of all ten. The CI runner lives about an
+  hour, which does not fit all ten. The 10x budget of rule 8 is therefore relative to that roster: a ⏱ in a CI
+  column means beyond 10x the top-3 average of the roster databases with correct answers, on the same hardware.
+- **The other databases come from a local snapshot**, `results/local/results.json`: all ten databases on the dev
+  box, in one Linux container, with the full selection (CONTRIBUTING.md). That run applies the same rules to all
+  ten: the same ceilings, the same budget rule over all ten, the same answer checks.
+- **Two sources are never compared.** Every result carries its source (`ci` or `local`, with the run's date and
+  machine). The budget rule runs within each source, and every rank (bold in the README, Grafeo's counts in the
+  summary block) is within one source: a timing from the dev box is never set against one from the CI runner. The
+  README puts the CI columns first and the local ones after, each marked `†` with a footnote naming the snapshot's
+  date and machine, and `docs/results.md` lists every database's version, source, machine and run date.
+- **A missing CI result is never filled from the snapshot.** A roster database whose CI job left no results shows
+  as ✗ "no results", not with its local timing.
+- **The snapshot is refreshed when versions change.** CI installs the newest stable release of every database,
+  and `graph-bench local-check` reports the databases whose installed version differs from the snapshot's.
+
 ## The preflight
 
 Each benchmark first runs once, untimed: the preflight. The answer check and the time budget are applied there,

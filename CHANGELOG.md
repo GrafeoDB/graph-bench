@@ -110,6 +110,19 @@ benchmark moves to `legacy/` untouched and is deleted once the new comparison re
   warning. Every upload overwrites, so a re-run job can upload again. The `macro-runner` concurrency group moves
   to workflow level on both workflows (replacing release.yml's `release-post`), since a job-level group would let
   matrix legs cancel each other.
+- **Local snapshot of all ten** (FAIRNESS.md, "The CI roster and the local snapshot"): `results/local/results.json`,
+  written by `.github/scripts/local-bench.sh` (the full selection over every database in one `ubuntu:24.04`
+  container on the dev box) and committed. `graph-bench merge --local FILE` adds its databases that are not in the
+  CI inputs. results.json schema 3 tags every entry, Memory and Disk record and database info with its `source`
+  (`ci` or `local`) and records each source's run (date, machine, commit, Grafeo) in `sources`; an older document
+  reads as `ci`. The 10x rule and every rank (README bold, the summary block's counts) stay within one source. The
+  README puts the CI columns first and the local ones after, marked `†` with a footnote naming the snapshot's date
+  and machine; the summary block counts them, marked, and both link the new overview page. `graph-bench report
+  --format overview --write docs/results.md` writes that page: every database's version, source, machine and run
+  date, then every per-case table. `graph-bench local-check --local FILE` lists the databases whose installed
+  version differs from the snapshot's. bench.yml's `readme-results` merges the snapshot when it is committed,
+  writes `docs/results.md` into the pull request and raises a notice from `local-check`. The merge jobs download
+  the legs into `legs/`, since `results/*/results.json` would match the snapshot.
 - **Run-time limits** (FAIRNESS.md rule 9), the same for every database at any position in the run order, so a
   run fits in the CodSpeed macro runner's hour: every case stops 60 s after it starts (with at least 3 timed runs
   it keeps its timing, else ⏱ "too slow: over 60 s"; the supervisor kills a single call still running 5 s past
