@@ -85,6 +85,9 @@ benchmark, servers included, is kept in [legacy/](legacy/README.md).
      `graph-bench codspeed` the same 5 s box goes to pytest-codspeed (`--codspeed-max-time`, with
      `--codspeed-max-rounds` at the selection's iteration count, so fast cases stop there too) for the queries, and
      a write gets as many rounds as 5 s hold at its preflight's duration (at least 3).
+   - **Run deadline (CI only).** `--deadline-s`, counted from the start of the run (CI: 48 min), is the same for
+     every database: once it has passed nothing new starts, a case or load already running keeps its own ceiling,
+     and every case not yet run is ⏱ ("run deadline: 48 min"), so a run that would not fit leaves results.
    - **Only these rules stop a case.** Database-side query and socket timeouts are disabled or raised wherever the
      setting is public (FalkorDB's client socket timeout, Grafeo's 30 s query timeout from 0.6.1 on), so no client
      or engine default fails a case with its own ✗; the other databases have no default timeout below the ceiling.
@@ -225,7 +228,7 @@ Load uses each database's **fastest documented bulk path, CSV parsing included**
 | ⊘ | not available: the database lacks the capability or the data model |
 | ✗ | failing: an error or a crash |
 | ≠ | wrong answer: fails the answer check, not ranked |
-| ⏱ | too slow: beyond the budget of rule 8, or over a limit of rule 9 ("too slow: over 60 s", "load over 5 min") |
+| ⏱ | too slow: beyond the budget of rule 8, or over a limit of rule 9 ("too slow: over 60 s", "load over 5 min", "run deadline: 48 min") |
 
 How each marker shows in CodSpeed is in the [README](README.md#markers).
 
