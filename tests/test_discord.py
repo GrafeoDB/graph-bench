@@ -8,7 +8,7 @@ from typer.testing import CliRunner
 
 from graph_bench import notify
 from graph_bench.cli import app
-from graph_bench.release import is_newer, main, newest_stable
+from graph_bench.release import MEASURED_FROM, is_newer, main, newest_stable
 from graph_bench.report.discord import CONTENT_LIMIT, render_discord
 from graph_bench.results import Results
 from graph_bench.types import CATEGORY_ORDER, Category
@@ -223,6 +223,17 @@ def test_release_newer_exit_codes(capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["newer", "0.6.1", ""]) == 0
     assert main(["newer", "0.7.0rc1", "0.6.2"]) == 2
     assert main(["bogus"]) == 2
+    capsys.readouterr()
+
+
+def test_release_measured_exit_codes(capsys: pytest.CaptureFixture[str]) -> None:
+    """graph-bench 0.3.0 measures grafeo 0.6.1 and later: `measured` exits 0 from the floor on, 1 below it."""
+    assert MEASURED_FROM == "0.6.1"
+    assert main(["measured", "0.6.1"]) == 0
+    assert main(["measured", "0.7"]) == 0
+    assert main(["measured", "0.6.0"]) == 1
+    assert main(["measured", "0.5.40"]) == 1
+    assert main(["measured", "0.6.1rc1"]) == 2
     capsys.readouterr()
 
 

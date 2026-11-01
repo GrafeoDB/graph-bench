@@ -15,6 +15,8 @@ import urllib.request
 from typing import Any
 
 PYPI_URL = "https://pypi.org/pypi/{package}/json"
+# graph-bench 0.3.0 measures grafeo 0.6.1 and later (user decision, 2026-10-31): the release post skips older ones.
+MEASURED_FROM = "0.6.1"
 _STABLE = re.compile(r"\d+(\.\d+)*")
 _POST = re.compile(r"(\d+(?:\.\d+)*)(?:\.post(\d+))?")
 
@@ -90,8 +92,15 @@ def main(argv: list[str]) -> int:
         except ValueError as exc:
             print(f"release: {exc}", file=sys.stderr)
             return 2
+    if len(argv) == 2 and argv[0] == "measured":
+        # Exit 0 when argv[1] is at least MEASURED_FROM, 1 when below it, 2 on bad input.
+        try:
+            return 0 if parse_stable(argv[1]) >= parse_stable(MEASURED_FROM) else 1
+        except ValueError as exc:
+            print(f"release: {exc}", file=sys.stderr)
+            return 2
     if argv != ["latest"]:
-        print("usage: python -m graph_bench.release latest | newer LATEST POSTED", file=sys.stderr)
+        print("usage: python -m graph_bench.release latest | newer LATEST POSTED | measured VERSION", file=sys.stderr)
         return 2
     try:
         print(fetch_latest())
