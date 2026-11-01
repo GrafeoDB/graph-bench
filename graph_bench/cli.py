@@ -290,8 +290,8 @@ _MERGE_LOCAL = typer.Option(
     None,
     "--local",
     help=(
-        "The local snapshot (results/local/results.json): its databases not in the inputs or --db are added,"
-        " tagged local, and never ranked or budgeted against the CI ones."
+        "The local snapshot (results/local/results.json): its databases outside the CI roster and not in the inputs"
+        " or --db are added, tagged local, and never ranked or budgeted against the CI ones."
     ),
 )
 
@@ -326,25 +326,30 @@ _LOCAL_SNAPSHOT = typer.Option(..., "--local", help="The local snapshot, results
 
 @app.command("local-check")
 def local_check(local: Path = _LOCAL_SNAPSHOT) -> None:
-    """Print, one per line, the databases whose installed version differs from the local snapshot's; exit 0.
+    """Print, one per line, the snapshot's databases outside the CI roster whose newest stable release differs
+    from the version the snapshot measured (Neo4j: its pinned release); exit 0.
 
-    stdout holds only those lines (CI turns them into a notice); a summary goes to stderr. An unreadable snapshot
-    exits 2.
+    stdout holds only those lines (CI turns them into a notice). Databases whose release could not be looked up
+    (unknown) and a summary go to stderr. An unreadable snapshot exits 2.
     """
     try:
         snapshot = Results.read(local)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         typer.echo(f"local-check: {exc}", err=True)
         raise typer.Exit(2) from None
-    changes = local_check_module.version_changes(snapshot)
+    checks = local_check_module.checks(snapshot)
+    changes = [check for check in checks if check.changed]
     for change in changes:
         typer.echo(local_check_module.describe(change))
+    for check in checks:
+        if check.latest is None:
+            typer.echo(f"local-check: {local_check_module.describe(check)}", err=True)
     date = snapshot.started_at[:10]
     if changes:
-        summary = f"{len(changes)} of {len(snapshot.databases)} databases differ from the local snapshot of {date}"
-        typer.echo(f"local-check: {summary}; refresh it with .github/scripts/local-bench.sh", err=True)
+        summary = f"{len(changes)} of {len(checks)} databases outside the CI roster differ from the local snapshot"
+        typer.echo(f"local-check: {summary} of {date}; refresh it with .github/scripts/local-bench.sh", err=True)
     else:
-        typer.echo(f"local-check: every database matches the local snapshot of {date}", err=True)
+        typer.echo(f"local-check: every database outside the CI roster matches the local snapshot of {date}", err=True)
 
 
 @app.command("ci-settings")

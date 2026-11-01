@@ -1,56 +1,85 @@
-"""`graph-bench local-check`: which databases the local snapshot measured at another version than is installed now.
+"""`graph-bench local-check`: which databases of the local snapshot have a newer stable release than it measured.
 
-The local snapshot (`results/local/results.json`, `.github/scripts/local-bench.sh`) is refreshed by hand. CI
-installs the newest stable release of every database, so when a database's installed version differs from the
-snapshot's `databases[*].version`, the snapshot is due for a refresh. The installed version is read the way a run
-records it (`worker.database_line`: a probe instance's `info()`), so the two strings compare like for like.
+The local snapshot (`results/local/results.json`, `.github/scripts/local-bench.sh`) is refreshed by hand. Only its
+databases outside the CI roster reach the README (`merge.from_snapshot`, the same set `merge --local` takes), so
+only those are checked. Each recorded version (`databases[*].version`) is compared with the newest stable release
+of the database's PyPI package (`databases.PACKAGES`, `release.fetch_latest`): CI installs that release, so a
+difference means the snapshot is due for a refresh. Neo4j is not on PyPI: it is compared with the pinned release,
+`pins.NEO4J_VERSION`, which pins.yml keeps at the newest stable. A lookup that fails leaves that database
+"unknown"; the check never fails.
 """
 
-import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
 
-from graph_bench.databases import get_database
+from graph_bench import release
+from graph_bench.databases import PACKAGES, pins
+from graph_bench.merge import from_snapshot
 from graph_bench.report.ranking import safe_display_name
 from graph_bench.results import Results
-from graph_bench.runner.worker import database_line
+
+NEO4J = "neo4j"
+NO_PACKAGE = "no PyPI package known"
+PINNED_NOTE = "Neo4j is not on PyPI; pins.yml keeps graph_bench/databases/pins.py at the newest stable"
 
 
 @dataclass(frozen=True)
-class VersionChange:
-    """A database whose installed version (None: not installed) is not the snapshot's."""
+class VersionCheck:
+    """One database: the snapshot's version and the newest stable release (None: unknown, see `error`).
+
+    `pinned` marks Neo4j, whose newest release is the pin in pins.py, not a PyPI lookup.
+    """
 
     database: str
     snapshot: str
-    installed: str | None
+    latest: str | None
+    pinned: bool = False
+    error: str | None = None
+
+    @property
+    def changed(self) -> bool:
+        return self.latest is not None and not release.same_version(self.snapshot, self.latest)
 
 
-def installed_version(name: str) -> str | None:
-    """The version a run would record for `name` now; None when it is unknown, not installed or its probe fails."""
-    try:
-        cls = get_database(name)
-        with tempfile.TemporaryDirectory(prefix="graph-bench-check-") as work:
-            return str(database_line(cls, Path(work), 1)["version"])
-    except Exception:  # any driver error (import, JVM, native library) means the version cannot be read
-        return None
+def newest_release(package: str) -> str:
+    """The newest stable release of `package` on PyPI, post releases included (as an install picks them)."""
+    return release.fetch_latest(package, post=True)
 
 
-def version_changes(
-    snapshot: Results, installed: Callable[[str], str | None] = installed_version
-) -> list[VersionChange]:
-    """The snapshot's databases, in its order, whose installed version differs from the recorded one."""
-    changes = []
+def checks(snapshot: Results, lookup: Callable[[str], str] | None = None) -> list[VersionCheck]:
+    """One check per snapshot database outside the CI roster, in the snapshot's order. `lookup` (package to its
+    newest stable version) defaults to `newest_release`; any error it raises makes that database unknown."""
+    lookup = lookup or newest_release
+    found = []
     for name, info in snapshot.databases.items():
-        now = installed(name)
-        if now != info.version:
-            changes.append(VersionChange(name, info.version, now))
-    return changes
+        if not from_snapshot(name):
+            continue
+        if name == NEO4J:
+            found.append(VersionCheck(name, info.version, pins.NEO4J_VERSION, pinned=True))
+            continue
+        package = PACKAGES.get(name)
+        if package is None:
+            found.append(VersionCheck(name, info.version, None, error=NO_PACKAGE))
+            continue
+        try:
+            found.append(VersionCheck(name, info.version, lookup(package)))
+        except Exception as exc:  # a network, HTTP or PyPI format error: unknown, never a failed check
+            found.append(VersionCheck(name, info.version, None, error=str(exc) or type(exc).__name__))
+    return found
 
 
-def describe(change: VersionChange) -> str:
-    now = f"{change.installed} installed" if change.installed is not None else "not installed"
-    return f"{safe_display_name(change.database)}: {change.snapshot} in the local snapshot, {now}"
+def version_changes(snapshot: Results, lookup: Callable[[str], str] | None = None) -> list[VersionCheck]:
+    """The checks whose newest stable release is known and differs from the snapshot's version."""
+    return [check for check in checks(snapshot, lookup) if check.changed]
 
 
-__all__ = ["VersionChange", "describe", "installed_version", "version_changes"]
+def describe(check: VersionCheck) -> str:
+    head = f"{safe_display_name(check.database)}: {check.snapshot} in the local snapshot"
+    if check.latest is None:
+        return f"{head}, newest stable release unknown ({check.error})"
+    if check.pinned:
+        return f"{head}, {check.latest} is the pinned release ({PINNED_NOTE})"
+    return f"{head}, {check.latest} is the newest stable release"
+
+
+__all__ = ["VersionCheck", "checks", "describe", "newest_release", "version_changes"]
