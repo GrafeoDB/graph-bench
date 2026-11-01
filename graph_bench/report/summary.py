@@ -10,11 +10,16 @@ from dataclasses import dataclass
 
 from graph_bench.report.ranking import Ranked, is_load, rank, scale_key
 from graph_bench.results import Entry, Results
+from graph_bench.runner import CASE_CEILING_S, LOAD_CEILING_S, load_over
 from graph_bench.suites.catalog import STARTUP_SCALE
 from graph_bench.types import CATEGORY_NAMES, CATEGORY_ORDER, marker
 
 RESULTS_URL = "https://github.com/GrafeoDB/graph-bench#results"
-LEGEND = "⊘ not available · ✗ failing · ≠ wrong answer · ⏱ beyond 10x the top-3 average"
+# ⏱ covers the final budget rule and the run-time limits (FAIRNESS.md rules 8 and 9).
+LEGEND = (
+    "⊘ not available · ✗ failing · ≠ wrong answer · ⏱ beyond 10x the top-3 average, "
+    f"over {CASE_CEILING_S:g} s or {load_over(LOAD_CEILING_S)}"
+)
 GRAFEO = "grafeo"
 
 

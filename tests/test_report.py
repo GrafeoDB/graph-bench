@@ -12,7 +12,7 @@ from graph_bench.report.summary import render_summary
 from graph_bench.results import Entry, Resource, Results
 from graph_bench.types import AnswerVerdict, Category, Status, Timing
 
-LEGEND = "⊘ not available · ✗ failing · ≠ wrong answer · ⏱ beyond 10x the top-3 average"
+LEGEND = "⊘ not available · ✗ failing · ≠ wrong answer · ⏱ beyond 10x the top-3 average, over 60 s or load over 5 min"
 
 EXPECTED_SUMMARY = """\
 <!-- graph-bench:start -->
@@ -27,7 +27,7 @@ Single-threaded, small scale; answers checked; wrong answers not ranked.
 
 Grafeo: ≠ on snb_ic6
 
-⊘ not available · ✗ failing · ≠ wrong answer · ⏱ beyond 10x the top-3 average
+⊘ not available · ✗ failing · ≠ wrong answer · ⏱ beyond 10x the top-3 average, over 60 s or load over 5 min
 
 Full results, with every database named: https://github.com/GrafeoDB/graph-bench#results
 <!-- graph-bench:end -->
