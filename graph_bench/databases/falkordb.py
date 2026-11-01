@@ -83,9 +83,13 @@ class FalkorDatabase(Database):
         """Start the falkordblite server and select the graph: what `load` does before its first index."""
         # No path: a temporary directory. An empty `save` removes the periodic RDB snapshots, so the data stays in
         # memory only (https://docs.falkordb.com/operations/durability.html, the `save ""` development setting).
-        # The client keeps falkordblite's defaults (a 5 s socket timeout, 10 retries); see "FalkorDB: a call longer
-        # than about 50 s fails on the client's socket timeout" in docs/known-disagreements.md.
-        self.server = FalkorDB(None, serverconfig={"save": ""})
+        # `socket_timeout=None`: only the harness's rules stop a case (FAIRNESS.md rule 9), not the client's default
+        # 5 s socket timeout with its retries. falkordblite passes its other keyword arguments to `redislite.Redis`,
+        # which supports "all other keyword arguments supported by the redis.Redis() class"
+        # (https://redislite.readthedocs.io/en/latest/topic/redislite_module.html); redis-py documents
+        # `socket_timeout` (https://redis.readthedocs.io/en/stable/connections.html). The server side has no query
+        # timeout by default (`TIMEOUT_DEFAULT` and `TIMEOUT_MAX` 0, https://docs.falkordb.com/configuration.html).
+        self.server = FalkorDB(None, serverconfig={"save": ""}, socket_timeout=None)
         self.graph = self.server.select_graph(GRAPH)
 
     def load(self, dataset: Dataset) -> None:
