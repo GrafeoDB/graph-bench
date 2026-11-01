@@ -159,7 +159,7 @@ def earlier_legs(db: str, paths: Iterable[Path]) -> tuple[list[Path], list[tuple
     for path in paths:
         try:
             dbs = _databases(Results.read(path))
-        except (OSError, ValueError, KeyError, TypeError) as exc:
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:  # unreadable or not a results file
             unreadable.append((path, str(exc) or type(exc).__name__))
             continue
         if dbs and all(name in roster[: roster.index(db)] for name in dbs):

@@ -233,6 +233,9 @@ def test_ci_yardsticks_takes_only_earlier_legs(tmp_path: Path) -> None:
     broken = directory / "results-full-broken" / "results.json"
     broken.parent.mkdir()
     broken.write_text("{", encoding="utf-8")
+    shaped = directory / "results-full-shaped" / "results.json"
+    shaped.parent.mkdir()
+    shaped.write_text("[]", encoding="utf-8")  # valid JSON, not a results document
 
     def args(db: str, where: Path = directory) -> str:
         result = CliRunner().invoke(app, ["ci-yardsticks", "--db", db, str(where)])
@@ -249,6 +252,7 @@ def test_ci_yardsticks_takes_only_earlier_legs(tmp_path: Path) -> None:
     assert args(roster[0], tmp_path / "none") == ""  # the first leg downloads nothing
     result = CliRunner().invoke(app, ["ci-yardsticks", "--db", roster[2], str(directory)])
     assert str(broken) in result.stderr
+    assert str(shaped) in result.stderr
     unknown = CliRunner().invoke(app, ["ci-yardsticks", "--db", "falkordb", str(directory)])
     assert unknown.exit_code == 2
 
