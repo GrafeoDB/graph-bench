@@ -11,17 +11,18 @@ from dataclasses import dataclass
 
 from graph_bench.report.ranking import LOCAL_MARK, Ranked, is_load, local_databases, rank, scale_key
 from graph_bench.results import Entry, GrafeoSource, Machine, Results
-from graph_bench.runner import CASE_CEILING_S, LOAD_CEILING_S, load_over
+from graph_bench.runner import CASE_CEILING_S, LOAD_CEILING_S, RUN_DEADLINE_S, deadline_over, load_over
 from graph_bench.suites.catalog import STARTUP_SCALE
 from graph_bench.types import CATEGORY_NAMES, CATEGORY_ORDER, marker
 
 RESULTS_URL = "https://github.com/GrafeoDB/graph-bench#results"
 # The generated overview page (`graph-bench report --format overview`): every version, source and run.
 OVERVIEW_URL = "https://github.com/GrafeoDB/graph-bench/blob/main/docs/results.md"
-# ⏱ covers the final budget rule and the run-time limits (FAIRNESS.md rules 8 and 9).
+# ⏱ covers the final budget rule and the run-time limits (FAIRNESS.md rules 8 and 9), and the cases CI's run
+# deadline left unstarted.
 LEGEND = (
     "⊘ not available · ✗ failing · ≠ wrong answer · ⏱ beyond 10x the top-3 average, "
-    f"over {CASE_CEILING_S:g} s or {load_over(LOAD_CEILING_S)}"
+    f"over {CASE_CEILING_S:g} s, {load_over(LOAD_CEILING_S)} or not started by the {deadline_over(RUN_DEADLINE_S)}"
 )
 GRAFEO = "grafeo"
 

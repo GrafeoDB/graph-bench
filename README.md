@@ -82,7 +82,8 @@ CodSpeed records a benchmark as measured or skipped, so each marker maps to a fi
 | ⊘ | not available: the database lacks the capability or the data model | `not_supported` | skipped, `not available: ...` | absent |
 | ✗ | failing: an error or a crash | `failed` | failed, `error: ...` | Skipped if measured before, else absent |
 | ≠ | wrong answer: fails the answer check | `ok` / `disagree` | failed, `wrong answer: ...` | Skipped if measured before, else absent |
-| ⏱ | too slow: beyond 10x the average of the 3 fastest other databases; `over 60 s`: a case still running 60 s after it started (the case ceiling); `load over 5 min`: a load still running 5 minutes after it started, per Load row (one dataset in one store), which takes the cases that read that Load row's data with it (the load ceiling); `run deadline: 48 min`: not started because CI's run deadline had passed (a skip in CodSpeed, not a failed outcome) | `timeout` | failed, `too slow: ...` | Skipped if measured before, else absent |
+| ⏱ | too slow: beyond 10x the average of the 3 fastest other databases; `over 60 s`: a case still running 60 s after it started (the case ceiling); `load over 5 min`: a load still running 5 minutes after it started, per Load row (one dataset in one store), which takes the cases that read that Load row's data with it (the load ceiling) | `timeout` | failed, `too slow: ...` | Skipped if measured before, else absent |
+| ⏱ `run deadline: 48 min` | not started: CI's run deadline had passed before the case, load or startup row could start (a run without `--deadline-s` has none) | `timeout` | skipped, `run deadline` | absent |
 
 Every benchmark first runs once, untimed: the preflight. The answer check and the time budget apply there, so a
 wrong or too slow result never reaches CodSpeed as a speed. One exception: a ⏱ assigned only by the final budget
