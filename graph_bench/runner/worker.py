@@ -14,6 +14,9 @@ Lines, appended to `--out` and flushed one by one:
 - `{"kind": "progress", "id": ...}` after a case's preflight call, after each of its warm-up and timed runs, after
   each load iteration (`id` is null for an unreported load) and after each startup child, so a supervisor can tell
   a long case from a hang;
+- `{"kind": "load", "dataset": ..., "store": ..., "scale": ...}` immediately before the loads of a dataset its
+  cases run on (after the Load row's `start` line, if reported), so a supervisor can stop a load at the load ceiling
+  and knows which cases it takes with it;
 - `{"kind": "entry", "id": ..., "status": ..., ...}` with a case's result, a load's `load_ns` and its count
   check (`answer` and `detail`, see `load_entry`), or the startup's (see `runner.startup.startup_entry`).
 
@@ -23,6 +26,12 @@ entry on fresh instances of its own. The answer-only fixtures (`catalog.ANSWER_O
 entry) come last.
 
 The canonical answers of each case go to `<out dir>/<out stem>/answers/<sanitized id>.json`.
+
+Limits (`graph_bench.runner`, Task T): a case stops at its ceiling (`--case-ceiling`, from its `start` line): no
+warm-up or timed run starts past it, and with fewer than `MIN_ITERATIONS` timed runs the case is ⏱ "too slow: over
+60 s". Timed runs stop once they total `TIME_BOX_S` (at least `MIN_ITERATIONS` of them; loads at least
+`MIN_LOAD_ITERATIONS`). A load that ends past the load ceiling (`--load-ceiling`) is ⏱ "load over 5 min", and so
+is every case of its dataset and store, and its Load (query language) entry (graph store), without running them.
 """
 
 import argparse
@@ -44,9 +53,23 @@ from graph_bench.databases.base import Database, NotSupported
 from graph_bench.datasets import cache
 from graph_bench.datasets.schema import Dataset
 from graph_bench.results import Reference
-from graph_bench.runner import close_quietly, message, reraise_control
+from graph_bench.runner import (
+    CASE_CEILING_S,
+    CEILING_GRACE_S,
+    CONTROL_FLOW,
+    DEFAULT_CASE_TIMEOUT_S,
+    LOAD_CEILING_S,
+    MIN_ITERATIONS,
+    MIN_LOAD_ITERATIONS,
+    TIME_BOX_S,
+    close_quietly,
+    load_over,
+    message,
+    over_ceiling,
+    reraise_control,
+)
 from graph_bench.runner.startup import STARTUP_TIMEOUT_S, run_startups, startup_entry
-from graph_bench.runner.timing import measure
+from graph_bench.runner.timing import OverCeiling, measure
 from graph_bench.suites import Algorithm, Item, Query, Write, catalog
 from graph_bench.suites.catalog import Case, Selection
 from graph_bench.suites.graphalytics import min_member
@@ -57,6 +80,7 @@ __all__ = [
     "DEFAULT_CASE_TIMEOUT_S",
     "Emit",
     "LoadCheck",
+    "LoadOverCeiling",
     "Loaded",
     "Preflight",
     "ReadbackDiffers",
@@ -82,8 +106,6 @@ __all__ = [
     "unsupported_load_entry",
     "write_guard",
 ]
-
-DEFAULT_CASE_TIMEOUT_S = 600.0
 
 Emit = Callable[[dict[str, Any]], None]
 
@@ -356,14 +378,23 @@ def write_preflight(
 
 
 def time_write(
-    write: WriteRun, *, warmup: int, iterations: int, on_run: Callable[[], None] | None = None
+    write: WriteRun,
+    *,
+    warmup: int,
+    iterations: int,
+    on_run: Callable[[], None] | None = None,
+    deadline: float | None = None,
+    ceiling_s: float = CASE_CEILING_S,
+    preflight_ns: int | None = None,
 ) -> dict[str, Any]:
     """Time a write case's runs after its preflight: setup (and its `ready` check) before each, read-back and
     teardown after each, all untimed.
 
     Returns the entry fields: `timing`, or (answer `disagree`, detail "read-back after timed run <k> differs:
     ...", k counting every run after the preflight, warm-ups included) at the first read-back that differs, or
-    (status `failed`, error) when a phase raised or a setup missed its state.
+    (status `failed`, error) when a phase raised or a setup missed its state, or (status `timeout`, "too slow:
+    over ...") when the case reached its ceiling (`deadline`, `ceiling_s` after its start) with too few timed runs.
+    The runs are time-boxed like a query's (`_limits`), the first predicted from `preflight_ns`.
     """
     runs = [0]
 
@@ -375,8 +406,16 @@ def time_write(
 
     try:
         timing, _ = measure(
-            write.run, warmup=warmup, iterations=iterations, on_run=on_run, before=write.prepare, after=after
+            write.run,
+            warmup=warmup,
+            iterations=iterations,
+            on_run=on_run,
+            before=write.prepare,
+            after=after,
+            **_limits(deadline, preflight_ns),
         )
+    except OverCeiling:
+        return {"status": "timeout", "error": over_ceiling(ceiling_s)}
     except ReadbackDiffers as exc:
         return {"answer": "disagree", "detail": str(exc)}
     except SetupDiffers as exc:
@@ -387,6 +426,15 @@ def time_write(
         write.undo()
         return {"status": "failed", "error": message(exc)}
     return {"timing": asdict(timing)}
+
+
+def _limits(deadline: float | None, preflight_ns: int | None = None) -> dict[str, Any]:
+    """`measure`'s limits for a case: the time box, at least `MIN_ITERATIONS`, the ceiling's deadline (if any), the
+    supervisor's kill `CEILING_GRACE_S` after it, and the preflight's duration as the first run's prediction."""
+    kill_at = None if deadline is None else deadline + CEILING_GRACE_S
+    first_s = None if preflight_ns is None else preflight_ns / 1e9
+    limits = {"time_box_s": TIME_BOX_S, "min_iterations": MIN_ITERATIONS, "deadline": deadline, "kill_at": kill_at}
+    return {**limits, "first_s": first_s}
 
 
 def write_guard(entry: dict[str, Any], write: WriteRun | None) -> None:
@@ -538,8 +586,9 @@ def unsupported_load_entry(load_id: str, model: str) -> dict[str, Any]:
     return {"kind": "entry", "id": load_id, "status": "not_supported", "error": f"model {model} not supported"}
 
 
-def load_entry(load_id: str, load_ns: int, check: LoadCheck) -> dict[str, Any]:
-    """A load's entry line: `ok` with the count verdict, or `failed` when counting raised.
+def load_entry(load_id: str, load_ns: int, check: LoadCheck, iterations: int) -> dict[str, Any]:
+    """A load's entry line: `ok` with the count verdict, or `failed` when counting raised; `load_ns` is the median
+    of the `iterations` loads that ran (`load_iterations`: fewer than the selection's when the time box stopped them).
 
     A counting error fails only the load entry: the load itself worked, so the dataset's cases still run on it.
     """
@@ -548,6 +597,7 @@ def load_entry(load_id: str, load_ns: int, check: LoadCheck) -> dict[str, Any]:
         "id": load_id,
         "status": "ok",
         "load_ns": load_ns,
+        "load_iterations": iterations,
         "answer": check.answer,
         "detail": check.detail,
     }
@@ -558,12 +608,23 @@ def load_entry(load_id: str, load_ns: int, check: LoadCheck) -> dict[str, Any]:
 
 @dataclass
 class Loaded:
-    """A loaded instance, its directory, the median load time and the count check of the loads (if run)."""
+    """A loaded instance, its directory, the median load time, the count check of the loads (if run) and the
+    number of loads the time box let run."""
 
     db: Database
     workdir: Path
     load_ns: int
     check: LoadCheck
+    iterations: int = 1
+
+
+class LoadOverCeiling(Exception):
+    """A load (with its count check) ended past its deadline: the load ceiling (Task T)."""
+
+
+def _boxed(times: list[int]) -> bool:
+    """Whether a load's time box is full: at least `MIN_LOAD_ITERATIONS` loads, together `TIME_BOX_S` or more."""
+    return len(times) >= MIN_LOAD_ITERATIONS and sum(times) >= TIME_BOX_S * 1e9
 
 
 def load(
@@ -576,12 +637,15 @@ def load(
     *,
     check: bool = False,
     store: Store = "graph",
+    deadline: float | None = None,
 ) -> Loaded:
-    """Load `dataset` into `store` `iterations` times, each into a fresh instance in a fresh directory; keep the last.
+    """Load `dataset` into `store` up to `iterations` times, each into a fresh instance in a fresh directory; keep
+    the last.
 
     The clock covers `Database.load_store` alone. `progress` is called after each load, outside its clock. With
     `check`, each loaded instance's node and edge counts are checked right after its load, outside the clock too
-    (`LoadCheck`).
+    (`LoadCheck`). No further load starts once the time box is full (`_boxed`). A load (with its count check) that
+    ends at or past `deadline` (a `time.monotonic()` value) raises `LoadOverCeiling`, its instance removed.
     """
     times: list[int] = []
     counted = LoadCheck()
@@ -595,16 +659,25 @@ def load(
         start = time.perf_counter_ns()
         try:
             db.load_store(store, dataset)
-        except BaseException:
+        except BaseException as exc:
             close_quietly(db)
             remove(db_dir)
+            if deadline is not None and time.monotonic() >= deadline and not isinstance(exc, CONTROL_FLOW):
+                # The adapter's own timeout stopped a load that had not finished by the ceiling: over it.
+                raise LoadOverCeiling from exc
             raise
         times.append(time.perf_counter_ns() - start)
         if check:
             counted.add(db, dataset)
         progress()
+        if deadline is not None and time.monotonic() >= deadline:
+            close_quietly(db)
+            remove(db_dir)
+            raise LoadOverCeiling
+        if _boxed(times):
+            break
     assert previous is not None
-    return Loaded(previous[0], previous[1], int(statistics.median(times)), counted)
+    return Loaded(previous[0], previous[1], int(statistics.median(times)), counted, len(times))
 
 
 def probe_case(db_cls: type[Database], dataset: Dataset, threads: int | None) -> Case | None:
@@ -634,14 +707,18 @@ def run_load_ql(
     load_id: str,
     emit: Emit,
     setup_error: str | None = None,
+    *,
+    ceiling_s: float = LOAD_CEILING_S,
 ) -> None:
-    """The Load (query language) entry of a dataset: `iterations` fresh instances, each timed around
+    """The Load (query language) entry of a dataset: up to `iterations` fresh instances, each timed around
     `Database.load_ql` alone, count-checked like Load and content-probed (`LoadCheck.probe`), then closed.
 
     No case ever runs on these instances. Any failure fails this entry only. With `setup_error` (from
-    `prepare_environment`) the entry fails with it.
+    `prepare_environment`) the entry fails with it. The loads are time-boxed like Load's (`_boxed`), and one that
+    ends `ceiling_s` or more after the `start` line makes the entry ⏱ "load over ...".
     """
     emit({"kind": "start", "id": load_id})
+    deadline = time.monotonic() + ceiling_s
     if setup_error is not None:
         emit({"kind": "entry", "id": load_id, "status": "failed", "error": setup_error})
         return
@@ -663,12 +740,20 @@ def run_load_ql(
                 close_quietly(db)
                 remove(db_dir)
             emit({"kind": "progress", "id": load_id})
+            if time.monotonic() >= deadline:
+                emit({"kind": "entry", "id": load_id, "status": "timeout", "error": load_over(ceiling_s)})
+                return
+            if _boxed(times):
+                break
     except BaseException as exc:
         reraise_control(exc)
+        if time.monotonic() >= deadline:  # the adapter's own timeout stopped a load past the ceiling
+            emit({"kind": "entry", "id": load_id, "status": "timeout", "error": load_over(ceiling_s)})
+            return
         status = "not_supported" if isinstance(exc, NotSupported) else "failed"
         emit({"kind": "entry", "id": load_id, "status": status, "error": message(exc)})
         return
-    emit(load_entry(load_id, int(statistics.median(times)), check))
+    emit(load_entry(load_id, int(statistics.median(times)), check, len(times)))
 
 
 def startup_timeout(case_timeout_s: float) -> float:
@@ -746,6 +831,8 @@ class _Settings:
     out: Path
     budgets: dict[str, float]
     case_timeout_s: float
+    case_ceiling_s: float = CASE_CEILING_S
+    load_ceiling_s: float = LOAD_CEILING_S
 
 
 def start_case(
@@ -778,18 +865,38 @@ def start_case(
 
 
 def _run_case(case: Case, db: Database, base: Path, settings: _Settings, emit: Emit) -> None:
+    """Preflight, then time the case within its limits; its ceiling counts from its `start` line."""
     budget = settings.budgets.get(case.bench_id, settings.case_timeout_s)
+    deadline = time.monotonic() + settings.case_ceiling_s
     pf, entry = start_case(case, db, base, settings.out, budget, emit)
     if pf.passed:
         sel = settings.selection
         progress = {"kind": "progress", "id": case.bench_id}
         warmup = max(sel.warmup - 1, 0)
         if pf.write is not None:
-            entry.update(time_write(pf.write, warmup=warmup, iterations=sel.iterations, on_run=lambda: emit(progress)))
+            entry.update(
+                time_write(
+                    pf.write,
+                    warmup=warmup,
+                    iterations=sel.iterations,
+                    on_run=lambda: emit(progress),
+                    deadline=deadline,
+                    ceiling_s=settings.case_ceiling_s,
+                    preflight_ns=pf.preflight_ns,
+                )
+            )
         else:
             try:
-                timing, _ = measure(pf.run, warmup=warmup, iterations=sel.iterations, on_run=lambda: emit(progress))
+                timing, _ = measure(
+                    pf.run,
+                    warmup=warmup,
+                    iterations=sel.iterations,
+                    on_run=lambda: emit(progress),
+                    **_limits(deadline, pf.preflight_ns),
+                )
                 entry["timing"] = asdict(timing)
+            except OverCeiling:
+                entry["status"], entry["error"] = "timeout", over_ceiling(settings.case_ceiling_s)
             except BaseException as exc:
                 reraise_control(exc)
                 entry["status"], entry["error"] = "failed", message(exc)
@@ -807,11 +914,13 @@ def run(
     skip: frozenset[str] = frozenset(),
     budgets: dict[str, float] | None = None,
     case_timeout_s: float = DEFAULT_CASE_TIMEOUT_S,
+    case_ceiling_s: float = CASE_CEILING_S,
+    load_ceiling_s: float = LOAD_CEILING_S,
 ) -> None:
     """Run every case of the selection for one database and thread setting, appending JSON lines to `out`."""
     sel = catalog.selection(selection_name)
     db_cls = get_database(db_name)
-    settings = _Settings(sel, out, budgets or {}, case_timeout_s)
+    settings = _Settings(sel, out, budgets or {}, case_timeout_s, case_ceiling_s, load_ceiling_s)
     out.parent.mkdir(parents=True, exist_ok=True)
     workdir.mkdir(parents=True, exist_ok=True)
     with out.open("a", encoding="utf-8", newline="\n") as fh:
@@ -907,13 +1016,32 @@ def _run_dataset(
     """Load the dataset into `store` and run the cases that read it; then its Load (query language) entry.
 
     With `setup_error` (from `prepare_environment`) the loads fail with it. The query-language load runs after
-    the loaded instance is released, whatever happened to it, and never cascades onto the cases.
+    the loaded instance is released, whatever happened to it, and never cascades onto the cases; only a load over
+    the load ceiling does: the query-language load of the same data is then ⏱ "load over ..." without running.
     """
+    over = False
     if cases or load_id is not None:
-        _load_and_run(db_cls, dataset, store, cases, load_id, threads, workdir, base, settings, emit, setup_error)
+        over = _load_and_run(
+            db_cls, dataset, store, cases, load_id, threads, workdir, base, settings, emit, setup_error
+        )
     if load_ql_id is not None:
+        if over:
+            emit({"kind": "start", "id": load_ql_id})
+            emit({"kind": "entry", "id": load_ql_id, "status": "timeout", "error": load_over(settings.load_ceiling_s)})
+            return
         iterations = settings.selection.load_iterations
-        run_load_ql(db_cls, dataset, workdir, threads, iterations, base, load_ql_id, emit, setup_error)
+        run_load_ql(
+            db_cls,
+            dataset,
+            workdir,
+            threads,
+            iterations,
+            base,
+            load_ql_id,
+            emit,
+            setup_error,
+            ceiling_s=settings.load_ceiling_s,
+        )
 
 
 def _load_and_run(
@@ -928,12 +1056,15 @@ def _load_and_run(
     settings: _Settings,
     emit: Emit,
     setup_error: str | None,
-) -> None:
+) -> bool:
+    """Load and run the cases; whether the load ended past the load ceiling (then no case ran: each is ⏱)."""
     if load_id is not None:
         emit({"kind": "start", "id": load_id})
+    deadline = time.monotonic() + settings.load_ceiling_s
     loaded: Loaded | None = None
     text = setup_error
     if text is None:
+        emit({"kind": "load", "dataset": dataset.name, "store": store, "scale": dataset.scale})
         try:
             progress = {"kind": "progress", "id": load_id}
             # An unreported load (no Load entry: an answer-only fixture, or a selection without the Load row) records
@@ -944,7 +1075,17 @@ def _load_and_run(
             def on_load() -> None:
                 emit(progress)
 
-            loaded = load(db_cls, dataset, workdir, threads, iterations, on_load, check=check, store=store)
+            loaded = load(
+                db_cls, dataset, workdir, threads, iterations, on_load, check=check, store=store, deadline=deadline
+            )
+        except LoadOverCeiling:
+            error = load_over(settings.load_ceiling_s)
+            if load_id is not None:
+                emit({"kind": "entry", "id": load_id, "status": "timeout", "error": error})
+            for case in cases:
+                emit({"kind": "start", "id": case.bench_id})
+                emit(case_entry(case, status="timeout", error=error))
+            return True
         except BaseException as exc:
             reraise_control(exc)
             text = message(exc)
@@ -954,15 +1095,16 @@ def _load_and_run(
         for case in cases:
             emit({"kind": "start", "id": case.bench_id})
             emit(case_entry(case, status="failed", error=f"load failed: {text}"))
-        return
+        return False
     if load_id is not None:
-        emit(load_entry(load_id, loaded.load_ns, loaded.check))
+        emit(load_entry(load_id, loaded.load_ns, loaded.check, loaded.iterations))
     try:
         for case in cases:
             _run_case(case, loaded.db, base, settings, emit)
     finally:
         close_quietly(loaded.db)
         remove(loaded.workdir)
+    return False
 
 
 def parse_budget(value: str) -> tuple[str, float]:
@@ -1002,6 +1144,20 @@ def _parser() -> argparse.ArgumentParser:
         metavar="SECONDS",
         help="Budget of a case without --budget.",
     )
+    parser.add_argument(
+        "--case-ceiling",
+        type=float,
+        default=CASE_CEILING_S,
+        metavar="SECONDS",
+        help="Wall time of a case from its start line; no run starts past it.",
+    )
+    parser.add_argument(
+        "--load-ceiling",
+        type=float,
+        default=LOAD_CEILING_S,
+        metavar="SECONDS",
+        help="Wall time of a load from its start; a load past it takes its dataset's cases with it.",
+    )
     return parser
 
 
@@ -1019,6 +1175,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             skip=frozenset(args.skip),
             budgets=dict(args.budget),
             case_timeout_s=args.case_timeout,
+            case_ceiling_s=args.case_ceiling,
+            load_ceiling_s=args.load_ceiling,
         )
     finally:
         if own_workdir:

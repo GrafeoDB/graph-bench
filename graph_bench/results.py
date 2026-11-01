@@ -53,6 +53,7 @@ class Entry:
     timing: Timing | None = None
     preflight_ns: int | None = None
     load_ns: int | None = None
+    load_iterations: int | None = None
     answer: AnswerVerdict = "unchecked"
     reference: Reference | None = None
     answer_digest: str | None = None
