@@ -4,6 +4,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+from graph_bench import databases
 from graph_bench.cli import app
 from graph_bench.suites import GRAPH_MODELS, Write, catalog, scans, snb_rdf, snb_sql
 from graph_bench.suites.catalog import Case, cases
@@ -337,3 +338,9 @@ def test_write_reference_holds_ready_only_when_defined(tmp_path: Path) -> None:
     assert catalog.load_write_ready(path) == [[["a"]]]
     assert catalog.load_write_reference(path) == ([{}], [[]], [[]])
     assert not _WRITE.ready
+
+
+def test_ci_roster_is_built_in_with_grafeo_last() -> None:
+    assert catalog.CI_DATABASES == ("neug", "ladybug", "turingdb", "oxigraph", "duckdb", "grafeo")
+    assert set(catalog.CI_DATABASES) <= set(databases.REGISTRY)
+    assert catalog.CI_DATABASES[-1] == "grafeo"
