@@ -21,7 +21,8 @@ Lines, appended to `--out` and flushed one by one:
   check (`answer` and `detail`, see `load_entry`), or the startup's (see `runner.startup.startup_entry`);
 - `{"kind": "deadline"}`, last, when the run deadline (`--deadline-at`, a `time.time()` value) had passed before a
   case, a load, a Load (query language) entry or the startup could start: the worker starts nothing more and
-  returns, and the supervisor marks every id not yet recorded ⏱ "run deadline".
+  returns, and the supervisor marks every supported id not yet recorded ⏱ "run deadline" (an unsupported one stays
+  ⊘).
 
 The order: the startup first (before any load, after `Database.provision()`, untimed), then per (dataset, store,
 scale) its load, its read cases, its write cases and, once that instance is released, its Load (query language)

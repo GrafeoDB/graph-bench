@@ -591,10 +591,16 @@ def test_only_queries_and_algorithms_seed_the_first_run_with_the_preflight(
 
 
 def _deadline_worker(
-    push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, keep: set[str], deadline_at: float
+    push_data_dir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    keep: set[str],
+    deadline_at: float,
+    passes_at: str = "test_snb_is",
 ) -> tuple[Lines, list[float]]:
     """`worker.run` in this process on the fake database, every id but `keep` skipped, with `worker._now` a clock
-    the test moves: it reads 1000 until the first case's entry is written, then 2000. Returns the lines in order."""
+    the test moves: it reads 1000 until the first entry whose id contains `passes_at` is written (by default the
+    first case's), then 2000. Returns the lines in order."""
     monkeypatch.setenv("GRAPH_BENCH_DATA_DIR", str(push_data_dir))
     monkeypatch.setenv("GRAPH_BENCH_FAKE", "")
     clock = [1000.0]
@@ -608,8 +614,8 @@ def _deadline_worker(
         def hooked(line: dict[str, Any]) -> None:
             emit(line)
             lines.append(line)
-            if line["kind"] == "entry" and "test_snb_is" in line["id"]:
-                clock[0] = 2000.0  # the deadline passes as the case writes its entry
+            if line["kind"] == "entry" and passes_at in line["id"]:
+                clock[0] = 2000.0  # the deadline passes as the case or load writes its entry
 
         return hooked
 
@@ -637,6 +643,33 @@ def test_worker_starts_nothing_past_the_deadline(
     starts = [line["id"] for line in lines if line["kind"] == "start"]
     assert starts[0] == load_snb and len(starts) == 2 and starts[1] in (_id("snb_is2"), _id("snb_is3")), starts
     ended = next(i for i, line in enumerate(lines) if line["kind"] == "entry" and line["id"] == starts[1])
+    assert lines[ended + 1 :] == [{"kind": "deadline"}]
+
+
+def test_worker_starts_no_query_language_load_past_the_deadline(
+    push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The deadline passes as the graph load writes its entry: the dataset's Load (query language) entry, which
+    runs next on instances of its own, is not started."""
+    load_snb = catalog.load_id("snb", "fake", "small", 1)
+    keep = {load_snb, catalog.load_ql_id("snb", "fake", "small", 1)}
+    lines, _ = _deadline_worker(push_data_dir, tmp_path, monkeypatch, keep, 1500.0, passes_at=load_snb)
+    assert [line["id"] for line in lines if line["kind"] == "start"] == [load_snb]
+    ended = next(i for i, line in enumerate(lines) if line["kind"] == "entry" and line["id"] == load_snb)
+    assert lines[ended + 1 :] == [{"kind": "deadline"}]
+
+
+def test_worker_starts_no_next_load_past_the_deadline(
+    push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The deadline passes as the graph load writes its entry: the RDF load of the same dataset, next in order, is
+    not started."""
+    load_snb = catalog.load_id("snb", "fake", "small", 1)
+    keep = {load_snb, catalog.load_id("snb", "fake", "small", 1, "rdf")}
+    lines, _ = _deadline_worker(push_data_dir, tmp_path, monkeypatch, keep, 1500.0, passes_at=load_snb)
+    assert [line["id"] for line in lines if line["kind"] == "start"] == [load_snb]
+    assert [line["kind"] for line in lines if line["kind"] == "load"] == ["load"]
+    ended = next(i for i, line in enumerate(lines) if line["kind"] == "entry" and line["id"] == load_snb)
     assert lines[ended + 1 :] == [{"kind": "deadline"}]
 
 
