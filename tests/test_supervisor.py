@@ -15,7 +15,7 @@ from graph_bench import databases
 from graph_bench.cli import app
 from graph_bench.databases.base import DatabaseInfo
 from graph_bench.results import Entry, Results
-from graph_bench.runner import supervisor
+from graph_bench.runner import STARTUP_CHILD_TIMEOUT_S, supervisor
 from graph_bench.runner.supervisor import apply_budget_rule, run_bench
 from graph_bench.suites import catalog
 from graph_bench.suites.catalog import Case
@@ -458,16 +458,38 @@ def test_load_ql_crash_does_not_fail_the_cases(bench_env: pytest.MonkeyPatch, tm
 
 
 def test_startup_hang_is_a_timeout_without_cascade(bench_env: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """The worker kills a silent startup child at half the case timeout (at most `STARTUP_TIMEOUT_S`), before
-    the supervisor's silence limit, so no child outlives its worker; the entry is ⏱ and nothing else is touched."""
+    """The worker kills a silent startup child at its own fixed limit (`STARTUP_CHILD_TIMEOUT_S`, patched to 6 s),
+    independent of the silence limit: with a 3 s silence limit the supervisor still waits during the Startup row,
+    so the worker kills its child first and no child outlives its worker; the entry is ⏱ and nothing else is
+    touched."""
     bench_env.setenv("GRAPH_BENCH_FAKE", "hang:startup")
-    results = run_bench("push", ["fake"], tmp_path / "out", workdir=tmp_path / "work", case_timeout_s=HANG_TIMEOUT_S)
+    bench_env.setattr(supervisor, "STARTUP_CHILD_TIMEOUT_S", 6.0)
+    results = run_bench("push", ["fake"], tmp_path / "out", workdir=tmp_path / "work", case_timeout_s=3.0)
     entries = _by_id(results)
     assert set(entries) == _expected_ids("fake")
     hung = entries.pop(catalog.startup_id("fake", 1))
     assert (hung.status, hung.category, hung.scale) == ("timeout", "startup", "empty")
-    assert hung.error == f"startup child 1 gave no answer within {HANG_TIMEOUT_S / 2:g} s"
+    assert hung.error == "startup child 1 gave no answer within 6 s"  # not "no output for 3 s"
     assert all(e.status == "ok" for e in entries.values()), [e for e in entries.values() if e.status != "ok"]
+
+
+def test_startup_child_limit_is_fixed() -> None:
+    """The startup child limit is its own constant (120 s), passed to the worker and to pytest whatever the
+    silence limit."""
+    assert STARTUP_CHILD_TIMEOUT_S == 120.0
+    request = supervisor.LaunchRequest(
+        db="fake",
+        selection="push",
+        threads=1,
+        workdir=Path("w"),
+        out=Path("o"),
+        case_timeout_s=7.0,
+        skip=[],
+        budgets={},
+    )
+    worker, pytest_ = supervisor.worker_argv(request), supervisor.pytest_argv(request)
+    assert worker[worker.index("--startup-timeout") + 1] == "120.0"
+    assert pytest_[pytest_.index("--gb-startup-timeout") + 1] == "120.0"
 
 
 def test_budget_rule_exempts_loads() -> None:

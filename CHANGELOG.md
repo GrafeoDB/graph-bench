@@ -112,7 +112,8 @@ benchmark moves to `legacy/` untouched and is deleted once the new comparison re
 
 - **Selections and silence limit**: `full` runs the medium scale only (push keeps small, under CodSpeed on every
   push); its warm-up, iteration and binding counts stay. The silence limit (`--case-timeout`) drops from 600 to
-  120 s.
+  120 s. A startup child keeps its own 120 s limit, no longer half the silence limit; the supervisor waits past
+  it during the Startup row.
 - **Fairness rules**: FAIRNESS.md is rewritten for the embedded comparison: one process per database,
   single-threaded runs (all-cores runs return with grafeo 0.6.4), in-memory storage where supported, each
   database's fastest documented bulk load, its vendor-recommended API, checked answers and the budget rule.

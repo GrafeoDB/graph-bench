@@ -83,6 +83,8 @@ from graph_bench.runner import (
     CEILING_GRACE_S,
     DEFAULT_CASE_TIMEOUT_S,
     LOAD_CEILING_S,
+    SILENCE_MARGIN_S,
+    STARTUP_CHILD_TIMEOUT_S,
     TIME_BOX_S,
     load_over,
     message,
@@ -417,6 +419,7 @@ class LaunchRequest:
     budgets: dict[str, float]
     case_ceiling_s: float = CASE_CEILING_S
     load_ceiling_s: float = LOAD_CEILING_S
+    startup_timeout_s: float = STARTUP_CHILD_TIMEOUT_S
 
 
 def worker_argv(r: LaunchRequest) -> list[str]:
@@ -425,6 +428,7 @@ def worker_argv(r: LaunchRequest) -> list[str]:
     argv += ["--threads", _tag(r.threads), "--workdir", str(r.workdir), "--out", str(r.out)]
     argv += ["--case-timeout", repr(r.case_timeout_s)]
     argv += ["--case-ceiling", repr(r.case_ceiling_s), "--load-ceiling", repr(r.load_ceiling_s)]
+    argv += ["--startup-timeout", repr(r.startup_timeout_s)]
     if r.skip:
         argv += ["--skip", *r.skip]
     if r.budgets:
@@ -447,6 +451,7 @@ def pytest_argv(r: LaunchRequest) -> list[str]:
     argv += ["--codspeed-max-time", repr(TIME_BOX_S)]
     argv += ["--codspeed-max-rounds", str(catalog.selection(r.selection).iterations)]
     argv += ["--gb-case-ceiling", repr(r.case_ceiling_s), "--gb-load-ceiling", repr(r.load_ceiling_s)]
+    argv += ["--gb-startup-timeout", repr(r.startup_timeout_s)]
     for bench_id in r.skip:
         argv += ["--deselect", bench_id]
     for bench_id, seconds in r.budgets.items():
@@ -518,6 +523,7 @@ class _Attempt:
     # for a Load (query language) entry, kind "load_ql". None between them (startup, harness work).
     phase: tuple[Kind, tuple[str, Store, str] | None, float] | None = None
     load_key: tuple[Kind, tuple[str, Store, str]] | None = None  # the load killed at its ceiling
+    in_startup: bool = False  # between the Startup row's `start` and `entry` lines
 
 
 @dataclass
@@ -623,6 +629,7 @@ class _Run:
                     budgets={i: budgets[i] for i in meta if i in budgets and i not in skip},
                     case_ceiling_s=CASE_CEILING_S,
                     load_ceiling_s=LOAD_CEILING_S,
+                    startup_timeout_s=STARTUP_CHILD_TIMEOUT_S,
                 )
                 argv = self.runner.argv(request)
                 attempt = self._attempt(argv, env, out, raw / f"{name}.log", db, meta, request.budgets)
@@ -805,7 +812,10 @@ class _Run:
             limit = self.case_timeout_s if started else max(self.case_timeout_s, STARTUP_TIMEOUT_S)
             if attempt.phase is not None and attempt.phase[0] != "case":
                 # A load writes nothing while it runs: the load ceiling, not the silence limit, bounds it.
-                limit = max(limit, LOAD_CEILING_S + CEILING_GRACE_S + 1.0)
+                limit = max(limit, LOAD_CEILING_S + CEILING_GRACE_S + SILENCE_MARGIN_S)
+            if attempt.in_startup:
+                # The worker kills a silent startup child itself, at its fixed limit (plus the kill's grace).
+                limit = max(limit, STARTUP_CHILD_TIMEOUT_S + CEILING_GRACE_S + SILENCE_MARGIN_S)
             silent = time.monotonic() - last
             if cutoff is not None and cutoff < limit and silent > cutoff:  # `_attempt` kills it
                 attempt.hung, attempt.silence_s, attempt.cutoff_s = True, cutoff, cutoff
@@ -844,12 +854,14 @@ class _Run:
             attempt.pending = line["id"]
             m = meta.get(line["id"])
             attempt.phase = None
+            attempt.in_startup = m is not None and m.kind == "startup"
             if m is not None and m.kind != "startup":
                 attempt.phase = (m.kind, None if m.kind == "case" else (m.dataset, m.store, m.scale), now)
         elif kind == "load":
             attempt.phase = ("load", (line["dataset"], line["store"], line["scale"]), now)
         elif kind == "entry":
             attempt.phase = None
+            attempt.in_startup = False
             bench_id = line.pop("id")
             if attempt.pending == bench_id:
                 attempt.pending = None
