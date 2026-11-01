@@ -144,8 +144,8 @@ def test_falkordb_startup_timeout_kills_the_redis_server(tmp_path: Path, monkeyp
 def test_falkordb_client_has_no_socket_timeout(tmp_path: Path) -> None:
     """Only the harness's rules stop a case: the client runs without redis-py's socket timeout (FAIRNESS.md)."""
     db = get_database("falkordb")(tmp_path, 1)
-    db.open_empty()
     try:
+        db.open_empty()  # inside the try: a failure after starting redis-server still closes it
         kwargs = db.server.client.connection_pool.connection_kwargs  # type: ignore[attr-defined]
         assert kwargs["socket_timeout"] is None
         assert db.query("RETURN 1", {}) == [(1,)]

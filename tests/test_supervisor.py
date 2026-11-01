@@ -751,8 +751,8 @@ emit(kind="database", name="fake", version="1", process="in-process", threads_co
      threads_note="", storage="in-memory")
 emit(kind="start", id=bench_id)
 emit(kind="run", id=bench_id)
+time.sleep(5.0)  # the database call: nothing comes between `run` and `progress`
 emit(kind="progress", id=bench_id)
-time.sleep(5.0)
 emit(kind="entry", id=bench_id, status="ok", answer="agree", preflight_ns=1000)
 """
 

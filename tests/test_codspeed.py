@@ -698,7 +698,10 @@ def test_codspeed_startup_series_stops_at_the_first_failing_child(
 def test_codspeed_case_and_load_ceilings(push_data_dir: Path, tmp_path: Path) -> None:
     """In pytest: a case past its ceiling after the preflight is ⏱ "too slow: over ..." and never reaches
     `benchmark`; a load past the load ceiling is ⏱ "load over ...", and so are its dataset's cases and its Load
-    (query language) test, none of them run. The other dataset runs as usual."""
+    (query language) test, none of them run. The other dataset runs as usual.
+
+    `slow:snb_is2` sleeps 0.2 s per call and snb_is2 has 10 bindings, so its preflight alone takes 2 s, past the
+    1 s ceiling: the case is over its ceiling before any benchmark call, whatever the prediction."""
     out = tmp_path / "ceilings.jsonl"
     env = {**_env(push_data_dir, "slow:snb_is2,slow:load_graphalytics"), "GRAPH_BENCH_SPY": str(tmp_path / "spy.txt")}
     args = ["--db", "fake", "--selection", "push", "-p", "tests.benchmark_spy", "--gb-out", str(out)]
@@ -709,6 +712,7 @@ def test_codspeed_case_and_load_ceilings(push_data_dir: Path, tmp_path: Path) ->
     entries = {line["id"]: line for line in lines if line["kind"] == "entry"}
     slow = entries[_id("snb_is2")]
     assert (slow["status"], slow["error"], slow["answer"]) == ("timeout", "too slow: over 1 s", "agree")
+    assert slow["preflight_ns"] > 1e9  # the preflight itself ran past the ceiling
     spied = set((tmp_path / "spy.txt").read_text(encoding="utf-8").splitlines())
     assert _id("snb_is2") not in spied and _id("snb_is1") in spied
     load_id = catalog.load_id("graphalytics", "fake", "small", 1)
