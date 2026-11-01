@@ -333,14 +333,18 @@ def apply_budget_rule(results: Results) -> None:
     (`catalog.answer_only`) are exempt, as entries and as yardsticks. The entry itself never counts, so the outcome
     does not depend on order. Speed is `timing.median_ns` in bench mode and `preflight_ns` in codspeed mode. The
     timing of a marked entry is kept.
+
+    Entries of different sources (`Entry.source`: the CI run and the local snapshot `graph-bench merge --local`
+    adds) are never compared: each source is its own benchmark, so a timing on one machine sets no budget for one
+    on another.
     """
-    groups: dict[tuple[str, str, int | None], list[tuple[Entry, float]]] = {}
+    groups: dict[tuple[str, str, int | None, str], list[tuple[Entry, float]]] = {}
     for e in results.entries:
         if e.status != "ok" or e.answer != "agree" or e.category in BUDGET_EXEMPT or catalog.answer_only(e.benchmark):
             continue  # exempt: no budget and no yardstick (as in the in-run `_budgets`)
         speed = (e.timing.median_ns if e.timing is not None else None) if results.mode == "bench" else e.preflight_ns
         if speed is not None:
-            groups.setdefault((e.benchmark, e.scale, e.threads), []).append((e, float(speed)))
+            groups.setdefault((e.benchmark, e.scale, e.threads, e.source), []).append((e, float(speed)))
     marked: list[tuple[Entry, float]] = []
     for members in groups.values():
         for i, (e, speed) in enumerate(members):

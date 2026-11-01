@@ -6,6 +6,13 @@ graph-bench commit and Grafeo source agree; no database appears twice), puts the
 order and the entries and Memory and Disk records in id order, as one run writes them, and applies the final 10x
 budget rule once over the merged entries. A database expected but without an input (its job died) is recorded
 as a database that does not start: every id it would run ✗ with `NO_RESULTS`.
+
+`--local` adds the local snapshot (`results/local/results.json`, all ten databases on the dev box,
+`.github/scripts/local-bench.sh`): its databases that are neither in a CI input nor expected join the merge, each
+entry, Memory and Disk record and database info tagged `local`, and `sources` records both runs. The snapshot may
+come from another machine, day, graph-bench commit and Grafeo, but must share the selection and mode. Its other
+databases are dropped: CI measured them, and a local timing never stands in for a missing CI one. Budgets and
+ranks never compare the two sources (`supervisor.apply_budget_rule`, `report.ranking`).
 """
 
 from collections.abc import Iterable, Sequence
@@ -13,7 +20,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from graph_bench.databases import KNOWN
-from graph_bench.results import Results
+from graph_bench.results import Results, Run
 from graph_bench.runner import supervisor
 from graph_bench.suites import catalog
 
@@ -21,6 +28,8 @@ NO_RESULTS = "no results: its CI job left no results.json"
 # The top-level fields every input must share: the same cases, measured the same way, by the same harness, with
 # the same Grafeo. The machine and start time may differ (one box per job); they come from the first input.
 AGREE = ("selection", "mode", "graph_bench_commit", "grafeo")
+# The fields the local snapshot shares with the CI inputs: the same cases, measured the same way.
+LOCAL_AGREE = ("selection", "mode")
 
 
 class MergeError(ValueError):
@@ -38,11 +47,39 @@ def _databases(doc: Results) -> set[str]:
     return {*doc.databases, *(e.database for e in doc.entries), *(r.database for r in doc.resources)}
 
 
-def merge(inputs: Sequence[tuple[Path, Results]], expected: Sequence[str] = ()) -> tuple[Results, list[str]]:
+def _local_part(
+    first_path: Path, first: Results, local_path: Path, local: Results, taken: set[str]
+) -> tuple[list[str], Results]:
+    """The snapshot's databases not in `taken`, in catalog order, and the snapshot cut down to them, every entry,
+    record and info tagged `local`."""
+    for name in LOCAL_AGREE:
+        if getattr(local, name) != getattr(first, name):
+            raise MergeError(
+                f"the local snapshot disagrees on {name}: {first_path} has {getattr(first, name)!r},"
+                f" {local_path} has {getattr(local, name)!r}"
+            )
+    added = [db for db in database_order(_databases(local)) if db not in taken]
+    keep = set(added)
+    part = replace(
+        local,
+        databases={n: replace(i, source="local") for n, i in local.databases.items() if n in keep},
+        entries=[replace(e, source="local") for e in local.entries if e.database in keep],
+        resources=[replace(r, source="local") for r in local.resources if r.database in keep],
+    )
+    return added, part
+
+
+def merge(
+    inputs: Sequence[tuple[Path, Results]],
+    expected: Sequence[str] = (),
+    *,
+    local: tuple[Path, Results] | None = None,
+) -> tuple[Results, list[str]]:
     """The merged results of `inputs` (path, document), and the databases of `expected` that no input holds.
 
-    Raises `MergeError` when the inputs disagree on a field of `AGREE` or share a database; `inputs` must not be
-    empty.
+    `local` (path, document) is the local snapshot: see the module docstring. Raises `MergeError` when the inputs
+    disagree on a field of `AGREE` or share a database, or the snapshot disagrees on one of `LOCAL_AGREE`;
+    `inputs` must not be empty.
     """
     if not inputs:
         raise MergeError("no inputs to merge")
@@ -71,17 +108,34 @@ def merge(inputs: Sequence[tuple[Path, Results]], expected: Sequence[str] = ()) 
         failed, unmeasured = supervisor.failed_database(sel, db, NO_RESULTS)
         entries += failed
         resources += unmeasured
+    sources: dict[str, Run] = {}
+    if local is not None:
+        local_path, local_doc = local
+        added, part = _local_part(first_path, first, local_path, local_doc, {*owner, *missing})
+        if added:
+            infos.update(part.databases)
+            entries += part.entries
+            resources += part.resources
+            sources = {"ci": first.run("ci"), "local": local_doc.run("ci")}
     merged = replace(
         first,
         databases={name: infos[name] for name in database_order(infos)},
         entries=sorted(entries, key=lambda e: e.id),
         resources=sorted(resources, key=lambda r: r.id),
+        sources=sources,
     )
     # Applied once, here. Each input came from a run of one database, whose own final rule had no other database
     # to compare with and so marked nothing; its in-run cutoffs (from `--yardstick`) are `timeout` entries that
     # this rule skips. So nothing is counted twice, and the markers are those of one run over all the databases.
+    # The rule compares within each source only. The snapshot's entries already went through its own run's rule
+    # over all ten databases; a subset of them can only set larger budgets, so this marks none of them again.
     supervisor.apply_budget_rule(merged)
     return merged, missing
 
 
-__all__ = ["AGREE", "NO_RESULTS", "MergeError", "database_order", "merge"]
+def local_databases(results: Results) -> list[str]:
+    """The databases of `results` that come from the local snapshot, in its database order."""
+    return [name for name, info in results.databases.items() if info.source == "local"]
+
+
+__all__ = ["AGREE", "LOCAL_AGREE", "NO_RESULTS", "MergeError", "database_order", "local_databases", "merge"]
