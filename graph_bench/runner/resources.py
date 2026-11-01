@@ -47,7 +47,7 @@ from graph_bench.databases import get_database
 from graph_bench.databases.base import NotSupported
 from graph_bench.datasets import cache
 from graph_bench.results import Resource
-from graph_bench.runner import close_quietly, message, reraise_control
+from graph_bench.runner import CEILING_GRACE_S, close_quietly, load_over, message, reraise_control
 from graph_bench.runner.sampler import (
     SAMPLE_INTERVAL_S,
     Sample,
@@ -218,17 +218,21 @@ def unmeasured(
     return Resource(rid, db, dataset, store, scale, threads, status, error)
 
 
-def _follow(proc: "subprocess.Popen[bytes]", out: Path, timeout_s: float) -> tuple[list[dict[str, Any]], float | None]:
-    """The child's lines until it exits, and the silence limit it overran (None when it exited; else it is still
-    running).
+def _follow(
+    proc: "subprocess.Popen[bytes]", out: Path, timeout_s: float, load_ceiling_s: float | None = None
+) -> tuple[list[dict[str, Any]], float | None]:
+    """The child's lines until it exits, and the limit it overran (None when it exited; else it is still running).
 
-    The limit is `timeout_s`; before the first line (imports, `prepare_environment`, the instance) at least
-    `STARTUP_TIMEOUT_S`, as for the worker's start; once the resource line is in, at most `EXIT_GRACE_S`.
+    The limit is `timeout_s` of silence; before the first line (imports, `prepare_environment`, the instance) at
+    least `STARTUP_TIMEOUT_S`, as for the worker's start; once the resource line is in, at most `EXIT_GRACE_S`.
+    With `load_ceiling_s`, a load still running `CEILING_GRACE_S` past it (from its `before` line, whatever else
+    the child writes) overruns it: the returned limit is then `load_ceiling_s`.
     """
     lines: list[dict[str, Any]] = []
     offset = 0
     buffer = b""
     last = time.monotonic()
+    load_started: float | None = None
     while True:
         code = proc.poll()
         chunk = b""
@@ -242,20 +246,33 @@ def _follow(proc: "subprocess.Popen[bytes]", out: Path, timeout_s: float) -> tup
         for raw in complete:
             with contextlib.suppress(ValueError):
                 lines.append(json.loads(raw))
+                if lines[-1].get("phase") == "before":
+                    load_started = time.monotonic()
         if complete:
             last = time.monotonic()
         if code is not None:
             return lines, None
+        loading = load_ceiling_s is not None and load_started is not None
+        loading = loading and _line(lines, "memory", "after") is None
+        if loading and time.monotonic() - (load_started or 0.0) > (load_ceiling_s or 0.0) + CEILING_GRACE_S:
+            return lines, load_ceiling_s
         limit = timeout_s if lines else max(timeout_s, STARTUP_TIMEOUT_S)
         if any(line.get("kind") == "resource" for line in lines):
             limit = min(timeout_s, EXIT_GRACE_S)
+        if loading:  # the load ceiling, not the silence limit, bounds a load
+            limit = max(limit, (load_ceiling_s or 0.0) + CEILING_GRACE_S + 1.0)
         if time.monotonic() - last > limit:
             return lines, limit
         time.sleep(_POLL_S)
 
 
 def _child(
-    argv: list[str], env: Mapping[str, str] | None, out: Path, log: Path, timeout_s: float
+    argv: list[str],
+    env: Mapping[str, str] | None,
+    out: Path,
+    log: Path,
+    timeout_s: float,
+    load_ceiling_s: float | None = None,
 ) -> tuple[list[dict[str, Any]], float | None, int | None, list[Sample]]:
     """Run the child with the sampler on its tree; its lines, the silence limit it overran (None when it exited),
     its exit code and the samples.
@@ -274,7 +291,7 @@ def _child(
         )
         sampler = TreeSampler(interpreter_pid(proc)).start()
         try:
-            lines, overran = _follow(proc, out, timeout_s)
+            lines, overran = _follow(proc, out, timeout_s, load_ceiling_s)
         finally:
             samples = sampler.stop()
             kill_tree(proc, sampler.seen, before)
@@ -301,6 +318,7 @@ def run_resource(
     raw: Path,
     env: Mapping[str, str] | None = None,
     timeout_s: float,
+    load_ceiling_s: float | None = None,
 ) -> Resource:
     """Measure one load in a child: its Memory and Disk record.
 
@@ -311,6 +329,10 @@ def run_resource(
     `EXIT_GRACE_S`, its record kept); one that exits without its resource line
     is `failed` ("resources child exited with code <n>: <last log line>"). A load error is `failed`, a count
     mismatch `ok` with answer `disagree`. Only an `ok` record carries bytes.
+
+    With `load_ceiling_s` (Task T), a load that has not ended that long after its `before` line is stopped:
+    `timeout`, "load over ..." (`runner.load_over`). The child is killed once `CEILING_GRACE_S` more have passed;
+    a load that ended within the grace is stopped all the same, by its `before` and `after` stamps.
     """
     rid = catalog.resource_id(dataset, db, scale, threads, store)
     name = f"{catalog.load_benchmark(dataset, store)}-{scale}"
@@ -322,10 +344,16 @@ def run_resource(
     argv += ["--workdir", str(workdir), "--out", str(out)]
     fresh_dir(workdir)
     try:
-        lines, overran, code, samples = _child(argv, env, out, log, timeout_s)
+        lines, overran, code, samples = _child(argv, env, out, log, timeout_s, load_ceiling_s)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
     record = Resource(rid, db, dataset, store, scale, threads, "failed")
+    before, after = _line(lines, "memory", "before"), _line(lines, "memory", "after")
+    if load_ceiling_s is not None and before is not None:
+        late = after is not None and int(after["t_ns"]) - int(before["t_ns"]) >= load_ceiling_s * 1e9
+        if late or (after is None and overran is not None):  # killed while loading: only the ceiling does that
+            record.status, record.error = "timeout", load_over(load_ceiling_s)
+            return record
     result = _line(lines, "resource")
     if result is None:
         if overran is not None:
@@ -340,7 +368,6 @@ def run_resource(
     record.detail = result.get("detail")
     record.storage = result.get("storage")
     record.disk_bytes = result.get("disk_bytes")
-    before, after = _line(lines, "memory", "before"), _line(lines, "memory", "after")
     if record.status == "ok" and before is not None and after is not None:
         first, last = _sample(before), _sample(after)
         w = window(first, last, samples)

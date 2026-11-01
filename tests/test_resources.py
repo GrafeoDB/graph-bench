@@ -293,3 +293,28 @@ def test_codspeed_mode_records_resources(push_data_dir: Path, tmp_path: Path, mo
     assert results.mode == "codspeed"
     assert {r.id for r in results.resources} == _all_records("fake_rdf")
     assert {r.status for r in results.resources} == {"ok", "not_supported"}
+
+
+@pytest.mark.parametrize(("fake", "grace_s"), [("hang:load_snb", 0.2), ("slow:load_snb", 30.0)])
+def test_resource_load_over_the_ceiling_is_too_slow(
+    push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake: str, grace_s: float
+) -> None:
+    """The record's load stops at the load ceiling like the Load row's: a hung load is killed once the grace is
+    over, a load that ends past the ceiling within the grace is stopped as well; both are ⏱ "load over ..."."""
+    monkeypatch.setattr(resources, "CEILING_GRACE_S", grace_s)
+    started = time.monotonic()
+    r = run_resource(
+        "fake",
+        "push",
+        "snb",
+        "graph",
+        "small",
+        1,
+        workdir=tmp_path / "work",
+        raw=tmp_path / "raw",
+        env=_env(push_data_dir, fake),
+        timeout_s=120,
+        load_ceiling_s=0.1,
+    )
+    assert time.monotonic() - started < 60
+    assert (r.status, r.error, r.peak_bytes, r.disk_bytes) == ("timeout", "load over 0.1 s", None, None)
