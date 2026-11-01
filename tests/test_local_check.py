@@ -141,6 +141,22 @@ def test_cli_never_claims_every_version_matches_when_one_is_unknown(
     )
 
 
+def test_cli_with_every_lookup_unknown_claims_no_match(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The network down: nothing could be checked, and the summary says so instead of a vacuous "all match"."""
+
+    def down(package: str) -> str:
+        raise OSError("network down")
+
+    monkeypatch.setattr(local_check, "newest_release", down)
+    path = tmp_path / "results.json"
+    _snapshot(falkordb="0.12.0", arcadedb="26.10.2.post1", helixdb="0.3.3").write(path)
+    result = CliRunner().invoke(app, ["local-check", "--local", str(path)])
+    assert result.exit_code == 0, result.output
+    assert result.stdout == ""
+    assert "match" not in result.stderr
+    assert "none of the 3 databases outside the CI roster could be checked (3 unknown)" in result.stderr
+
+
 def test_cli_without_a_snapshot_exits_2(tmp_path: Path) -> None:
     result = CliRunner().invoke(app, ["local-check", "--local", str(tmp_path / "none.json")])
     assert result.exit_code == 2

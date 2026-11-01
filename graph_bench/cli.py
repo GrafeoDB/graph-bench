@@ -404,6 +404,9 @@ def local_check(local: Path = _LOCAL_SNAPSHOT) -> None:
         summary = f"{len(changes)} of {checked} checked databases outside the CI roster differ from the local snapshot"
         summary += f" of {date}" + (f", {unknown} unknown" if unknown else "")
         typer.echo(f"local-check: {summary}; refresh it with .github/scripts/local-bench.sh", err=True)
+    elif checked == 0 and unknown:
+        summary = f"none of the {unknown} databases outside the CI roster could be checked ({unknown} unknown)"
+        typer.echo(f"local-check: {summary}", err=True)
     elif unknown:
         summary = f"{checked} of {len(checks)} databases outside the CI roster checked, all match the local snapshot"
         typer.echo(f"local-check: {summary} of {date}; {unknown} unknown", err=True)
