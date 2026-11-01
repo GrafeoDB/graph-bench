@@ -61,6 +61,7 @@ from graph_bench.runner import (
     LOAD_CEILING_S,
     MIN_ITERATIONS,
     MIN_LOAD_ITERATIONS,
+    STARTUP_CHILD_TIMEOUT_S,
     TIME_BOX_S,
     close_quietly,
     load_over,
@@ -68,7 +69,7 @@ from graph_bench.runner import (
     over_ceiling,
     reraise_control,
 )
-from graph_bench.runner.startup import STARTUP_TIMEOUT_S, run_startups, startup_entry
+from graph_bench.runner.startup import run_startups, startup_entry
 from graph_bench.runner.timing import OverCeiling, measure
 from graph_bench.suites import Algorithm, Item, Query, Write, catalog
 from graph_bench.suites.catalog import Case, Selection
@@ -101,7 +102,6 @@ __all__ = [
     "run_load_ql",
     "run_startup",
     "start_case",
-    "startup_timeout",
     "time_write",
     "unsupported_load_entry",
     "write_guard",
@@ -756,12 +756,6 @@ def run_load_ql(
     emit(load_entry(load_id, int(statistics.median(times)), check, len(times)))
 
 
-def startup_timeout(case_timeout_s: float) -> float:
-    """How long a startup child may stay silent: `STARTUP_TIMEOUT_S`, and at most half the case timeout, so the
-    worker kills its own child before a supervisor's silence limit kills the worker (and orphans the child)."""
-    return min(STARTUP_TIMEOUT_S, case_timeout_s / 2)
-
-
 def run_startup(
     db_cls: type[Database],
     db_name: str,
@@ -770,9 +764,10 @@ def run_startup(
     workdir: Path,
     bench_id: str,
     emit: Emit,
-    case_timeout_s: float = DEFAULT_CASE_TIMEOUT_S,
+    child_timeout_s: float = STARTUP_CHILD_TIMEOUT_S,
 ) -> None:
-    """The Startup entry: `provision()` here, untimed, then `iterations` startup children (`run_startups`).
+    """The Startup entry: `provision()` here, untimed, then `iterations` startup children (`run_startups`), each
+    killed if it has not answered `child_timeout_s` after it started.
 
     A provisioning error fails the entry ("provisioning: ...") and no child runs.
     """
@@ -785,8 +780,7 @@ def run_startup(
         emit({"kind": "entry", "id": bench_id, "status": "failed", "error": error, "reference": "python"})
         return
     progress = {"kind": "progress", "id": bench_id}
-    timeout_s = startup_timeout(case_timeout_s)
-    outcome = run_startups(db_name, threads, iterations, workdir, timeout_s, progress=lambda: emit(progress))
+    outcome = run_startups(db_name, threads, iterations, workdir, child_timeout_s, progress=lambda: emit(progress))
     emit(startup_entry(bench_id, outcome))
 
 
@@ -916,6 +910,7 @@ def run(
     case_timeout_s: float = DEFAULT_CASE_TIMEOUT_S,
     case_ceiling_s: float = CASE_CEILING_S,
     load_ceiling_s: float = LOAD_CEILING_S,
+    startup_timeout_s: float = STARTUP_CHILD_TIMEOUT_S,
 ) -> None:
     """Run every case of the selection for one database and thread setting, appending JSON lines to `out`."""
     sel = catalog.selection(selection_name)
@@ -930,7 +925,7 @@ def run(
         startup_id = catalog.startup_id(db_name, threads)
         if startup_id in catalog.startup_ids(sel.name, [db_name]) and startup_id not in skip:
             iterations = sel.startup_iterations
-            run_startup(db_cls, db_name, threads, iterations, workdir, startup_id, emit, case_timeout_s)
+            run_startup(db_cls, db_name, threads, iterations, workdir, startup_id, emit, startup_timeout_s)
 
         # Every (dataset, store, scale) with a supported item gets a load; the selection's other loads are ⊘, as
         # in `catalog.load_ids`.
@@ -1158,6 +1153,13 @@ def _parser() -> argparse.ArgumentParser:
         metavar="SECONDS",
         help="Wall time of a load from its start; a load past it takes its dataset's cases with it.",
     )
+    parser.add_argument(
+        "--startup-timeout",
+        type=float,
+        default=STARTUP_CHILD_TIMEOUT_S,
+        metavar="SECONDS",
+        help="How long a startup child may take to answer before it is killed.",
+    )
     return parser
 
 
@@ -1177,6 +1179,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             case_timeout_s=args.case_timeout,
             case_ceiling_s=args.case_ceiling,
             load_ceiling_s=args.load_ceiling,
+            startup_timeout_s=args.startup_timeout,
         )
     finally:
         if own_workdir:

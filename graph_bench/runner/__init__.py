@@ -23,6 +23,13 @@ DEFAULT_CASE_TIMEOUT_S = 120.0
 # How long past a ceiling the supervisor waits before it kills: room for the worker's own stop (the read-back of the
 # run in progress, the counts guard, the entry line), so a worker that stops itself is never killed for it.
 CEILING_GRACE_S = 5.0
+# A startup child that has not answered `STARTUP_CHILD_TIMEOUT_S` after it started is killed and the Startup entry
+# is ⏱. It is fixed, not derived from the silence limit: during the Startup row the supervisor raises its silence
+# limit above it, so the worker always kills its own child first and no child outlives its worker.
+STARTUP_CHILD_TIMEOUT_S = 120.0
+# How far a raised silence limit lies beyond the limit it makes room for (a load's ceiling and grace, a startup
+# child's limit and grace), so that the inner limit, which records the right marker, always fires first.
+SILENCE_MARGIN_S = 1.0
 
 
 def over_ceiling(ceiling_s: float) -> str:

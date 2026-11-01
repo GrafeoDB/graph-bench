@@ -47,7 +47,14 @@ from graph_bench.databases import get_database
 from graph_bench.databases.base import NotSupported
 from graph_bench.datasets import cache
 from graph_bench.results import Resource
-from graph_bench.runner import CEILING_GRACE_S, close_quietly, load_over, message, reraise_control
+from graph_bench.runner import (
+    CEILING_GRACE_S,
+    SILENCE_MARGIN_S,
+    close_quietly,
+    load_over,
+    message,
+    reraise_control,
+)
 from graph_bench.runner.sampler import (
     SAMPLE_INTERVAL_S,
     Sample,
@@ -260,7 +267,7 @@ def _follow(
         if any(line.get("kind") == "resource" for line in lines):
             limit = min(timeout_s, EXIT_GRACE_S)
         if loading:  # the load ceiling, not the silence limit, bounds a load
-            limit = max(limit, (load_ceiling_s or 0.0) + CEILING_GRACE_S + 1.0)
+            limit = max(limit, (load_ceiling_s or 0.0) + CEILING_GRACE_S + SILENCE_MARGIN_S)
         if time.monotonic() - last > limit:
             return lines, limit
         time.sleep(_POLL_S)
