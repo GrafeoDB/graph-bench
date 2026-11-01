@@ -416,7 +416,9 @@ def test_macro_runner_jobs_are_one_leg_per_roster_database() -> None:
         assert 'if [ "$left" -lt 0 ]; then left=0; fi' in left["run"]
         assert 'echo "seconds=$left" >> "$GITHUB_OUTPUT"' in left["run"]
         assert "--deadline-s ${{ steps.deadline.outputs.seconds }}" in command
-        assert "steps.ci.outputs.deadline_s" not in command
+        # The ⏱ message names the whole deadline (48 min), not what was left when the leg started.
+        assert "--deadline-total-s ${{ steps.ci.outputs.deadline_s }}" in command
+        assert "--deadline-s ${{ steps.ci.outputs.deadline_s }}" not in command
         upload = next(step for step in steps if step.get("uses", "").startswith("actions/upload-artifact@"))
         assert upload["with"]["name"] == prefix + "-${{ matrix.db }}"
         assert upload["if"] == "always()"

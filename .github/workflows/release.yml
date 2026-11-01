@@ -177,7 +177,7 @@ jobs:
           bash .github/scripts/heartbeat.sh out "$RUNNER_TEMP/bench.log" &
           heartbeat=$!
           trap 'kill "$heartbeat" 2>/dev/null || true' EXIT
-          uv run --no-sync graph-bench bench --selection full --db ${{ matrix.db }} --deadline-s ${{ steps.deadline.outputs.seconds }} ${{ steps.yardstick.outputs.args }} --out out 2>&1 | tee "$RUNNER_TEMP/bench.log"
+          uv run --no-sync graph-bench bench --selection full --db ${{ matrix.db }} --deadline-s ${{ steps.deadline.outputs.seconds }} --deadline-total-s ${{ steps.ci.outputs.deadline_s }} ${{ steps.yardstick.outputs.args }} --out out 2>&1 | tee "$RUNNER_TEMP/bench.log"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
