@@ -103,7 +103,8 @@ benchmark moves to `legacy/` untouched and is deleted once the new comparison re
   and the results of the legs before it in the roster as `--yardstick` (picked by the new `graph-bench ci-yardsticks`,
   so a re-run or out-of-order leg never takes a later one), a new option of `bench` and `codspeed` whose correct
   entries set the in-run budgets as earlier databases of the same run would. A bench worker gets the deadline too
-  (`--deadline-at`) and starts no case or load past it. Every leg installs one grafeo version, resolved once per run
+  (`--deadline-at`) and starts no case or load past it; `--deadline-total-s`, the whole 48 minutes, is the figure the
+  ⏱ message names ("run deadline: 48 min"). Every leg installs one grafeo version, resolved once per run
   (bench.yml's `resolve` job, release.yml's `detect`; the prepare action's new `grafeo-version` input).
   `codspeed-results`, `readme-results` and `post-results` on ubuntu-latest merge the legs, unless the run was
   cancelled or the legs were skipped, with the new `graph-bench merge` (inputs must agree on selection, mode,
