@@ -175,7 +175,7 @@ def test_results_round_trip_resources(tmp_path: Path) -> None:
     path = tmp_path / "results.json"
     results.write(path)
     doc = json.loads(path.read_text(encoding="utf-8"))
-    assert doc["schema_version"] == SCHEMA_VERSION == 2
+    assert doc["schema_version"] == SCHEMA_VERSION == 3
     assert doc["resources"][1]["disk_bytes"] == 4096
     assert set(doc["resources"][0]) == {f.name for f in dataclasses.fields(Resource)}
     assert Results.read(path) == results
@@ -204,5 +204,78 @@ def test_results_v1_still_reads(tmp_path: Path) -> None:
 
 
 def test_results_unknown_schema_is_refused() -> None:
-    with pytest.raises(ValueError, match="schema_version 3"):
-        Results.from_dict({"schema_version": 3})
+    with pytest.raises(ValueError, match="schema_version 4"):
+        Results.from_dict({"schema_version": 4})
+
+
+def _v2_doc() -> dict[str, Any]:
+    """A schema 2 document: no `source` on its entry, Memory and Disk record or database info, no `sources`."""
+    return {
+        "schema_version": 2,
+        "graph_bench_commit": "abc",
+        "grafeo": {"version": "0.6.0", "source": "pypi", "sha": None},
+        "machine": {"cpu": "Graviton", "cores": 4, "os": "Linux"},
+        "selection": "full",
+        "mode": "bench",
+        "started_at": "2026-10-30T03:00:00Z",
+        "databases": {"fake": dataclasses.asdict(DatabaseInfo("fake", "1.0", "in-process", False, "", "in-memory"))},
+        "entries": [
+            {
+                "id": "benches/test_hops.py::test_snb_ic13[fake-small]",
+                "category": "hops",
+                "model": "property_graph",
+                "benchmark": "snb_ic13",
+                "database": "fake",
+                "scale": "small",
+                "threads": 1,
+                "status": "ok",
+            }
+        ],
+        "resources": [_resource().to_dict()],
+    }
+
+
+def test_results_v2_reads_every_source_as_ci() -> None:
+    """Without a migration: an entry, record or database info with no `source` is `ci`, and the `ci` run is the
+    document's own date and machine."""
+    doc = _v2_doc()
+    for part in (doc["databases"]["fake"], doc["resources"][0]):
+        part.pop("source", None)
+    results = Results.from_dict(doc)
+    assert results.schema_version == SCHEMA_VERSION
+    assert [e.source for e in results.entries] == ["ci"]
+    assert [r.source for r in results.resources] == ["ci"]
+    assert results.databases["fake"].source == "ci"
+    assert results.sources == {}
+    run = results.run("ci")
+    assert run["started_at"] == "2026-10-30T03:00:00Z"
+    assert run["machine"] == {"cpu": "Graviton", "cores": 4, "os": "Linux"}
+    assert (run["selection"], run["mode"], run["graph_bench_commit"]) == ("full", "bench", "abc")
+
+
+def test_results_round_trip_the_sources(tmp_path: Path) -> None:
+    """Schema 3: every entry, record and database info carries its source, and `sources` holds the date and
+    machine of each source's run."""
+    results = Results.from_dict(_v2_doc())
+    local = {
+        "started_at": "2026-10-20T10:00:00Z",
+        "machine": {"cpu": "Ryzen", "cores": 16, "os": "Linux 6.6"},
+        "graph_bench_commit": "def",
+        "grafeo": {"version": "0.6.0", "source": "pypi", "sha": None},
+        "selection": "full",
+        "mode": "bench",
+    }
+    results.sources = {"ci": results.run("ci"), "local": local}
+    results.entries[0].source = "local"
+    results.resources[0].source = "local"
+    results.databases["fake"] = dataclasses.replace(results.databases["fake"], source="local")
+    path = tmp_path / "results.json"
+    results.write(path)
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    assert doc["schema_version"] == 3
+    assert doc["entries"][0]["source"] == doc["resources"][0]["source"] == doc["databases"]["fake"]["source"]
+    assert doc["sources"]["local"]["machine"]["cpu"] == "Ryzen"
+    back = Results.read(path)
+    assert back == results
+    assert back.run("local") == local
+    assert back.run("ci")["started_at"] == "2026-10-30T03:00:00Z"
