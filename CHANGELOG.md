@@ -21,7 +21,8 @@ benchmark moves to `legacy/` untouched and is deleted once the new comparison re
 - **Grafeo build provenance**: `setup --grafeo <wheel> --grafeo-sha <commit>` records the grafeo commit a wheel was
   built from as `git_sha` in `results.json`, beside the wheel's SHA-256; a checkout records its own commit. The
   summary label shows the commit. The record counts only while the installed grafeo is that build (its
-  `direct_url.json`, when present, names the recorded wheel); a wheel installed over it is reported by its path.
+  `direct_url.json`, when present, names the recorded wheel); a wheel installed over it is reported by its local
+  path or URL.
 - **One process per database**: `graph-bench bench` runs one worker process per database, one after another, and
   writes `results.json` (schema in the design spec) with the machine, the Grafeo build and each database's
   version, process kind, storage and thread setting.
@@ -95,21 +96,22 @@ benchmark moves to `legacy/` untouched and is deleted once the new comparison re
   adopted when it exits.
 - **Known disagreements**: `docs/known-disagreements.md` records wrong answers, slow cases and engine findings as
   they are, instead of working around them in the adapters.
-- **One macro-runner job per roster database**: bench.yml's `codspeed` and `readme` jobs and release.yml's
-  `post` job are matrices over `catalog.CI_DATABASES` (NeuG, LadybugDB, TuringDB, Oxigraph, DuckDB + DuckPGQ,
-  Grafeo), one leg at a time (`max-parallel: 1`, `fail-fast: false`, 55-minute timeout), each on a fresh box. Each
-  leg passes what is left of the run deadline (`graph-bench ci-settings`, counted from the job's first step, never
-  below 0) as `--deadline-s` and the earlier legs' results as `--yardstick`, a new option of `bench` and
-  `codspeed` whose correct entries set the in-run budgets as earlier databases of the same run would. Every leg
-  installs one grafeo version, resolved once per run (bench.yml's `resolve` job, release.yml's `detect`; the
-  prepare action's new `grafeo-version` input). `codspeed-results`, `readme-results` and `post-results` on
-  ubuntu-latest merge the legs, unless the run was cancelled, with the new `graph-bench merge` (inputs must agree
-  on selection, mode, graph-bench commit and Grafeo; the 10x rule applies once over the merged entries; a leg
-  without results shows as ✗ "no results"), then upload the merged results, open the README pull request or post
-  to Discord as before. A release run whose merged results hold no Grafeo posts and records nothing, with a
-  warning. Every upload overwrites, so a re-run job can upload again. The `macro-runner` concurrency group moves
-  to workflow level on both workflows (replacing release.yml's `release-post`), since a job-level group would let
-  matrix legs cancel each other.
+- **One macro-runner job per roster database**: bench.yml's `codspeed` and `readme` jobs and release.yml's `post` job
+  are matrices over `catalog.CI_DATABASES` (NeuG, LadybugDB, TuringDB, Oxigraph, DuckDB + DuckPGQ, Grafeo), one leg at
+  a time (`max-parallel: 1`, `fail-fast: false`, 55-minute timeout), each on a fresh box. Each leg passes what is left
+  of the run deadline (`graph-bench ci-settings`, counted from the job's first step, never below 0) as `--deadline-s`
+  and the results of the legs before it in the roster as `--yardstick` (picked by the new `graph-bench ci-yardsticks`,
+  so a re-run or out-of-order leg never takes a later one), a new option of `bench` and `codspeed` whose correct
+  entries set the in-run budgets as earlier databases of the same run would. A bench worker gets the deadline too
+  (`--deadline-at`) and starts no case or load past it. Every leg installs one grafeo version, resolved once per run
+  (bench.yml's `resolve` job, release.yml's `detect`; the prepare action's new `grafeo-version` input).
+  `codspeed-results`, `readme-results` and `post-results` on ubuntu-latest merge the legs, unless the run was
+  cancelled or the legs were skipped, with the new `graph-bench merge` (inputs must agree on selection, mode,
+  graph-bench commit and Grafeo; the 10x rule applies once over the merged CI entries; a leg without results shows as
+  ✗ "no results"), then upload the merged results, open the README pull request or post to Discord as before. A
+  release run whose merged results hold no Grafeo posts and records nothing, with a warning. Every upload overwrites,
+  so a re-run job can upload again. The `macro-runner` concurrency group moves to workflow level on both workflows
+  (replacing release.yml's `release-post`), since a job-level group would let matrix legs cancel each other.
 - **Local snapshot of all ten** (FAIRNESS.md, "The CI roster and the local snapshot"): `results/local/results.json`,
   written by `.github/scripts/local-bench.sh` (the full selection over every database in one `ubuntu:24.04` container on
   the dev box) and committed. `graph-bench merge --local FILE` adds its databases outside the CI roster.
