@@ -47,6 +47,7 @@ from graph_bench.runner import (
     CEILING_GRACE_S,
     LOAD_CEILING_S,
     MIN_ITERATIONS,
+    STARTUP_CHILD_TIMEOUT_S,
     TIME_BOX_S,
     close_quietly,
     load_over,
@@ -74,7 +75,6 @@ from graph_bench.runner.worker import (
     probe_case,
     remove,
     start_case,
-    startup_timeout,
     unsupported_load_entry,
     write_guard,
 )
@@ -187,6 +187,7 @@ class Bench:
         case_timeout_s: float,
         case_ceiling_s: float = CASE_CEILING_S,
         load_ceiling_s: float = LOAD_CEILING_S,
+        startup_timeout_s: float = STARTUP_CHILD_TIMEOUT_S,
     ) -> None:
         self.db = db
         self.selection = selection
@@ -196,6 +197,7 @@ class Bench:
         self.case_timeout_s = case_timeout_s
         self.case_ceiling_s = case_ceiling_s
         self.load_ceiling_s = load_ceiling_s
+        self.startup_timeout_s = startup_timeout_s
         self._workdir = workdir
         self._own_workdir: Path | None = None
         self._fh: IO[str] | None = None
@@ -634,7 +636,7 @@ def run_startup(benchmark: Any, bench: Bench, sc: StartupCase) -> None:
         bench.emit(entry)
         _outcome(entry)
     model = primary_model(bench.db_cls.models)
-    timeout_s = startup_timeout(bench.case_timeout_s)
+    timeout_s = bench.startup_timeout_s
     progress = {"kind": "progress", "id": sc.bench_id}
     children: list[Child] = [run_child(bench.db, sc.threads, bench.workdir / "startup-0", timeout_s)]
     bench.emit(progress)

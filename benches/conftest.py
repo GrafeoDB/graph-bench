@@ -21,7 +21,7 @@ from typing import Any
 import pytest
 
 from benches._cases import Bench, LoadCase, LoadQlCase, StartupCase, case_key
-from graph_bench.runner import CASE_CEILING_S, DEFAULT_CASE_TIMEOUT_S, LOAD_CEILING_S
+from graph_bench.runner import CASE_CEILING_S, DEFAULT_CASE_TIMEOUT_S, LOAD_CEILING_S, STARTUP_CHILD_TIMEOUT_S
 from graph_bench.runner.worker import parse_budget
 from graph_bench.suites import Write, catalog
 from graph_bench.suites.catalog import Case
@@ -67,6 +67,13 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         metavar="SECONDS",
         help="Wall time of a load from its start; a load past it takes its dataset's cases with it.",
     )
+    group.addoption(
+        "--gb-startup-timeout",
+        type=float,
+        default=STARTUP_CHILD_TIMEOUT_S,
+        metavar="SECONDS",
+        help="How long a startup child may take to answer before it is killed.",
+    )
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -88,6 +95,7 @@ def pytest_configure(config: pytest.Config) -> None:
         config.getoption("--case-timeout"),
         config.getoption("--gb-case-ceiling"),
         config.getoption("--gb-load-ceiling"),
+        config.getoption("--gb-startup-timeout"),
     )
 
 
