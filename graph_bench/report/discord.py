@@ -8,7 +8,7 @@ SUPPRESS_EMBEDS) and allows no mentions (`allowed_mentions.parse` empty), so the
 
 from typing import Any
 
-from graph_bench.report.ranking import safe_display_name
+from graph_bench.report.ranking import column_name
 from graph_bench.report.readme import overview
 from graph_bench.report.summary import LEGEND, RESULTS_URL, grafeo_label, machine_label, summary_data
 from graph_bench.results import Results
@@ -51,7 +51,7 @@ def _pack(groups: list[list[str]], budget: int) -> list[str]:
 
 def _overview_groups(results: Results) -> list[list[str]]:
     dbs, rows = overview(results)
-    names = [safe_display_name(db) for db in dbs]
+    names = [column_name(results, db) for db in dbs]
     width = max((len(n) for n in names), default=0)
     groups = []
     for label, cells in rows:
