@@ -284,6 +284,8 @@ def test_release_post_is_conditional_on_the_secret_and_records_after() -> None:
     check = next(step for step in detect["steps"] if step.get("id") == "check")["run"]
     assert 'graph_bench.release measured "$latest"' in check
     assert check.index("release measured") < check.index('elif [ "$newer" -eq 1 ]')
+    # ...and before `force`, so a forced run cannot bypass the floor either.
+    assert check.index('if [ "$measured" -eq 1 ]') < check.index('elif [ "$FORCE" = "true" ]')
     gate = next(step for step in detect["steps"] if step.get("id") == "webhook")
     assert gate["env"]["DISCORD_BENCH_WEBHOOK"] == "${{ secrets.DISCORD_BENCH_WEBHOOK }}"
 
