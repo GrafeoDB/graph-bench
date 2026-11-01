@@ -6,6 +6,7 @@ from typing import Any, ClassVar, Literal
 
 from redislite.falkordb_client import FalkorDB
 
+from graph_bench.databases import PACKAGES
 from graph_bench.databases.base import Database, DatabaseInfo, NotSupported
 from graph_bench.datasets.schema import Dataset, EdgeTable, NodeTable
 from graph_bench.types import Model
@@ -66,7 +67,7 @@ class FalkorDatabase(Database):
         # THREAD_COUNT and OMP_THREAD_COUNT are load-time module arguments (https://docs.falkordb.com/configuration.html)
         # and falkordblite starts the module without any, so both stay at the core count.
         note = "THREAD_COUNT and OMP_THREAD_COUNT are module load arguments that falkordblite does not expose"
-        return DatabaseInfo(self.name, version("falkordblite"), "local process", False, note, "in-memory")
+        return DatabaseInfo(self.name, version(PACKAGES[self.name]), "local process", False, note, "in-memory")
 
     def _node_query(self, table: NodeTable) -> str:
         return f"UNWIND $rows AS r CREATE (n:{table.label}) SET n = r"

@@ -55,6 +55,21 @@ DISPLAY: dict[str, str] = {
     "duckdb": "DuckDB + DuckPGQ",
 }
 
+# The PyPI package whose version a database's `info()` records. The adapters read their version from it, and
+# `graph-bench local-check` looks up its newest stable release. Neo4j has none: its version is the pinned
+# tarball's (`pins.NEO4J_VERSION`).
+PACKAGES: dict[str, str] = {
+    "grafeo": "grafeo",
+    "ladybug": "ladybug",
+    "neug": "neug",
+    "falkordb": "falkordblite",
+    "turingdb": "turingdb",
+    "helixdb": "helix-db",
+    "arcadedb": "arcadedb-embedded",
+    "oxigraph": "pyoxigraph",
+    "duckdb": "duckdb",
+}
+
 EXTRA_ENV = "GRAPH_BENCH_EXTRA_DATABASES"
 
 REGISTRY: dict[str, str] = {
