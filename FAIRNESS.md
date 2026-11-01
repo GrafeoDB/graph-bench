@@ -87,7 +87,8 @@ benchmark, servers included, is kept in [legacy/](legacy/README.md).
      a write gets as many rounds as 5 s hold at its preflight's duration (at least 3).
    - **Run deadline (CI only).** `--deadline-s`, counted from the start of the run (CI: 48 min), is the same for
      every database: once it has passed nothing new starts, a case or load already running keeps its own ceiling,
-     and every case not yet run is ⏱ ("run deadline: 48 min"), so a run that would not fit leaves results.
+     and every case not yet run is ⏱ ("run deadline: 48 min"), so a run that would not fit leaves results. The Startup row is atomic and runs first, so a deadline that passes
+     during it waits for the row to end.
    - **Only these rules stop a case.** Database-side query and socket timeouts are disabled or raised wherever the
      setting is public (FalkorDB's client socket timeout, Grafeo's 30 s query timeout from 0.6.1 on), so no client
      or engine default fails a case with its own ✗; the other databases have no default timeout below the ceiling.
