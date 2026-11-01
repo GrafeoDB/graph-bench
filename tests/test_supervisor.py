@@ -135,16 +135,27 @@ def test_supervisor_metadata(two_dbs: tuple[Results, list[list[str]], Path]) -> 
     assert results.machine["cores"] > 0
     assert results.machine["cpu"]
     assert results.machine["os"]
-    assert results.grafeo["source"] == "pypi"
+    # The installed grafeo: "pypi", or for a direct-url build (a local wheel) its path.
+    direct = supervisor._installed_direct_url()
+    expected = "pypi" if direct is None else str(supervisor._url_path(direct["url"]) or direct["url"])
+    assert results.grafeo["source"] == expected
     assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", results.started_at)
 
 
-def _grafeo_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, installed: str) -> dict[str, str]:
-    """Write `.graph-bench/grafeo.json` for version 0.6.1.dev0 in the cwd and fake the installed grafeo version."""
+def _grafeo_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    installed: str,
+    source: str = "git",
+    direct: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    """Write `.graph-bench/grafeo.json` for version 0.6.1.dev0 (recording `source`) in the cwd, and fake the
+    installed grafeo: its version and its `direct_url.json` (None: a registry install)."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(supervisor.importlib.metadata, "version", lambda name: installed)
+    monkeypatch.setattr(supervisor, "_installed_direct_url", lambda: direct)
     (tmp_path / ".graph-bench").mkdir()
-    doc = {"version": "0.6.1.dev0", "source": "git", "sha": "abc123", "git_sha": "abc123"}
+    doc = {"version": "0.6.1.dev0", "source": source, "sha": "abc123", "git_sha": "abc123"}
     (tmp_path / ".graph-bench" / "grafeo.json").write_text(json.dumps(doc), encoding="utf-8")
     return doc
 
@@ -158,6 +169,35 @@ def test_grafeo_source_ignores_a_stale_file(tmp_path: Path, monkeypatch: pytest.
     """A later `uv sync` replaced the recorded build: the installed version wins, from PyPI."""
     _grafeo_file(tmp_path, monkeypatch, installed="0.6.0")
     assert supervisor.grafeo_source() == {"version": "0.6.0", "source": "pypi", "sha": None, "git_sha": None}
+
+
+def test_grafeo_source_checks_the_installed_direct_url(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Same version, but another wheel installed directly (as e8b04ed2 over a recorded 639bc2e): the installed
+    build is reported, by its local path. The recorded wheel itself, or a wheel `setup` built from a recorded
+    checkout, keeps the file's record."""
+    recorded = tmp_path / "wheels-639bc2e" / "grafeo-0.6.1.dev0-cp312-abi3-win_amd64.whl"
+    other = tmp_path / "wheels-e8b04ed" / "grafeo-0.6.1.dev0-cp312-abi3-win_amd64.whl"
+    direct = {"url": other.as_uri(), "archive_info": {}}
+    _grafeo_file(tmp_path, monkeypatch, "0.6.1.dev0", source=str(recorded), direct=direct)
+    assert supervisor.grafeo_source() == {"version": "0.6.1.dev0", "source": str(other), "sha": None, "git_sha": None}
+    monkeypatch.setattr(supervisor, "_installed_direct_url", lambda: {"url": recorded.as_uri(), "archive_info": {}})
+    assert supervisor.grafeo_source()["source"] == str(recorded)
+    assert supervisor.grafeo_source()["git_sha"] == "abc123"
+    built = tmp_path / ".graph-bench" / "wheels" / "grafeo-0.6.1.dev0-cp312-abi3-win_amd64.whl"
+    monkeypatch.setattr(supervisor, "_installed_direct_url", lambda: {"url": built.as_uri(), "archive_info": {}})
+    (tmp_path / ".graph-bench" / "grafeo.json").unlink()
+    checkout = _grafeo_file_doc(tmp_path, str(tmp_path / "grafeo"))
+    assert supervisor.grafeo_source() == checkout
+    vcs = {"url": "https://github.com/GrafeoDB/grafeo", "vcs_info": {"vcs": "git", "commit_id": "e8b04ed2"}}
+    monkeypatch.setattr(supervisor, "_installed_direct_url", lambda: vcs)
+    assert supervisor.grafeo_source()["source"] == "https://github.com/GrafeoDB/grafeo"
+
+
+def _grafeo_file_doc(tmp_path: Path, source: str) -> dict[str, str]:
+    """Write `.graph-bench/grafeo.json` (version 0.6.1.dev0, recording `source`) in `tmp_path`; the record."""
+    doc = {"version": "0.6.1.dev0", "source": source, "sha": "abc123", "git_sha": "abc123"}
+    (tmp_path / ".graph-bench" / "grafeo.json").write_text(json.dumps(doc), encoding="utf-8")
+    return doc
 
 
 def test_supervisor_marks_wrong_answer(two_dbs: tuple[Results, list[list[str]], Path]) -> None:

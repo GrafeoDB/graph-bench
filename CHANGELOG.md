@@ -20,7 +20,8 @@ benchmark moves to `legacy/` untouched and is deleted once the new comparison re
   SQL/PGQ model; a load a database's models do not reach is ⊘. Grafeo runs all three models.
 - **Grafeo build provenance**: `setup --grafeo <wheel> --grafeo-sha <commit>` records the grafeo commit a wheel was
   built from as `git_sha` in `results.json`, beside the wheel's SHA-256; a checkout records its own commit. The
-  summary label shows the commit.
+  summary label shows the commit. The record counts only while the installed grafeo is that build (its
+  `direct_url.json`, when present, names the recorded wheel); a wheel installed over it is reported by its path.
 - **One process per database**: `graph-bench bench` runs one worker process per database, one after another, and
   writes `results.json` (schema in the design spec) with the machine, the Grafeo build and each database's
   version, process kind, storage and thread setting.

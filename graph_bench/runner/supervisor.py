@@ -66,6 +66,8 @@ import statistics
 import subprocess
 import sys
 import time
+import urllib.parse
+import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -323,25 +325,60 @@ def graph_bench_commit() -> str:
     return proc.stdout.strip() or "unknown"
 
 
-def grafeo_source() -> GrafeoSource:
-    """The Grafeo under test: `.graph-bench/grafeo.json` (cwd-relative), else the installed wheel.
+def _installed_direct_url() -> dict[str, Any] | None:
+    """The installed grafeo's `direct_url.json` (PEP 610), or None for a registry install or no grafeo."""
+    try:
+        text = importlib.metadata.distribution("grafeo").read_text("direct_url.json")
+    except importlib.metadata.PackageNotFoundError:
+        return None
+    return json.loads(text) if text else None
 
-    The file counts only while its version is the installed one: after a later `uv sync` replaced the recorded
-    build it is stale, and the installed version is reported with source "pypi".
+
+def _url_path(url: str) -> Path | None:
+    """The local path of a `file:` url, else None."""
+    parsed = urllib.parse.urlparse(url)
+    return Path(urllib.request.url2pathname(parsed.path)) if parsed.scheme == "file" else None
+
+
+def _same_build(doc: dict[str, Any], direct: dict[str, Any]) -> bool:
+    """Whether the installed `direct_url.json` is the build `.graph-bench/grafeo.json` records: the same wheel file,
+    or, for a checkout, a wheel `graph-bench setup` built into `.graph-bench/wheels`."""
+    installed = _url_path(str(direct.get("url", "")))
+    if installed is None:
+        return False
+    source = Path(str(doc.get("source", "")))
+    if source.suffix == ".whl":
+        return os.path.normcase(os.path.abspath(installed)) == os.path.normcase(os.path.abspath(source))
+    built = os.path.normcase(os.path.abspath(GRAFEO_FILE.parent / "wheels"))
+    return os.path.normcase(os.path.abspath(installed.parent)) == built
+
+
+def grafeo_source() -> GrafeoSource:
+    """The Grafeo under test: `.graph-bench/grafeo.json` (cwd-relative), else the installed build.
+
+    The file counts only while it describes the installed build: its version is the installed one, and when the
+    installed grafeo has a `direct_url.json` that url is the wheel the file records (for a checkout, a wheel
+    `setup` built from it). Otherwise it is stale (a later `uv sync`, or a wheel installed directly) and the
+    installed build is reported: a direct-url install by its local path or url, a registry install as "pypi".
     """
     try:
         version: str | None = importlib.metadata.version("grafeo")
     except importlib.metadata.PackageNotFoundError:
         version = None
+    direct = _installed_direct_url()
     if GRAFEO_FILE.is_file():
         doc = json.loads(GRAFEO_FILE.read_text(encoding="utf-8"))
-        if doc.get("version") == version:
+        if doc.get("version") == version and (direct is None or _same_build(doc, direct)):
             return {
                 "version": version,
                 "source": doc.get("source", "unknown"),
                 "sha": doc.get("sha"),
                 "git_sha": doc.get("git_sha"),
             }
+    if direct is not None:
+        url = str(direct.get("url", ""))
+        path = _url_path(url)
+        return {"version": version, "source": str(path) if path is not None else url, "sha": None, "git_sha": None}
     return {"version": version, "source": "pypi", "sha": None, "git_sha": None}
 
 
