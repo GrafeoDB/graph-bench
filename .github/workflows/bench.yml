@@ -2,12 +2,22 @@
 # Needs the CodSpeed app on graph-bench and codspeed-macro runners enabled for the org; authentication uses
 # GitHub OIDC (no token secret).
 #
-# Both jobs measure the newest stable release of every database from PyPI, grafeo included: the shared composite
-# action .github/actions/prepare runs `uv sync --frozen`, then installs the database packages (graph-bench
-# packages) one at a time, leaving uv.lock alone. Grafeo's own CodSpeed suite covers grafeo main. `graph-bench setup --grafeo <path>` stays a local option.
-#   codspeed: the push selection under CodSpeed in wall-time mode, on every push to main, daily and on demand.
-#   readme:   the full selection with `graph-bench bench`, daily and on demand; it regenerates the README's
-#             results section and opens a pull request on the branch bot/results.
+# Both benchmark jobs measure the newest stable release of every database from PyPI, grafeo included: the shared
+# composite action .github/actions/prepare runs `uv sync --frozen`, then installs the database packages
+# (graph-bench packages) one at a time, leaving uv.lock alone. Grafeo's own CodSpeed suite covers grafeo main.
+# `graph-bench setup --grafeo <path>` stays a local option.
+#
+# The Graviton macro runner dies about 60 minutes after boot, so each benchmark job is a matrix with one leg per
+# database of the CI roster (catalog.CI_DATABASES, Grafeo last), each leg on a fresh box, one at a time. A leg stops
+# starting cases at the run deadline (`graph-bench ci-settings`: RUN_DEADLINE_S), so it always leaves its
+# results.json, uploaded as `results-<selection>-<db>`. It passes the earlier legs' results of the same run as
+# `--yardstick`, so in-run budgets still come from the same hardware. A job on ubuntu-latest then merges the legs
+# (`graph-bench merge`, which also applies the final 10x rule once); a leg without results shows as "no results".
+#   codspeed / codspeed-results: the push selection under CodSpeed in wall-time mode, on every push to main, daily
+#             and on demand. CodSpeed merges the legs of one workflow run itself (sharded benchmarks); the merged
+#             results.json is the artifact `results-push`.
+#   readme / readme-results: the full selection with `graph-bench bench`, daily and on demand, after the push legs;
+#             the merged results regenerate the README's results section and open a pull request on bot/results.
 name: Benchmarks
 
 on:
@@ -20,9 +30,18 @@ on:
 permissions:
   contents: read
 
+# One macro-runner job at a time, across this workflow and release.yml: two at once lost their runners
+# (2026-10-31). The group is on the workflow, not on the jobs: a concurrency group keeps one pending job and cancels
+# older pending ones, so matrix legs in a job-level group would cancel each other. Inside a run, `max-parallel: 1`
+# runs the legs one at a time and `needs` chains the jobs. The cost: a newer queued run replaces an older pending
+# one (two pushes in a row run only the newer one).
+concurrency:
+  group: macro-runner
+  cancel-in-progress: false
+
 jobs:
   codspeed:
-    name: CodSpeed (push selection)
+    name: CodSpeed (push selection, ${{ matrix.db }})
     # Needs the CodSpeed app on graph-bench and codspeed-macro runners enabled for the org; authentication uses
     # GitHub OIDC (no token secret), hence id-token: write. The explicit Graviton (arm64, Ubuntu 22.04) label is
     # the macro runner the plain `codspeed-macro` used to alias; the dataset cache key carries runner.arch.
@@ -30,10 +49,12 @@ jobs:
     # The macro runner dies about 60 minutes after boot, with no log (Task T, 2026-10-31): GitHub cancels the job
     # at 55 minutes instead, so the log of an overlong run is kept.
     timeout-minutes: 55
-    # One macro-runner job at a time across workflows: two at once lost their runners (2026-10-31).
-    concurrency:
-      group: macro-runner
-      cancel-in-progress: false
+    strategy:
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        # catalog.CI_DATABASES, in its order (tests/test_workflows.py checks it).
+        db: [neug, ladybug, turingdb, oxigraph, duckdb, grafeo]
     permissions:
       contents: read
       id-token: write
@@ -42,38 +63,112 @@ jobs:
       - uses: ./.github/actions/prepare
         with:
           selection: push
+      - name: Run settings
+        id: ci
+        run: uv run --no-sync graph-bench ci-settings >> "$GITHUB_OUTPUT"
+      # The results of this run's earlier legs; the first leg finds none.
+      - uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          pattern: results-push-*
+          path: yardstick
+      - name: Yardstick arguments
+        id: yardstick
+        run: |
+          args=""
+          for file in yardstick/*/results.json; do
+            if [ -f "$file" ]; then args="${args:+$args }--yardstick $file"; fi
+          done
+          echo "yardsticks: ${args:-none}"
+          echo "args=$args" >> "$GITHUB_OUTPUT"
       - name: Run the benchmarks
         uses: CodSpeedHQ/action@v5
         with:
           mode: walltime
-          run: uv run --no-sync graph-bench codspeed --selection push --out out
+          run: uv run --no-sync graph-bench codspeed --selection push --db ${{ matrix.db }} --deadline-s ${{ steps.ci.outputs.deadline_s }} ${{ steps.yardstick.outputs.args }} --out out
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: results-push
+          name: results-push-${{ matrix.db }}
           path: out/results.json
           if-no-files-found: warn
 
+  codspeed-results:
+    name: CodSpeed results (merged)
+    needs: codspeed
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          python-version: "3.13"
+      - run: uv sync --frozen
+      - name: Run settings
+        id: ci
+        run: uv run --no-sync graph-bench ci-settings >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          pattern: results-push-*
+          path: results
+      - name: Merge the results
+        run: |
+          set -- results/*/results.json
+          if [ ! -f "$1" ]; then
+            echo "::error title=No results::no leg of this run left a results.json"
+            exit 1
+          fi
+          uv run --no-sync graph-bench merge --out merged --db "${{ steps.ci.outputs.databases }}" "$@"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: results-push
+          path: merged/results.json
+          if-no-files-found: warn
+
   readme:
-    name: README results (full selection)
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    name: README results (full selection, ${{ matrix.db }})
+    needs: codspeed
+    # After the push legs, whatever their outcome, unless the run was cancelled.
+    if: ${{ !cancelled() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     # Needs codspeed-macro runners enabled for the org (no CodSpeed upload, so no token). Same runner as above.
     runs-on: codspeed-macro-arm64-graviton-ubuntu-22-04
     # The macro runner dies about 60 minutes after boot, with no log (Task T, 2026-10-31): GitHub cancels the job
     # at 55 minutes instead, so the log of an overlong run is kept.
     timeout-minutes: 55
-    # One macro-runner job at a time across workflows: two at once lost their runners (2026-10-31).
-    concurrency:
-      group: macro-runner
-      cancel-in-progress: false
+    strategy:
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        # catalog.CI_DATABASES, in its order (tests/test_workflows.py checks it).
+        db: [neug, ladybug, turingdb, oxigraph, duckdb, grafeo]
     permissions:
-      contents: write
-      pull-requests: write
+      contents: write  # the heartbeat pushes bot/heartbeat
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/prepare
         with:
           selection: full
+      - name: Run settings
+        id: ci
+        run: uv run --no-sync graph-bench ci-settings >> "$GITHUB_OUTPUT"
+      # The results of this run's earlier full legs; the first leg finds none.
+      - uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          pattern: results-full-*
+          path: yardstick
+      - name: Yardstick arguments
+        id: yardstick
+        run: |
+          args=""
+          for file in yardstick/*/results.json; do
+            if [ -f "$file" ]; then args="${args:+$args }--yardstick $file"; fi
+          done
+          echo "yardsticks: ${args:-none}"
+          echo "args=$args" >> "$GITHUB_OUTPUT"
       - name: Run the benchmarks
         # GitHub keeps no log of a lost runner (one died 68 minutes into this run on 2026-10-31), so a heartbeat
         # pushes the run's state to the branch bot/heartbeat every minute (.github/scripts/heartbeat.sh).
@@ -82,14 +177,50 @@ jobs:
           bash .github/scripts/heartbeat.sh out "$RUNNER_TEMP/bench.log" &
           heartbeat=$!
           trap 'kill "$heartbeat" 2>/dev/null || true' EXIT
-          uv run --no-sync graph-bench bench --selection full --out out 2>&1 | tee "$RUNNER_TEMP/bench.log"
-      - name: Write the results section
-        run: uv run --no-sync graph-bench report --format readme --in out/results.json --write README.md
+          uv run --no-sync graph-bench bench --selection full --db ${{ matrix.db }} --deadline-s ${{ steps.ci.outputs.deadline_s }} ${{ steps.yardstick.outputs.args }} --out out 2>&1 | tee "$RUNNER_TEMP/bench.log"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: results-full
+          name: results-full-${{ matrix.db }}
           path: out/results.json
+          if-no-files-found: warn
+
+  readme-results:
+    name: README results (merged, pull request)
+    needs: readme
+    if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          python-version: "3.13"
+      - run: uv sync --frozen
+      - name: Run settings
+        id: ci
+        run: uv run --no-sync graph-bench ci-settings >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          pattern: results-full-*
+          path: results
+      - name: Merge the results
+        run: |
+          set -- results/*/results.json
+          if [ ! -f "$1" ]; then
+            echo "::error title=No results::no leg of this run left a results.json"
+            exit 1
+          fi
+          uv run --no-sync graph-bench merge --out merged --db "${{ steps.ci.outputs.databases }}" "$@"
+      - name: Write the results section
+        run: uv run --no-sync graph-bench report --format readme --in merged/results.json --write README.md
+      - uses: actions/upload-artifact@v7
+        with:
+          name: results-full
+          path: merged/results.json
           if-no-files-found: warn
       - uses: peter-evans/create-pull-request@v7
         with:
@@ -98,7 +229,9 @@ jobs:
           commit-message: Update benchmark results
           body: |
             The results section of README.md, regenerated by the scheduled `full` run
-            (`graph-bench bench --selection full`) against the newest stable release of each database.
-            The run's results.json is attached to the workflow run as the artifact `results-full`.
+            (`graph-bench bench --selection full`, one job per database of the CI roster, merged with
+            `graph-bench merge`) against the newest stable release of each database.
+            The merged results.json is attached to the workflow run as the artifact `results-full`, each
+            database's own as `results-full-<db>`.
           add-paths: README.md
           delete-branch: true

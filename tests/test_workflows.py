@@ -12,6 +12,8 @@ from typing import Any
 import pytest
 import yaml
 
+from graph_bench.suites import catalog
+
 # CodSpeed's Graviton (arm64) macro runner, the label the plain `codspeed-macro` used to alias.
 GRAVITON = "codspeed-macro-arm64-graviton-ubuntu-22-04"
 SCRIPTS = Path(__file__).resolve().parent.parent / ".github" / "scripts"
@@ -61,6 +63,20 @@ def _uses(job: dict[str, Any]) -> list[str]:
     return [step["uses"] for step in _steps(job) if "uses" in step]
 
 
+# The jobs on the macro runner, one leg per roster database, and the job on ubuntu-latest that merges their
+# results, with the artifact prefix of the legs and the merged artifact's name.
+MATRIX_JOBS = [
+    ("bench.yml", "codspeed", "codspeed-results", "results-push"),
+    ("bench.yml", "readme", "readme-results", "results-full"),
+    ("release.yml", "post", "post-results", "results-release"),
+]
+
+
+def _macro_jobs(name: str) -> dict[str, dict[str, Any]]:
+    jobs = _load(name)["jobs"].items()
+    return {n: job for n, job in jobs if str(job.get("runs-on", "")).startswith("codspeed-macro")}
+
+
 def test_bench_workflow_shape() -> None:
     workflow = _load("bench.yml")
     triggers = _triggers(workflow)
@@ -77,27 +93,39 @@ def test_bench_workflow_shape() -> None:
     assert "token" not in action["with"]
     assert "graph-bench codspeed --selection push" in action["with"]["run"]
     runs = _runs(codspeed)
+    assert "--db ${{ matrix.db }}" in action["with"]["run"]
     assert any("graph-bench data key --selection push" in run for run in runs)
     assert any("graph-bench list --selection push" in run for run in runs)
     assert any(use.startswith("actions/upload-artifact@") for use in _uses(codspeed))
 
     readme = workflow["jobs"]["readme"]
     assert readme["runs-on"] == GRAVITON
+    # On schedule and dispatch the full legs run after the push legs, whatever their outcome, unless cancelled.
+    assert readme["needs"] == "codspeed"
     condition = readme["if"]
     assert "schedule" in condition
     assert "workflow_dispatch" in condition
     assert "push" not in condition
+    assert "!cancelled()" in condition
     runs = _runs(readme)
-    assert any("graph-bench bench --selection full" in run for run in runs)
-    assert any("graph-bench report --format readme" in run and "--write README.md" in run for run in runs)
-    pr = next(step for step in readme["steps"] if step.get("uses", "").startswith("peter-evans/create-pull-request@"))
+    assert any("graph-bench bench --selection full --db ${{ matrix.db }}" in run for run in runs)
+    # The README section and the pull request come from the merged results, on ubuntu-latest.
+    assert not any("graph-bench report" in run for run in runs)
+    merged = workflow["jobs"]["readme-results"]
+    assert merged["if"] == "always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')"
+    assert merged["permissions"] == {"contents": "write", "pull-requests": "write"}
+    runs = _runs(merged)
+    report = next(i for i, run in enumerate(runs) if "graph-bench report --format readme" in run)
+    assert "--in merged/results.json" in runs[report] and "--write README.md" in runs[report]
+    assert report > next(i for i, run in enumerate(runs) if "graph-bench merge" in run)
+    pr = next(step for step in merged["steps"] if step.get("uses", "").startswith("peter-evans/create-pull-request@"))
     assert pr["with"]["branch"] == "bot/results"
     assert pr["with"]["title"] == "Update benchmark results"
+    assert pr["with"]["add-paths"] == "README.md"
 
 
 def test_bench_workflow_measures_released_databases() -> None:
-    workflow = _load("bench.yml")
-    for name, job in workflow["jobs"].items():
+    for name, job in _macro_jobs("bench.yml").items():
         runs = _runs(job)
         # Grafeo is measured as its latest PyPI release, not built from main.
         assert not any("setup --grafeo" in run for run in runs), name
@@ -114,7 +142,8 @@ def test_bench_workflow_measures_released_databases() -> None:
 
 def test_bench_jobs_run_on_graviton_with_the_arch_in_cache_keys() -> None:
     workflow = _load("bench.yml")
-    for name, job in workflow["jobs"].items():
+    assert set(_macro_jobs("bench.yml")) == {"codspeed", "readme"}
+    for name, job in _macro_jobs("bench.yml").items():
         assert job["runs-on"] == GRAVITON, name
         caches = [step for step in _steps(job) if step.get("uses", "").startswith("actions/cache@")]
         assert caches, name
@@ -199,7 +228,7 @@ def test_release_workflow_triggers_and_state() -> None:
     assert post["if"] == "needs.detect.outputs.run == 'true'"
     assert post["runs-on"] == GRAVITON
     assert post["permissions"]["contents"] == "write"
-    assert any("graph-bench bench --selection full" in run for run in _runs(post))
+    assert any("graph-bench bench --selection full --db ${{ matrix.db }}" in run for run in _runs(post))
     # Shared steps: the same composite action as bench.yml's README job, not a copy.
     assert "./.github/actions/prepare" in [step.get("uses") for step in post["steps"]]
     assert any("install-databases.sh" in run for run in _runs(post))
@@ -207,7 +236,15 @@ def test_release_workflow_triggers_and_state() -> None:
 
 
 def test_release_post_is_conditional_on_the_secret_and_records_after() -> None:
-    post = _load("release.yml")["jobs"]["post"]
+    """The merging job posts and records; the macro-runner legs only benchmark and never see the secret."""
+    jobs = _load("release.yml")["jobs"]
+    assert not any("secrets." in json.dumps(step) for step in jobs["post"]["steps"])
+    assert not any("graph-bench notify" in run for run in _runs(jobs["post"]))
+    post = jobs["post-results"]
+    assert post["needs"] == ["detect", "post"]
+    assert post["if"] == "always() && needs.detect.outputs.run == 'true'"
+    assert post["runs-on"] == "ubuntu-latest"
+    assert post["permissions"] == {"contents": "write"}
     steps = post["steps"]
     names = [step.get("name", "") for step in steps]
     notify = steps[names.index("Post to Discord")]
@@ -215,6 +252,9 @@ def test_release_post_is_conditional_on_the_secret_and_records_after() -> None:
     assert notify["env"] == {"DISCORD_BENCH_WEBHOOK": "${{ secrets.DISCORD_BENCH_WEBHOOK }}"}
     assert "--webhook-env DISCORD_BENCH_WEBHOOK" in notify["run"]
     assert "graph-bench notify" in notify["run"]
+    assert "--in merged/results.json" in notify["run"]
+    assert "../merged/results.json" in record["run"]
+    assert names.index("Merge the results") < names.index("Post to Discord")
     assert notify["if"] == "needs.detect.outputs.webhook == 'true'"
     assert record["if"] == notify["if"]
     # The version is recorded after a successful post (a step without `if: always()` does not run after a failure).
@@ -248,19 +288,78 @@ def test_prepare_action_installs_released_databases() -> None:
 
 
 def test_macro_runner_jobs_never_run_at_once() -> None:
-    """Every job on a CodSpeed macro runner shares one concurrency group, across bench.yml and release.yml."""
-    root = Path(__file__).resolve().parents[1] / ".github" / "workflows"
-    found = []
+    """One macro-runner job at a time, across bench.yml and release.yml: one concurrency group at workflow level on
+    both (a job-level group keeps one pending job and cancels older pending ones, so matrix legs would cancel each
+    other), no job-level groups, and every macro-runner matrix runs one leg at a time."""
     for name in ("bench.yml", "release.yml"):
-        doc = yaml.safe_load((root / name).read_text(encoding="utf-8"))
-        for job_name, job in doc["jobs"].items():
-            if str(job.get("runs-on", "")).startswith("codspeed-macro"):
-                assert job.get("concurrency") == {"group": "macro-runner", "cancel-in-progress": False}, (
-                    name,
-                    job_name,
-                )
-                found.append((name, job_name))
-    assert len(found) == 3
+        workflow = _load(name)
+        assert workflow["concurrency"] == {"group": "macro-runner", "cancel-in-progress": False}, name
+        for job_name, job in workflow["jobs"].items():
+            assert "concurrency" not in job, (name, job_name)
+        for job_name, job in _macro_jobs(name).items():
+            assert job["strategy"]["max-parallel"] == 1, (name, job_name)
+    text = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+    assert "release-post" not in text
+
+
+def test_macro_runner_jobs_are_one_leg_per_roster_database() -> None:
+    """Each macro-runner job is a matrix over `catalog.CI_DATABASES`, in that order, that goes on when a leg
+    fails. Every leg passes the run deadline from `graph-bench ci-settings` (never a number in the YAML), takes
+    the results of the run's earlier legs as `--yardstick` (none is fine) and uploads `<prefix>-<db>`."""
+    found = []
+    for name, job_name, _, prefix in MATRIX_JOBS:
+        job = _load(name)["jobs"][job_name]
+        strategy = job["strategy"]
+        assert strategy["matrix"] == {"db": list(catalog.CI_DATABASES)}, (name, job_name)
+        assert strategy["fail-fast"] is False, (name, job_name)
+        steps = _steps(job)
+        settings = next(step for step in steps if step.get("id") == "ci")
+        assert 'graph-bench ci-settings >> "$GITHUB_OUTPUT"' in settings["run"]
+        download = next(i for i, step in enumerate(steps) if step.get("uses", "").startswith("actions/download-"))
+        assert steps[download]["with"] == {"pattern": f"{prefix}-*", "path": "yardstick"}, (name, job_name)
+        assert steps[download].get("continue-on-error") is True
+        args = next(step for step in steps if step.get("id") == "yardstick")
+        assert "yardstick/*/results.json" in args["run"] and "--yardstick" in args["run"]
+        command = next(run for run in _runs(job) if "--selection" in run and "--out out" in run)
+        assert "--db ${{ matrix.db }}" in command
+        assert "--deadline-s ${{ steps.ci.outputs.deadline_s }}" in command
+        assert "${{ steps.yardstick.outputs.args }}" in command
+        runs_at = next(
+            i for i, step in enumerate(steps) if command in (step.get("run"), step.get("with", {}).get("run"))
+        )
+        assert download < runs_at, (name, job_name)
+        upload = next(step for step in steps if step.get("uses", "").startswith("actions/upload-artifact@"))
+        assert upload["with"]["name"] == prefix + "-${{ matrix.db }}"
+        assert upload["if"] == "always()"
+        found.append((name, job_name))
+    for name in ("bench.yml", "release.yml"):
+        text = (WORKFLOWS / name).read_text(encoding="utf-8")
+        assert "2880" not in text and "48 * 60" not in text, name
+    macro = {(name, job) for name in ("bench.yml", "release.yml") for job in _macro_jobs(name)}
+    assert sorted(found) == sorted(macro)
+
+
+def test_merge_jobs_run_on_ubuntu_after_every_leg() -> None:
+    """A job on ubuntu-latest per matrix runs after all its legs, whatever their outcome, and merges the legs'
+    results (`graph-bench merge` with the roster as `--db`, so a leg without results shows as "no results");
+    with no results at all it fails instead of merging nothing."""
+    for name, job_name, merge_name, prefix in MATRIX_JOBS:
+        job = _load(name)["jobs"][merge_name]
+        assert job["runs-on"] == "ubuntu-latest", merge_name
+        needs = job["needs"] if isinstance(job["needs"], list) else [job["needs"]]
+        assert job_name in needs, merge_name
+        assert job["if"].startswith("always()"), merge_name
+        steps = _steps(job)
+        download = next(step for step in steps if step.get("uses", "").startswith("actions/download-artifact@"))
+        assert download["with"] == {"pattern": f"{prefix}-*", "path": "results"}, merge_name
+        merge = next(run for run in _runs(job) if "graph-bench merge" in run)
+        assert 'graph-bench merge --out merged --db "${{ steps.ci.outputs.databases }}"' in merge, merge_name
+        assert "results/*/results.json" in merge and "::error" in merge and "exit 1" in merge, merge_name
+        assert any('graph-bench ci-settings >> "$GITHUB_OUTPUT"' in run for run in _runs(job)), merge_name
+        # The merge needs graph-bench only, not the databases or the datasets.
+        assert not any("install-databases.sh" in run or "data prepare" in run for run in _runs(job)), merge_name
+        upload = next(step for step in steps if step.get("uses", "").startswith("actions/upload-artifact@"))
+        assert upload["with"] == {"name": prefix, "path": "merged/results.json", "if-no-files-found": "warn"}
 
 
 def test_macro_runner_jobs_end_before_the_runner_does() -> None:
@@ -268,10 +367,9 @@ def test_macro_runner_jobs_end_before_the_runner_does() -> None:
     timeout, so GitHub cancels an overlong run with its log kept instead of the runner vanishing with it."""
     found = []
     for name in ("bench.yml", "release.yml"):
-        for job_name, job in _load(name)["jobs"].items():
-            if str(job.get("runs-on", "")).startswith("codspeed-macro"):
-                assert job.get("timeout-minutes") == 55, (name, job_name)
-                found.append((name, job_name))
+        for job_name, job in _macro_jobs(name).items():
+            assert job.get("timeout-minutes") == 55, (name, job_name)
+            found.append((name, job_name))
     assert sorted(found) == [("bench.yml", "codspeed"), ("bench.yml", "readme"), ("release.yml", "post")]
 
 
