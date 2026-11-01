@@ -167,8 +167,9 @@ From [FAIRNESS.md](FAIRNESS.md#adapter-rules), in short:
 
 `.github/workflows/release.yml` posts the results of each new stable Grafeo release to Discord. It runs daily and
 on demand, finds the newest stable `grafeo` on PyPI and compares it with `grafeo-version.txt` on the branch
-`bot/state`. A new version runs the `full` selection and posts through `graph-bench notify`, which reads the webhook
-URL from the repository secret `DISCORD_BENCH_WEBHOOK` (set under Settings, Secrets and variables, Actions). Only
+`bot/state`. A new version runs the `full` selection, one job per roster database on the macro runner, merges
+their results in a job on ubuntu-latest (`graph-bench merge`) and posts through `graph-bench notify`, which reads
+the webhook URL from the repository secret `DISCORD_BENCH_WEBHOOK` (set under Settings, Secrets and variables, Actions). Only
 after a successful post does the job commit the version to `bot/state`. Without the secret the post and the state
 update are skipped with a log line. Never put the URL in the repository, a log or a test: tests use fake
 placeholders and a fake HTTP layer. To try it, run the workflow by hand with `force` set; to preview the payload,

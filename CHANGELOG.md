@@ -95,6 +95,17 @@ benchmark moves to `legacy/` untouched and is deleted once the new comparison re
   adopted when it exits.
 - **Known disagreements**: `docs/known-disagreements.md` records wrong answers, slow cases and engine findings as
   they are, instead of working around them in the adapters.
+- **One macro-runner job per roster database**: bench.yml's `codspeed` and `readme` jobs and release.yml's
+  `post` job are matrices over `catalog.CI_DATABASES` (NeuG, LadybugDB, TuringDB, Oxigraph, DuckDB + DuckPGQ,
+  Grafeo), one leg at a time (`max-parallel: 1`, `fail-fast: false`, 55-minute timeout), each on a fresh box. Each
+  leg passes the run deadline (`graph-bench ci-settings`) as `--deadline-s` and the earlier legs' results as
+  `--yardstick`, a new option of `bench` and `codspeed` whose correct entries set the in-run budgets as earlier
+  databases of the same run would. `codspeed-results`, `readme-results` and `post-results` on ubuntu-latest merge
+  the legs with the new `graph-bench merge` (inputs must agree on selection, mode, graph-bench commit and Grafeo;
+  the 10x rule applies once over the merged entries; a leg without results shows as ✗ "no results"), then upload
+  the merged results, open the README pull request or post to Discord as before. The `macro-runner` concurrency
+  group moves to workflow level on both workflows (replacing release.yml's `release-post`), since a job-level group
+  would let matrix legs cancel each other.
 - **Run-time limits** (FAIRNESS.md rule 9), the same for every database at any position in the run order, so a
   run fits in the CodSpeed macro runner's hour: every case stops 60 s after it starts (with at least 3 timed runs
   it keeps its timing, else ⏱ "too slow: over 60 s"; the supervisor kills a single call still running 5 s past

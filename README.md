@@ -136,6 +136,11 @@ Selections:
 
 `graph-bench codspeed --selection S --out DIR` is the CI entry point: one `pytest benches --codspeed` process
 per database, under the CodSpeed runner. `graph-bench data key --selection S` prints the dataset cache key.
+`--yardstick FILE` (on `bench` and `codspeed`, repeatable) takes the results.json of earlier databases on the same
+hardware: their correct results set the in-run budgets as earlier databases of the same run would. `graph-bench
+merge --out DIR IN...` merges results.json files of runs over different databases (same selection, mode,
+graph-bench commit and Grafeo) into one, as a single run over all of them would write it, and applies the final
+budget rule once; with `--db`, a listed database without an input shows as "no results".
 `GRAPH_BENCH_GRAFEO=<path>` installs that Grafeo at the start of `bench` and `codspeed`, like `--grafeo`.
 
 ### Grafeo's README summary
@@ -163,20 +168,30 @@ one version string.
   which it does not replace. It measures the newest stable release of every database from PyPI, grafeo
   included (grafeo's own CodSpeed suite covers `main`): after the locked `uv sync` it upgrades the database
   packages (`graph-bench packages`) without touching `uv.lock`, and the job log lists the installed versions.
-  It runs the `push` selection on CodSpeed's
-  Graviton macro runner (`codspeed-macro-arm64-graviton-ubuntu-22-04`, arm64) in wall-time mode on every push to `main`, daily and on demand. The daily run also runs `full`
-  with `graph-bench bench` and opens a pull request on `bot/results` that updates the section below. The databases install one at a time
-  (`.github/scripts/install-databases.sh`), so a package without a build for the runner does not stop the job: FalkorDB
-  has no arm64 build for glibc 2.35 (falkordblite ships `manylinux_2_38` wheels only), so its cases show ✗ (not
-  installed). Needs the
-  CodSpeed app on graph-bench and codspeed-macro runners enabled for the org; authentication uses GitHub OIDC
-  (no token secret).
+  It runs the `push` selection on CodSpeed's Graviton macro runner (`codspeed-macro-arm64-graviton-ubuntu-22-04`,
+  arm64) in wall-time mode on every push to `main`, daily and on demand. The daily run also runs `full` with
+  `graph-bench bench` and opens a pull request on `bot/results` that updates the section below. The databases
+  install one at a time (`.github/scripts/install-databases.sh`), so a package without a build for the runner
+  does not stop the job. Needs the CodSpeed app on graph-bench and codspeed-macro runners enabled for the org;
+  authentication uses GitHub OIDC (no token secret).
+- **How the results are produced.** CI runs a fixed roster, `catalog.CI_DATABASES`: NeuG, LadybugDB, TuringDB,
+  Oxigraph, DuckDB + DuckPGQ and Grafeo, in that order. The macro runner dies about an hour after boot, so each
+  selection is a matrix with one job per database, each on a fresh box, one at a time: Grafeo runs last, so its
+  in-run budgets come from the others' results on the same hardware (each job passes the earlier jobs' results as
+  `--yardstick`). Every job stops starting cases at the run deadline (`--deadline-s`, 48 minutes, under the job's
+  55-minute timeout), so it always leaves its results.json; the cases it did not reach are ⏱ `run deadline`. A
+  final job on `ubuntu-latest` merges the jobs' results (`graph-bench merge`), which applies the 10x budget rule
+  once over all databases, so the markers are those of one run over the whole roster; a job that left no results
+  shows its database as ✗ "no results". CodSpeed merges the push jobs of one run itself. One concurrency group,
+  `macro-runner`, on both bench.yml and release.yml keeps their macro-runner jobs from ever running at once; a
+  newer queued run replaces an older pending one.
 - `.github/workflows/pins.yml`: weekly (and on demand), checks for a newer stable Neo4j Community release and a
   newer Temurin JRE of the Java major Neo4j requires, and opens a pull request on `bot/pins` that updates
   `graph_bench/databases/pins.py` (URLs and SHA-256 from the vendors' published checksums).
 - `.github/workflows/release.yml`: the release post. Daily (and on demand) it reads the newest stable `grafeo`
-  version on PyPI and compares it with the last one posted. When it is new, the job runs the `full` selection on the
-  same Graviton runner as above (through the shared `.github/actions/prepare` action) and posts the trigger line,
+  version on PyPI and compares it with the last one posted. When it is new, it runs the `full` selection on the
+  same Graviton runner as above, one job per roster database (through the shared `.github/actions/prepare` action),
+  merges their results on `ubuntu-latest` and posts the trigger line,
   the overview per category, Grafeo's fastest counts and links to the run and to the results section on Discord
   (`graph-bench report --format discord`, `graph-bench notify`). The last posted version lives in the file
   `grafeo-version.txt` on the branch `bot/state`, written with the job's `GITHUB_TOKEN` only after a successful
