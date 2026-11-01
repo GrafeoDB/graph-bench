@@ -950,6 +950,25 @@ def test_deadline_writes_results(bench_env: pytest.MonkeyPatch, tmp_path: Path) 
     }
 
 
+@pytest.mark.parametrize("command", ["bench", "codspeed"])
+def test_deadline_message_names_the_total(bench_env: pytest.MonkeyPatch, tmp_path: Path, command: str) -> None:
+    """CI passes what is left of the deadline as `--deadline-s` (the cutoff) and the whole deadline as
+    `--deadline-total-s`, which the ⏱ message names: "run deadline: 48 min", not the seconds left. Without it the
+    message names `--deadline-s`; on its own it is refused."""
+    launches = _recording_launches(bench_env)
+    out = tmp_path / command
+    argv = [command, "--selection", "push", "--db", "fake", "--out", str(out), "--deadline-s", "0"]
+    result = CliRunner().invoke(app, [*argv, "--deadline-total-s", "2880"])
+    assert result.exit_code == 0, result.output
+    assert launches == []  # the cutoff is still `--deadline-s`
+    results = Results.read(out / "results.json")
+    assert {(e.status, e.error) for e in results.entries if e.status != "not_supported"} == {
+        ("timeout", "run deadline: 48 min")
+    }
+    alone = CliRunner().invoke(app, [command, "--selection", "push", "--db", "fake", "--deadline-total-s", "2880"])
+    assert alone.exit_code == 2
+
+
 def test_deadline_zero_still_writes_results(bench_env: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """`--deadline-s 0`, what CI passes when the job's setup took the whole deadline: the command exits 0 without
     launching a worker and writes results.json with every case ⏱ "run deadline: 0 s"."""

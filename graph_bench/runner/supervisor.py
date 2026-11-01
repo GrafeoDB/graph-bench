@@ -624,6 +624,7 @@ class _Run:
     recorded: dict[str, Entry] = field(default_factory=dict)
     retired: set[str] = field(default_factory=set)
     deadline_s: float | None = None  # `--deadline-s`; None: no deadline
+    deadline_total_s: float | None = None  # `--deadline-total-s`, the figure the ⏱ message names; None: deadline_s
     deadline_at: float | None = None  # `time.monotonic()` of the deadline
     # `--yardstick` entries: earlier databases' results from other jobs on the same hardware. They count in the
     # in-run budget as entries of earlier databases of this run would, and are never recorded here.
@@ -635,7 +636,7 @@ class _Run:
 
     def _deadline_error(self) -> str:
         assert self.deadline_s is not None
-        return deadline_over(self.deadline_s)
+        return deadline_over(self.deadline_s if self.deadline_total_s is None else self.deadline_total_s)
 
     def _mark_deadline(self, meta: dict[str, _Meta]) -> None:
         """Every unrecorded id of `meta` that would run is timeout "run deadline: ..." (an unsupported one stays so)."""
@@ -1023,6 +1024,7 @@ def run_bench(
     case_timeout_s: float = DEFAULT_CASE_TIMEOUT_S,
     deadline_s: float | None = None,
     yardstick: Sequence[Results] = (),
+    deadline_total_s: float | None = None,
 ) -> Results:
     """Run every database of `dbs` in order, one worker per thread setting, and write `out_dir/results.json`.
 
@@ -1031,14 +1033,15 @@ def run_bench(
 
     With `deadline_s`, counted from this call, nothing new starts once it has passed: a case, load or startup row
     already running finishes within its own limits, every id not yet run is timeout "run deadline: ...", and
-    results.json is written as usual.
+    results.json is written as usual. The message names `deadline_total_s` when given (CI passes the time left
+    of its 48 minutes as `deadline_s` and the 48 minutes as the total), else `deadline_s`.
 
     `yardstick` holds results of earlier databases from other runs on the same hardware (CI runs one database per
     job): their ok/agree entries set the in-run budgets as earlier databases of this run would (`_budgets`). They
     are not part of this run's results, and the final rule does not compare with them; `graph-bench merge`
     applies it over the merged runs. Each must be of this selection and mode (`check_yardstick`).
     """
-    return _run_all(selection, dbs, out_dir, workdir, case_timeout_s, WORKER, deadline_s, yardstick)
+    return _run_all(selection, dbs, out_dir, workdir, case_timeout_s, WORKER, deadline_s, yardstick, deadline_total_s)
 
 
 def drop_empty_codspeed_result(env: Mapping[str, str], pid: int) -> bool:
@@ -1071,6 +1074,7 @@ def run_codspeed(
     case_timeout_s: float = DEFAULT_CASE_TIMEOUT_S,
     deadline_s: float | None = None,
     yardstick: Sequence[Results] = (),
+    deadline_total_s: float | None = None,
 ) -> Results:
     """As `run_bench`, with one `pytest benches --codspeed` process per database and thread setting.
 
@@ -1080,7 +1084,7 @@ def run_codspeed(
     (a relaunch left with only skipped cases) leaves a results file without benchmarks, which the CodSpeed
     runner rejects for the whole job; `drop_empty_codspeed_result` removes that one file, and only it.
     """
-    return _run_all(selection, dbs, out_dir, workdir, case_timeout_s, PYTEST, deadline_s, yardstick)
+    return _run_all(selection, dbs, out_dir, workdir, case_timeout_s, PYTEST, deadline_s, yardstick, deadline_total_s)
 
 
 def _run_all(
@@ -1092,6 +1096,7 @@ def _run_all(
     runner: Runner,
     deadline_s: float | None,
     yardstick: Sequence[Results] = (),
+    deadline_total_s: float | None = None,
 ) -> Results:
     begun = time.monotonic()
     sel = catalog.selection(selection)
@@ -1114,6 +1119,7 @@ def _run_all(
     run.yardstick = [e for doc in yardstick for e in doc.entries]
     if deadline_s is not None:
         run.deadline_s, run.deadline_at = deadline_s, begun + deadline_s
+        run.deadline_total_s = deadline_total_s
     for db in dbs:
         run.database(db)
     results.entries.sort(key=lambda e: e.id)

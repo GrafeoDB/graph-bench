@@ -180,6 +180,17 @@ _DEADLINE = typer.Option(
 )
 
 
+_DEADLINE_TOTAL = typer.Option(
+    None,
+    "--deadline-total-s",
+    min=0,
+    help=(
+        "The whole run deadline the 'run deadline' message names, when --deadline-s is only what is left of it"
+        " (CI: the 48 minutes, counted from the job's first step). Default: --deadline-s."
+    ),
+)
+
+
 _YARDSTICK = typer.Option(
     None,
     "--yardstick",
@@ -219,9 +230,12 @@ def _run(
     out: Path,
     deadline_s: float | None = None,
     yardstick: list[Path] | None = None,
+    deadline_total_s: float | None = None,
 ) -> None:
     """Validate the selection, databases and yardsticks, then install Grafeo if asked, then run and print
     DIR/results.json."""
+    if deadline_total_s is not None and deadline_s is None:
+        raise typer.BadParameter("needs --deadline-s", param_hint="--deadline-total-s")
     name = _check_selection(selection)
     dbs = _dbs(db)
     try:
@@ -233,7 +247,16 @@ def _run(
     own_workdir = workdir is None
     work = Path(tempfile.mkdtemp(prefix="graph-bench-")) if workdir is None else workdir
     try:
-        run(name, dbs, out, workdir=work, case_timeout_s=case_timeout, deadline_s=deadline_s, yardstick=docs)
+        run(
+            name,
+            dbs,
+            out,
+            workdir=work,
+            case_timeout_s=case_timeout,
+            deadline_s=deadline_s,
+            yardstick=docs,
+            deadline_total_s=deadline_total_s,
+        )
     finally:
         if own_workdir:
             shutil.rmtree(work, ignore_errors=True)
@@ -250,9 +273,22 @@ def bench(
     out: Path = _OUT,
     deadline_s: float | None = _DEADLINE,
     yardstick: list[Path] | None = _YARDSTICK,
+    deadline_total_s: float | None = _DEADLINE_TOTAL,
 ) -> None:
     """Run the databases one after another, one worker process each; write and print DIR/results.json."""
-    _run(supervisor.run_bench, "bench", selection, db, grafeo, case_timeout, workdir, out, deadline_s, yardstick)
+    _run(
+        supervisor.run_bench,
+        "bench",
+        selection,
+        db,
+        grafeo,
+        case_timeout,
+        workdir,
+        out,
+        deadline_s,
+        yardstick,
+        deadline_total_s,
+    )
 
 
 @app.command()
@@ -265,6 +301,7 @@ def codspeed(
     out: Path = _OUT,
     deadline_s: float | None = _DEADLINE,
     yardstick: list[Path] | None = _YARDSTICK,
+    deadline_total_s: float | None = _DEADLINE_TOTAL,
 ) -> None:
     """CI entry point: one `pytest benches --codspeed` process per database; write and print DIR/results.json.
 
@@ -272,7 +309,19 @@ def codspeed(
 
     Exits 0 once results.json is written, whatever pytest's exit codes.
     """
-    _run(supervisor.run_codspeed, "codspeed", selection, db, grafeo, case_timeout, workdir, out, deadline_s, yardstick)
+    _run(
+        supervisor.run_codspeed,
+        "codspeed",
+        selection,
+        db,
+        grafeo,
+        case_timeout,
+        workdir,
+        out,
+        deadline_s,
+        yardstick,
+        deadline_total_s,
+    )
 
 
 _MERGE_IN = typer.Argument(..., help="The results.json files to merge, one per CI job.")
