@@ -448,18 +448,17 @@ def test_merge_jobs_run_on_ubuntu_after_every_leg() -> None:
         assert "legs/*/results.json" in merge and "::error" in merge and "exit 1" in merge, merge_name
         assert "results/*/results.json" not in merge, merge_name
         assert any('graph-bench ci-settings >> "$GITHUB_OUTPUT"' in run for run in _runs(job)), merge_name
-        # The merge needs graph-bench only, not the databases or the datasets; only the version check of the
-        # local snapshot installs the databases, after the merge, to read their versions.
-        others = [run for run in _runs(job) if "graph-bench local-check" not in run]
-        assert not any("install-databases.sh" in run or "data prepare" in run for run in others), merge_name
+        # The merge needs graph-bench only, not the databases or the datasets.
+        assert not any("install-databases.sh" in run or "data prepare" in run for run in _runs(job)), merge_name
         upload = next(step for step in steps if step.get("uses", "").startswith("actions/upload-artifact@"))
         expected = {"name": prefix, "path": "merged/results.json", "if-no-files-found": "warn", "overwrite": True}
         assert upload["with"] == expected, merge_name
 
 
 def test_readme_results_mixes_in_the_local_snapshot() -> None:
-    """The README job merges the local snapshot when it is committed (and only then), and checks the installed
-    versions against it: the databases that differ become a `::notice`, and the check never fails the job."""
+    """The README job merges the local snapshot when it is committed (and only then), and checks its versions
+    against the newest stable releases: the databases that differ become a `::notice`, and the check never fails
+    the job."""
     job = _load("bench.yml")["jobs"]["readme-results"]
     merge = next(run for run in _runs(job) if "graph-bench merge" in run)
     assert "if [ -f results/local/results.json ]" in merge
@@ -469,12 +468,8 @@ def test_readme_results_mixes_in_the_local_snapshot() -> None:
     check = steps[check_at]
     assert "graph-bench local-check --local results/local/results.json" in check["run"]
     assert "if [ ! -f results/local/results.json ]" in check["run"]
-    assert "bash .github/scripts/install-databases.sh" in check["run"]
     assert "::notice title=Local snapshot out of date::" in check["run"]
     assert check.get("continue-on-error") is True
-    # Every database at the run's grafeo version, as the legs installed it.
-    assert check["env"]["GRAFEO_VERSION"] == "${{ needs.resolve.outputs.grafeo }}"
-    assert "resolve" in job["needs"]
     pr_at = next(i for i, step in enumerate(steps) if step.get("uses", "").startswith("peter-evans/"))
     merge_at = next(i for i, step in enumerate(steps) if "graph-bench merge" in step.get("run", ""))
     assert merge_at < check_at < pr_at
@@ -496,6 +491,9 @@ def test_local_bench_script_runs_all_ten_in_one_linux_container() -> None:
     assert "install-databases.sh" in script
     assert " cp " in script and "results/local/results.json" in script
     assert "/work/out/results.json" in script
+    # A failed run still copies out what it left, before the EXIT trap removes the container, and keeps its status.
+    assert '"$IMAGE" bash -c "$inside" || status=$?' in script
+    assert script.index("|| status=$?") < script.index("$DOCKER cp") < script.rindex('exit "$status"')
     ignore = Path(__file__).resolve().parent.parent / ".gitignore"
     lines = ignore.read_text(encoding="utf-8").splitlines()
     assert lines.index("results/*") < lines.index("!results/local/") < lines.index("!results/local/results.json")

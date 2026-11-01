@@ -22,8 +22,9 @@
 #             the merged results, with the committed local snapshot of all ten databases mixed in
 #             (`graph-bench merge --local results/local/results.json`, its databases marked and never compared with
 #             the CI ones), regenerate the README's results section and docs/results.md (every version) and open a
-#             pull request on bot/results. `graph-bench local-check` then raises a notice listing the databases
-#             whose installed version differs from the snapshot's, so the user knows to refresh it.
+#             pull request on bot/results. `graph-bench local-check` then raises a notice listing the snapshot's
+#             databases outside the roster whose newest stable release differs from the version it measured, so
+#             the user knows to refresh it.
 # The merge jobs download the legs into legs/, not results/, where the committed snapshot lives.
 # Every upload overwrites an artifact of the same name, so "Re-run failed jobs" can upload a leg's results again.
 name: Benchmarks
@@ -249,7 +250,7 @@ jobs:
 
   readme-results:
     name: README results (merged, pull request)
-    needs: [resolve, readme]
+    needs: readme
     # After every leg, whatever its outcome, unless the run was cancelled.
     if: ${{ !cancelled() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
@@ -285,18 +286,15 @@ jobs:
         run: |
           uv run --no-sync graph-bench report --format readme --in merged/results.json --write README.md
           uv run --no-sync graph-bench report --format overview --in merged/results.json --write docs/results.md
-      # Advisory only: the databases are installed (newest stable, grafeo at the run's version, as the legs had
-      # them) just to read their versions, and a failure here never stops the pull request.
-      - name: Installed versions against the local snapshot
+      # Advisory only: the snapshot's databases outside the roster against their newest stable releases on PyPI
+      # (Neo4j: its pin), with nothing installed; a failure here never stops the pull request.
+      - name: Local snapshot against the newest stable releases
         continue-on-error: true
-        env:
-          GRAFEO_VERSION: ${{ needs.resolve.outputs.grafeo }}
         run: |
           if [ ! -f results/local/results.json ]; then
             echo "no local snapshot (results/local/results.json) to check"
             exit 0
           fi
-          bash .github/scripts/install-databases.sh
           changed=$(uv run --no-sync graph-bench local-check --local results/local/results.json)
           if [ -n "$changed" ]; then
             echo "::notice title=Local snapshot out of date::$(echo "$changed" | paste -sd ';' - | sed 's/;/; /g'); refresh it with .github/scripts/local-bench.sh"

@@ -12,7 +12,9 @@
 #   GRAFEO_VERSION  pin grafeo to this version; default: its newest stable release, like every other database
 #
 # The repository is mounted read-only and copied into the container, and the run's output stays inside the
-# container until the end: appending to a Windows bind mount fails with ENODATA. Only results.json is copied out.
+# container until the end: appending to a Windows bind mount fails with ENODATA. Only results.json is copied out,
+# also when the run fails part way (whatever it left), before the container is removed; the script then exits
+# with the run's status.
 # The dataset cache lives in a named volume (graph-bench-local-cache), so a refresh reuses it.
 set -euo pipefail
 
@@ -47,12 +49,21 @@ SCRIPT
 cleanup() { $DOCKER rm -f "$NAME" > /dev/null 2>&1 || true; }
 trap cleanup EXIT
 
+status=0
 $DOCKER run --name "$NAME" --platform linux/amd64 \
   -v "$host_root:/src:ro" \
   -v graph-bench-local-cache:/root/.cache/graph-bench \
   -e GRAFEO_VERSION="${GRAFEO_VERSION:-}" \
-  "$IMAGE" bash -c "$inside"
+  "$IMAGE" bash -c "$inside" || status=$?
 
 mkdir -p "$root/results/local"
-(cd "$root" && $DOCKER cp "$NAME:/work/out/results.json" results/local/results.json)
-echo "wrote $root/results/local/results.json; commit it, then regenerate the README (bench.yml, readme-results)"
+if (cd "$root" && $DOCKER cp "$NAME:/work/out/results.json" results/local/results.json); then
+  echo "wrote $root/results/local/results.json; commit it, then regenerate the README (bench.yml, readme-results)"
+else
+  echo "local-bench: the run left no results.json" >&2
+  [ "$status" -ne 0 ] || status=1
+fi
+if [ "$status" -ne 0 ]; then
+  echo "local-bench: the run in the container exited with status $status" >&2
+fi
+exit "$status"
