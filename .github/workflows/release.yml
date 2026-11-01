@@ -7,16 +7,17 @@
 # legs (the shared composite action .github/actions/prepare): one leg per database of the CI roster
 # (catalog.CI_DATABASES, Grafeo last), one at a time, each on a fresh box because the runner dies about 60 minutes
 # after boot. Every leg installs exactly the grafeo version `detect` resolved. Each leg stops starting cases at the
-# run deadline (`graph-bench ci-settings`, counted from the job's first step), passes the earlier legs' results as
-# `--yardstick` and uploads `results-release-<db>` (overwriting, so a re-run leg can upload again). The
-# `post-results` job on ubuntu-latest then merges them (`graph-bench merge`; a leg without results shows as "no
-# results", failed), posts the result through the webhook in the secret DISCORD_BENCH_WEBHOOK, and only then records
-# the version. When Grafeo itself has no results (its leg left none, or Grafeo did not start), it posts nothing and
-# records nothing, with a warning, so the next daily run benchmarks the release again. It is its own workflow, not a
-# job of bench.yml, because its trigger (a new release) and its permissions (writing bot/state) differ from the
-# push and README jobs. It shares bench.yml's workflow-level concurrency group, so its macro-runner legs never run
-# beside bench.yml's; a release run waits for a running bench.yml run, and a newer queued run of either replaces it
-# while it is pending (the version is then not recorded, so the next day's run posts it).
+# run deadline (`graph-bench ci-settings`, counted from the job's first step), passes the results of the legs before
+# it in the roster as `--yardstick` (`graph-bench ci-yardsticks`) and uploads `results-release-<db>` (overwriting,
+# so a re-run leg can upload again). The `post-results` job on ubuntu-latest then merges them (`graph-bench merge`;
+# a leg without results shows as "no results", failed), posts the result through the webhook in the secret
+# DISCORD_BENCH_WEBHOOK, and only then records the version. When Grafeo itself has no results (its leg left none, or
+# Grafeo did not start), it posts nothing and records nothing, with a warning, so the next daily run benchmarks the
+# release again. It is its own workflow, not a job of bench.yml, because its trigger (a new release) and its
+# permissions (writing bot/state) differ from the push and README jobs. It shares bench.yml's workflow-level
+# concurrency group, so its macro-runner legs never run beside bench.yml's; a release run waits for a running
+# bench.yml run, and a newer queued run of either replaces it while it is pending (the version is then not recorded,
+# so the next day's run posts it).
 #
 # Without the secret the run goes on to the results artifact but skips the post and the state update (the log
 # says so), so the version is posted once the secret exists. The webhook URL is never written anywhere.
@@ -128,9 +129,9 @@ jobs:
       max-parallel: 1
       fail-fast: false
       matrix:
-        # catalog.CI_DATABASES, in its order (tests/test_workflows.py checks it). Grafeo last assumes GitHub starts
-        # the legs in matrix order, which it does in practice but does not document (a re-run of one leg breaks it
-        # too). The yardstick is only a runaway guard, so another order only weakens the in-run cutoff.
+        # catalog.CI_DATABASES, in its order (tests/test_workflows.py checks it). GitHub starts the legs in matrix
+        # order in practice but does not document it, and a re-run leg finds the later legs' artifacts too, so a
+        # leg takes as yardsticks only the legs before it in the roster (`graph-bench ci-yardsticks`).
         db: [neug, ladybug, turingdb, oxigraph, duckdb, grafeo]
     permissions:
       contents: write  # the heartbeat pushes bot/heartbeat
@@ -147,7 +148,7 @@ jobs:
       - name: Run settings
         id: ci
         run: uv run --no-sync graph-bench ci-settings >> "$GITHUB_OUTPUT"
-      # The results of this run's earlier legs; the first leg finds none.
+      # The results of this run's legs so far; `ci-yardsticks` keeps those before this one in the roster.
       - uses: actions/download-artifact@v8
         continue-on-error: true
         with:
@@ -156,10 +157,7 @@ jobs:
       - name: Yardstick arguments
         id: yardstick
         run: |
-          args=""
-          for file in yardstick/*/results.json; do
-            if [ -f "$file" ]; then args="${args:+$args }--yardstick $file"; fi
-          done
+          args=$(uv run --no-sync graph-bench ci-yardsticks --db ${{ matrix.db }} yardstick)
           echo "yardsticks: ${args:-none}"
           echo "args=$args" >> "$GITHUB_OUTPUT"
       # The run deadline counts from the job's first step; 0 when setup took all of it (every case is then
@@ -192,8 +190,8 @@ jobs:
     name: Merge and post
     needs: [detect, post]
     # After every leg, whatever its outcome, unless the run was cancelled (a cancelled run posts and records
-    # nothing): a database whose leg left no results is posted as failed.
-    if: ${{ !cancelled() && needs.detect.outputs.run == 'true' }}
+    # nothing) or the legs were skipped: a database whose leg left no results is posted as failed.
+    if: ${{ !cancelled() && needs.post.result != 'skipped' && needs.detect.outputs.run == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

@@ -112,8 +112,8 @@ def test_bench_workflow_shape() -> None:
     # The README section and the pull request come from the merged results, on ubuntu-latest.
     assert not any("graph-bench report" in run for run in runs)
     merged = workflow["jobs"]["readme-results"]
-    expected = "${{ !cancelled() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}"
-    assert merged["if"] == expected
+    events = "(github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')"
+    assert merged["if"] == f"${{{{ !cancelled() && needs.readme.result != 'skipped' && {events} }}}}"
     assert merged["permissions"] == {"contents": "write", "pull-requests": "write"}
     runs = _runs(merged)
     report = next(i for i, run in enumerate(runs) if "graph-bench report --format readme" in run)
@@ -247,7 +247,7 @@ def test_release_post_is_conditional_on_the_secret_and_records_after() -> None:
     post = jobs["post-results"]
     assert post["needs"] == ["detect", "post"]
     # A cancelled run posts and records nothing.
-    assert post["if"] == "${{ !cancelled() && needs.detect.outputs.run == 'true' }}"
+    assert post["if"] == "${{ !cancelled() && needs.post.result != 'skipped' && needs.detect.outputs.run == 'true' }}"
     assert post["runs-on"] == "ubuntu-latest"
     assert post["permissions"] == {"contents": "write"}
     steps = post["steps"]
@@ -380,7 +380,8 @@ def test_macro_runner_jobs_never_run_at_once() -> None:
 def test_macro_runner_jobs_are_one_leg_per_roster_database() -> None:
     """Each macro-runner job is a matrix over `catalog.CI_DATABASES`, in that order, that goes on when a leg
     fails. Every leg passes the run deadline from `graph-bench ci-settings` (never a number in the YAML), takes
-    the results of the run's earlier legs as `--yardstick` (none is fine) and uploads `<prefix>-<db>`."""
+    the results of the legs before it in the roster as `--yardstick` (`graph-bench ci-yardsticks`, so a re-run or
+    an out-of-order leg never takes a later one; none is fine) and uploads `<prefix>-<db>`."""
     found = []
     for name, job_name, _, prefix in MATRIX_JOBS:
         job = _load(name)["jobs"][job_name]
@@ -394,7 +395,9 @@ def test_macro_runner_jobs_are_one_leg_per_roster_database() -> None:
         assert steps[download]["with"] == {"pattern": f"{prefix}-*", "path": "yardstick"}, (name, job_name)
         assert steps[download].get("continue-on-error") is True
         args = next(step for step in steps if step.get("id") == "yardstick")
-        assert "yardstick/*/results.json" in args["run"] and "--yardstick" in args["run"]
+        assert "args=$(uv run --no-sync graph-bench ci-yardsticks --db ${{ matrix.db }} yardstick)" in args["run"]
+        assert 'echo "args=$args" >> "$GITHUB_OUTPUT"' in args["run"]
+        assert "yardstick/*/results.json" not in args["run"], (name, job_name)
         command = next(run for run in _runs(job) if "--selection" in run and "--out out" in run)
         assert "--db ${{ matrix.db }}" in command
         assert "${{ steps.yardstick.outputs.args }}" in command
@@ -430,14 +433,15 @@ def test_macro_runner_jobs_are_one_leg_per_roster_database() -> None:
 def test_merge_jobs_run_on_ubuntu_after_every_leg() -> None:
     """A job on ubuntu-latest per matrix runs after all its legs, whatever their outcome, and merges the legs'
     results (`graph-bench merge` with the roster as `--db`, so a leg without results shows as "no results");
-    with no results at all it fails instead of merging nothing."""
+    with no results at all it fails instead of merging nothing. It is skipped with its legs (the grafeo lookup
+    failed), so it never fails for lack of results there."""
     for name, job_name, merge_name, prefix in MATRIX_JOBS:
         job = _load(name)["jobs"][merge_name]
         assert job["runs-on"] == "ubuntu-latest", merge_name
         needs = job["needs"] if isinstance(job["needs"], list) else [job["needs"]]
         assert job_name in needs, merge_name
         # Whatever the legs' outcome, but not after a cancel (no partial PR, post or record).
-        assert job["if"].startswith("${{ !cancelled()"), merge_name
+        assert job["if"].startswith(f"${{{{ !cancelled() && needs.{job_name}.result != 'skipped'"), merge_name
         assert "always()" not in job["if"], merge_name
         steps = _steps(job)
         download = next(step for step in steps if step.get("uses", "").startswith("actions/download-artifact@"))
@@ -495,8 +499,11 @@ def test_local_bench_script_runs_all_ten_in_one_linux_container() -> None:
     assert '"$IMAGE" bash -c "$inside" || status=$?' in script
     assert script.index("|| status=$?") < script.index("$DOCKER cp") < script.rindex('exit "$status"')
     # ...but never over the committed snapshot: a failed run's file is results.partial.json.
-    assert "results/local/results.partial.json" in script
-    assert script.index("results.partial.json") < script.index("$DOCKER cp")
+    assert '[ "$status" -eq 0 ] || target=results/local/results.partial.json' in script
+    assert "target=results/local/results.json" in script
+    assert '$DOCKER cp "$NAME:/work/out/results.json" "$target"' in script
+    assert script.index("target=results/local/results.json") < script.index("|| target=results/local/results.partial")
+    assert script.index("|| target=results/local/results.partial") < script.index("$DOCKER cp")
     ignore = Path(__file__).resolve().parent.parent / ".gitignore"
     lines = ignore.read_text(encoding="utf-8").splitlines()
     assert lines.index("results/*") < lines.index("!results/local/") < lines.index("!results/local/results.json")

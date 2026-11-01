@@ -12,9 +12,10 @@
 # database of the CI roster (catalog.CI_DATABASES, Grafeo last), each leg on a fresh box, one at a time. A leg stops
 # starting cases at the run deadline (`graph-bench ci-settings`: RUN_DEADLINE_S, counted from the job's first step,
 # so setup time counts too), so it always leaves its results.json, uploaded as `results-<selection>-<db>`. It
-# passes the earlier legs' results of the same run as `--yardstick`, so in-run budgets still come from the same
-# hardware. A job on ubuntu-latest then merges the legs (`graph-bench merge`, which also applies the final 10x rule
-# once); a leg without results shows as "no results".
+# passes the results of the same run's legs before it in the roster as `--yardstick` (`graph-bench ci-yardsticks`,
+# never a later leg's, even on a re-run), so in-run budgets still come from the same hardware. A job on
+# ubuntu-latest then merges the legs (`graph-bench merge`, which also applies the final 10x rule once to the CI
+# entries); a leg without results shows as "no results". It is skipped when the legs were.
 #   codspeed / codspeed-results: the push selection under CodSpeed in wall-time mode, on every push to main, daily
 #             and on demand. CodSpeed merges the legs of one workflow run itself (sharded benchmarks); the merged
 #             results.json is the artifact `results-push`.
@@ -82,9 +83,9 @@ jobs:
       max-parallel: 1
       fail-fast: false
       matrix:
-        # catalog.CI_DATABASES, in its order (tests/test_workflows.py checks it). Grafeo last assumes GitHub starts
-        # the legs in matrix order, which it does in practice but does not document (a re-run of one leg breaks it
-        # too). The yardstick is only a runaway guard, so another order only weakens the in-run cutoff.
+        # catalog.CI_DATABASES, in its order (tests/test_workflows.py checks it). GitHub starts the legs in matrix
+        # order in practice but does not document it, and a re-run leg finds the later legs' artifacts too, so a
+        # leg takes as yardsticks only the legs before it in the roster (`graph-bench ci-yardsticks`).
         db: [neug, ladybug, turingdb, oxigraph, duckdb, grafeo]
     permissions:
       contents: read
@@ -101,7 +102,7 @@ jobs:
       - name: Run settings
         id: ci
         run: uv run --no-sync graph-bench ci-settings >> "$GITHUB_OUTPUT"
-      # The results of this run's earlier legs; the first leg finds none.
+      # The results of this run's legs so far; `ci-yardsticks` keeps those before this one in the roster.
       - uses: actions/download-artifact@v8
         continue-on-error: true
         with:
@@ -110,10 +111,7 @@ jobs:
       - name: Yardstick arguments
         id: yardstick
         run: |
-          args=""
-          for file in yardstick/*/results.json; do
-            if [ -f "$file" ]; then args="${args:+$args }--yardstick $file"; fi
-          done
+          args=$(uv run --no-sync graph-bench ci-yardsticks --db ${{ matrix.db }} yardstick)
           echo "yardsticks: ${args:-none}"
           echo "args=$args" >> "$GITHUB_OUTPUT"
       # The run deadline counts from the job's first step; 0 when setup took all of it (every case is then
@@ -141,8 +139,9 @@ jobs:
   codspeed-results:
     name: CodSpeed results (merged)
     needs: codspeed
-    # After every leg, whatever its outcome, unless the run was cancelled.
-    if: ${{ !cancelled() }}
+    # After every leg, whatever its outcome (a failed leg shows as "no results"), unless the run was cancelled or
+    # the legs were skipped (the grafeo lookup failed: there is nothing to merge).
+    if: ${{ !cancelled() && needs.codspeed.result != 'skipped' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -189,9 +188,9 @@ jobs:
       max-parallel: 1
       fail-fast: false
       matrix:
-        # catalog.CI_DATABASES, in its order (tests/test_workflows.py checks it). Grafeo last assumes GitHub starts
-        # the legs in matrix order, which it does in practice but does not document (a re-run of one leg breaks it
-        # too). The yardstick is only a runaway guard, so another order only weakens the in-run cutoff.
+        # catalog.CI_DATABASES, in its order (tests/test_workflows.py checks it). GitHub starts the legs in matrix
+        # order in practice but does not document it, and a re-run leg finds the later legs' artifacts too, so a
+        # leg takes as yardsticks only the legs before it in the roster (`graph-bench ci-yardsticks`).
         db: [neug, ladybug, turingdb, oxigraph, duckdb, grafeo]
     permissions:
       contents: write  # the heartbeat pushes bot/heartbeat
@@ -207,7 +206,7 @@ jobs:
       - name: Run settings
         id: ci
         run: uv run --no-sync graph-bench ci-settings >> "$GITHUB_OUTPUT"
-      # The results of this run's earlier full legs; the first leg finds none.
+      # The results of this run's full legs so far; `ci-yardsticks` keeps those before this one in the roster.
       - uses: actions/download-artifact@v8
         continue-on-error: true
         with:
@@ -216,10 +215,7 @@ jobs:
       - name: Yardstick arguments
         id: yardstick
         run: |
-          args=""
-          for file in yardstick/*/results.json; do
-            if [ -f "$file" ]; then args="${args:+$args }--yardstick $file"; fi
-          done
+          args=$(uv run --no-sync graph-bench ci-yardsticks --db ${{ matrix.db }} yardstick)
           echo "yardsticks: ${args:-none}"
           echo "args=$args" >> "$GITHUB_OUTPUT"
       # The run deadline counts from the job's first step; 0 when setup took all of it (every case is then
@@ -251,8 +247,9 @@ jobs:
   readme-results:
     name: README results (merged, pull request)
     needs: readme
-    # After every leg, whatever its outcome, unless the run was cancelled.
-    if: ${{ !cancelled() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    # After every leg, whatever its outcome (a failed leg shows as "no results"), unless the run was cancelled or
+    # the legs were skipped (the grafeo lookup failed: there is nothing to merge).
+    if: ${{ !cancelled() && needs.readme.result != 'skipped' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
