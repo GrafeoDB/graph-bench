@@ -101,7 +101,7 @@ def test_bench_workflow_shape() -> None:
     readme = workflow["jobs"]["readme"]
     assert readme["runs-on"] == GRAVITON
     # On schedule and dispatch the full legs run after the push legs, whatever their outcome, unless cancelled.
-    assert readme["needs"] == "codspeed"
+    assert readme["needs"] == ["resolve", "codspeed"]
     condition = readme["if"]
     assert "schedule" in condition
     assert "workflow_dispatch" in condition
@@ -112,7 +112,8 @@ def test_bench_workflow_shape() -> None:
     # The README section and the pull request come from the merged results, on ubuntu-latest.
     assert not any("graph-bench report" in run for run in runs)
     merged = workflow["jobs"]["readme-results"]
-    assert merged["if"] == "always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')"
+    expected = "${{ !cancelled() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}"
+    assert merged["if"] == expected
     assert merged["permissions"] == {"contents": "write", "pull-requests": "write"}
     runs = _runs(merged)
     report = next(i for i, run in enumerate(runs) if "graph-bench report --format readme" in run)
@@ -242,7 +243,8 @@ def test_release_post_is_conditional_on_the_secret_and_records_after() -> None:
     assert not any("graph-bench notify" in run for run in _runs(jobs["post"]))
     post = jobs["post-results"]
     assert post["needs"] == ["detect", "post"]
-    assert post["if"] == "always() && needs.detect.outputs.run == 'true'"
+    # A cancelled run posts and records nothing.
+    assert post["if"] == "${{ !cancelled() && needs.detect.outputs.run == 'true' }}"
     assert post["runs-on"] == "ubuntu-latest"
     assert post["permissions"] == {"contents": "write"}
     steps = post["steps"]
@@ -255,7 +257,8 @@ def test_release_post_is_conditional_on_the_secret_and_records_after() -> None:
     assert "--in merged/results.json" in notify["run"]
     assert "../merged/results.json" in record["run"]
     assert names.index("Merge the results") < names.index("Post to Discord")
-    assert notify["if"] == "needs.detect.outputs.webhook == 'true'"
+    # Both need the secret and Grafeo's results (see test_release_post_needs_grafeo_results).
+    assert notify["if"] == "needs.detect.outputs.webhook == 'true' && steps.grafeo.outputs.ran == 'true'"
     assert record["if"] == notify["if"]
     # The version is recorded after a successful post (a step without `if: always()` does not run after a failure).
     assert names.index("Record the posted version on bot/state") > names.index("Post to Discord")
@@ -276,6 +279,75 @@ def test_release_post_is_conditional_on_the_secret_and_records_after() -> None:
     detect = _load("release.yml")["jobs"]["detect"]
     gate = next(step for step in detect["steps"] if step.get("id") == "webhook")
     assert gate["env"]["DISCORD_BENCH_WEBHOOK"] == "${{ secrets.DISCORD_BENCH_WEBHOOK }}"
+
+
+def test_release_post_needs_grafeo_results(tmp_path: Path) -> None:
+    """Without Grafeo in the merged results (its leg left none, or Grafeo did not start), the release run warns,
+    posts nothing and records nothing, so the next daily run benchmarks that release again. The check is the
+    step's own Python, run here against a merged results.json with and without Grafeo."""
+    steps = _load("release.yml")["jobs"]["post-results"]["steps"]
+    names = [step.get("name", "") for step in steps]
+    check = steps[names.index("Did Grafeo run?")]
+    assert check["id"] == "grafeo"
+    assert names.index("Merge the results") < names.index("Did Grafeo run?") < names.index("Post to Discord")
+    assert "::warning" in check["run"] and 'echo "ran=false"' in check["run"] and 'echo "ran=true"' in check["run"]
+    code = re.search(r'python3 -c "(.+?)"; then', check["run"])
+    assert code, check["run"]
+    (tmp_path / "merged").mkdir()
+    for databases, ran in (({"neug": {}, "grafeo": {}}, 0), ({"neug": {}}, 1)):
+        (tmp_path / "merged" / "results.json").write_text(json.dumps({"databases": databases}), encoding="utf-8")
+        done = subprocess.run([sys.executable, "-c", code.group(1)], cwd=tmp_path, capture_output=True, text=True)
+        assert done.returncode == ran, (databases, done.stderr)
+
+
+def test_every_leg_installs_the_grafeo_version_of_the_run() -> None:
+    """The grafeo version is resolved once per run (bench.yml's `resolve` job, release.yml's `detect`) and every
+    leg's prepare step installs exactly it, so a grafeo release during the run cannot split the legs (merge would
+    refuse them). Without the input the install script keeps installing the newest stable grafeo."""
+    bench = _load("bench.yml")["jobs"]
+    resolve = bench["resolve"]
+    assert resolve["runs-on"] == "ubuntu-latest"
+    assert resolve["outputs"] == {"grafeo": "${{ steps.grafeo.outputs.version }}"}
+    lookup = next(step for step in resolve["steps"] if step.get("id") == "grafeo")
+    assert "python -m graph_bench.release latest" in lookup["run"] and lookup["env"] == {"PYTHONPATH": "."}
+    pinned = {
+        ("bench.yml", "codspeed"): "${{ needs.resolve.outputs.grafeo }}",
+        ("bench.yml", "readme"): "${{ needs.resolve.outputs.grafeo }}",
+        ("release.yml", "post"): "${{ needs.detect.outputs.version }}",
+    }
+    for (name, job_name), version in pinned.items():
+        job = _load(name)["jobs"][job_name]
+        needs = job["needs"] if isinstance(job["needs"], list) else [job["needs"]]
+        assert version.split(".")[1] in needs, (name, job_name)
+        prepare = next(step for step in job["steps"] if step.get("uses") == "./.github/actions/prepare")
+        assert prepare["with"]["grafeo-version"] == version, (name, job_name)
+    assert "needs.resolve.result == 'success'" in bench["readme"]["if"]
+    action = yaml.safe_load((ACTIONS / "prepare" / "action.yml").read_text(encoding="utf-8"))
+    assert action["inputs"]["grafeo-version"] == {
+        "description": action["inputs"]["grafeo-version"]["description"],
+        "required": False,
+        "default": "",
+    }
+    install = next(step for step in action["runs"]["steps"] if "install-databases.sh" in step.get("run", ""))
+    assert install["env"] == {"GRAFEO_VERSION": "${{ inputs.grafeo-version }}"}
+    script = (SCRIPTS / "install-databases.sh").read_text(encoding="utf-8")
+    assert 'if [ -n "${GRAFEO_VERSION:-}" ] && [ "${requirement%% *}" = "grafeo" ]; then' in script
+    assert 'requirement="grafeo==$GRAFEO_VERSION${requirement#grafeo}"' in script
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="runs install-databases.sh's pin line in Linux bash")
+def test_install_script_pins_grafeo() -> None:
+    """The pin line of install-databases.sh turns `grafeo` into `grafeo==<version>` and leaves the rest alone."""
+    script = (SCRIPTS / "install-databases.sh").read_text(encoding="utf-8")
+    start = script.index('  if [ -n "${GRAFEO_VERSION:-}" ]')
+    pin = script[start : script.index("  fi\n", start) + len("  fi\n")]
+    probe = f'for requirement in grafeo grafeo-x duckdb; do\n{pin}  echo "$requirement"\ndone\n'
+    env = {**os.environ, "GRAFEO_VERSION": "0.6.4"}
+    done = subprocess.run(["bash", "-c", probe], env=env, capture_output=True, text=True)
+    assert done.stdout.split() == ["grafeo==0.6.4", "grafeo-x", "duckdb"], done.stderr
+    env.pop("GRAFEO_VERSION")
+    done = subprocess.run(["bash", "-c", probe], env=env, capture_output=True, text=True)
+    assert done.stdout.split() == ["grafeo", "grafeo-x", "duckdb"], done.stderr
 
 
 def test_prepare_action_installs_released_databases() -> None:
@@ -322,15 +394,28 @@ def test_macro_runner_jobs_are_one_leg_per_roster_database() -> None:
         assert "yardstick/*/results.json" in args["run"] and "--yardstick" in args["run"]
         command = next(run for run in _runs(job) if "--selection" in run and "--out out" in run)
         assert "--db ${{ matrix.db }}" in command
-        assert "--deadline-s ${{ steps.ci.outputs.deadline_s }}" in command
         assert "${{ steps.yardstick.outputs.args }}" in command
         runs_at = next(
             i for i, step in enumerate(steps) if command in (step.get("run"), step.get("with", {}).get("run"))
         )
         assert download < runs_at, (name, job_name)
+        # The deadline counts from the job's first step: the start epoch is recorded before the checkout, and the
+        # step right before the bench passes what is left of RUN_DEADLINE_S, never below 0 (a negative value would
+        # exit 2 with no results.json; 0 writes one with every case at "run deadline").
+        start = job["steps"][0]
+        assert start["id"] == "start" and start["run"] == 'echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"'
+        left = steps[runs_at - 1]
+        assert left["id"] == "deadline", (name, job_name)
+        assert "${{ steps.ci.outputs.deadline_s }} - ($(date +%s) - ${{ steps.start.outputs.epoch }})" in left["run"]
+        assert 'if [ "$left" -lt 0 ]; then left=0; fi' in left["run"]
+        assert 'echo "seconds=$left" >> "$GITHUB_OUTPUT"' in left["run"]
+        assert "--deadline-s ${{ steps.deadline.outputs.seconds }}" in command
+        assert "steps.ci.outputs.deadline_s" not in command
         upload = next(step for step in steps if step.get("uses", "").startswith("actions/upload-artifact@"))
         assert upload["with"]["name"] == prefix + "-${{ matrix.db }}"
         assert upload["if"] == "always()"
+        # "Re-run failed jobs" uploads the same name again in the same run.
+        assert upload["with"]["overwrite"] is True
         found.append((name, job_name))
     for name in ("bench.yml", "release.yml"):
         text = (WORKFLOWS / name).read_text(encoding="utf-8")
@@ -348,7 +433,9 @@ def test_merge_jobs_run_on_ubuntu_after_every_leg() -> None:
         assert job["runs-on"] == "ubuntu-latest", merge_name
         needs = job["needs"] if isinstance(job["needs"], list) else [job["needs"]]
         assert job_name in needs, merge_name
-        assert job["if"].startswith("always()"), merge_name
+        # Whatever the legs' outcome, but not after a cancel (no partial PR, post or record).
+        assert job["if"].startswith("${{ !cancelled()"), merge_name
+        assert "always()" not in job["if"], merge_name
         steps = _steps(job)
         download = next(step for step in steps if step.get("uses", "").startswith("actions/download-artifact@"))
         assert download["with"] == {"pattern": f"{prefix}-*", "path": "results"}, merge_name
@@ -359,7 +446,8 @@ def test_merge_jobs_run_on_ubuntu_after_every_leg() -> None:
         # The merge needs graph-bench only, not the databases or the datasets.
         assert not any("install-databases.sh" in run or "data prepare" in run for run in _runs(job)), merge_name
         upload = next(step for step in steps if step.get("uses", "").startswith("actions/upload-artifact@"))
-        assert upload["with"] == {"name": prefix, "path": "merged/results.json", "if-no-files-found": "warn"}
+        expected = {"name": prefix, "path": "merged/results.json", "if-no-files-found": "warn", "overwrite": True}
+        assert upload["with"] == expected, merge_name
 
 
 def test_macro_runner_jobs_end_before_the_runner_does() -> None:
