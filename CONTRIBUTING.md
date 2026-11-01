@@ -172,9 +172,9 @@ installing exactly that grafeo version, merges their results in a job on ubuntu-
 posts through `graph-bench notify`, which reads the webhook URL from the repository secret `DISCORD_BENCH_WEBHOOK`
 (set under Settings, Secrets and variables, Actions). Only after a successful post does the job commit the version
 to `bot/state`. Without the secret, or when Grafeo itself has no results, the post and the state update are
-skipped with a log line, so a later run posts the version. Never put the URL in the repository, a log or a test: tests use fake
-placeholders and a fake HTTP layer. To try it, run the workflow by hand with `force` set; to preview the payload,
-run `uv run --no-sync graph-bench report --format discord --in out/results.json`.
+skipped with a log line, so a later run posts the version. Never put the URL in the repository, a log or a test:
+tests use fake placeholders and a fake HTTP layer. To try it, run the workflow by hand with `force` set; to preview
+the payload, run `uv run --no-sync graph-bench report --format discord --in out/results.json`.
 
 ## Style
 
