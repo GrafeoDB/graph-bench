@@ -59,19 +59,43 @@ benchmark, servers included, is kept in [legacy/](legacy/README.md).
      that budget, and the case becomes ⏱ ("too slow: cut off at ..."). Only the database call is timed against
      the cutoff; graph-bench's own work around it (loading the reference, checking the answer) is not. The
      cutoff only stops runaway cases early; because it measures cold first runs, it is set well above the final
-     rule. It depends on which databases ran earlier, so a ⏱ from the cutoff can depend on the run order. Before 3 earlier results exist, only a hard
-     cap applies (`--case-timeout`, default 600 s, measured as silence: the worker reports progress after every
-     run).
+     rule. It depends on which databases ran earlier, so a ⏱ from the cutoff can depend on the run order. Before 3 earlier results exist, only the case
+     ceiling of rule 9 and the silence limit apply (`--case-timeout`, default 120 s, measured as silence: the
+     worker reports progress after every run). Whichever of the cutoff and the ceiling comes first stops the case.
    - **After the run:** the 10x rule is applied over all results, each entry against the other databases. Any
      benchmark beyond its budget becomes ⏱. The run order never decides a ⏱ from this final rule (unlike the
      in-run cutoff above).
+9. **Run-time limits are the same for every database, at any position in the run order** (the CodSpeed runner
+   lives about an hour, so a run must fit in it; `graph_bench/runner/__init__.py`):
+   - **Case ceiling, 60 s.** Every query, algorithm and write case stops 60 s of wall time after it starts,
+     warm-ups, timed runs and answer checks included. No warm-up or timed run starts once 60 s have passed (nor
+     one that, as long as the previous run, would end after the supervisor's kill below). A case stopped there
+     with at least 3 timed runs keeps its timing, the median over the runs it did; with fewer it is ⏱ ("too
+     slow: over 60 s"). A single call still running 5 s past the ceiling cannot be interrupted in the process: the
+     supervisor stops the worker and the case is ⏱ the same way.
+   - **Load ceiling, 5 min, per Load row.** Each Load row (one dataset in one store, such as snb in the graph
+     store or snb in the RDF store) has its own ceiling. A load of it (the Load row's own, the Memory and Disk
+     record's, or the one the queries run on) not finished 5 minutes after it started is stopped: it is ⏱ ("load
+     over 5 min"), and so is every case that reads that Load row's data for that database, the dataset's Load
+     (query language) row and its Memory and Disk record, none of them run. The other Load rows of the same
+     dataset (another store) are not affected.
+   - **Time box, 5 s.** A case does its warm-ups, then timed runs up to the selection's count, but starts no
+     further timed run once its timed runs total 5 s and at least 3 ran (loads: at least 1). Fast cases keep all
+     their runs; the recorded number of runs is what ran, and the median is over those. In
+     `graph-bench codspeed` the same 5 s box goes to pytest-codspeed (`--codspeed-max-time`, with
+     `--codspeed-max-rounds` at the selection's iteration count, so fast cases stop there too) for the queries, and
+     a write gets as many rounds as 5 s hold at its preflight's duration (at least 3).
+   - **Only these rules stop a case.** Database-side query and socket timeouts are disabled or raised wherever the
+     setting is public (FalkorDB's client socket timeout, Grafeo's 30 s query timeout from 0.6.1 on), so no client
+     or engine default fails a case with its own ✗; the other databases have no default timeout below the ceiling.
 
 ## The preflight
 
 Each benchmark first runs once, untimed: the preflight. The answer check and the time budget are applied there,
 and only a benchmark that passes the preflight is timed, so a wrong or too slow result never reaches CodSpeed as
 a speed. The preflight also counts as the first warm-up run. Warm-up runs, timed runs and load repetitions are
-set per selection (`graph_bench/suites/catalog.py`) and are the same for every database.
+set per selection (`graph_bench/suites/catalog.py`) and are the same for every database; the time box of rule 9
+can stop the timed runs earlier.
 
 A ⏱ assigned only by the final budget rule comes after CodSpeed has measured the case: CodSpeed then shows it as
 measured, while results.json and the matrix show ⏱. A ⏱ from the in-run cutoff is never measured.
@@ -154,8 +178,9 @@ Memory and Disk are records, not timed benchmarks: they never reach CodSpeed and
   are not followed), measured after `close()`, so each database's own shutdown has flushed and checkpointed. An
   in-memory store has none: "in memory".
 - **Answers and markers:** a record carries its load's count check; a mismatch is ≠ in both tables, a load error
-  ✗, a child silent for longer than the case timeout is killed (⏱), a load the database's models do not reach is
-  ⊘. Lowest is bold.
+  ✗, a child silent for longer than the case timeout is killed (⏱), a load over the load ceiling of rule 9 is ⏱
+  ("load over 5 min"; not run again when its Load row already went over it), a load the database's models do
+  not reach is ⊘. Lowest is bold.
 
 ## Loading
 
@@ -200,7 +225,7 @@ Load uses each database's **fastest documented bulk path, CSV parsing included**
 | ⊘ | not available: the database lacks the capability or the data model |
 | ✗ | failing: an error or a crash |
 | ≠ | wrong answer: fails the answer check, not ranked |
-| ⏱ | too slow: beyond the budget of rule 8 |
+| ⏱ | too slow: beyond the budget of rule 8, or over a limit of rule 9 ("too slow: over 60 s", "load over 5 min") |
 
 How each marker shows in CodSpeed is in the [README](README.md#markers).
 

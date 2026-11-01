@@ -31,8 +31,8 @@ benchmark moves to `legacy/` untouched and is deleted once the new comparison re
   all results at the end, so the run order never decides a marker from this final rule. During the run a
   runaway guard cuts a preflight's database call (cold first run, harness work excluded) off at 30x the average
   of the 3 fastest earlier preflights and never below 10 s, once 3 earlier results exist; this guard depends on which databases ran
-  earlier. Before that a hard cap applies (`--case-timeout`, default 600 s of worker silence). Startup and both
-  load rows are exempt from the budget.
+  earlier. Before that only the run-time limits below and the silence limit apply (`--case-timeout`, default
+  120 s of worker silence). Startup and both load rows are exempt from the budget.
 - **Load count check**: right after each timed load, outside the clock, the adapter's optional `counts()` counts
   the nodes and edges loaded through the database's own query interface; a mismatch with the dataset's counts
   (recorded in schema.json when the CSVs are written) makes the load ≠. Grafeo and LadybugDB count with Cypher.
@@ -94,9 +94,25 @@ benchmark moves to `legacy/` untouched and is deleted once the new comparison re
   adopted when it exits.
 - **Known disagreements**: `docs/known-disagreements.md` records wrong answers, slow cases and engine findings as
   they are, instead of working around them in the adapters.
+- **Run-time limits** (FAIRNESS.md rule 9), the same for every database at any position in the run order, so a
+  run fits in the CodSpeed macro runner's hour: every case stops 60 s after it starts (with at least 3 timed runs
+  it keeps its timing, else ⏱ "too slow: over 60 s"; the supervisor kills a single call still running 5 s past
+  the ceiling); the load ceiling applies per Load row (one dataset in one store): a load still running 5 minutes
+  after it starts is stopped, ⏱ "load over 5 min", together with the cases that read that load, the dataset's
+  Load (query language) row and the load's Memory and Disk record; and a case starts no further timed run
+  once its timed runs total 5 s and at least 3 ran (loads: 1). The recorded run count is what ran. In
+  `graph-bench codspeed` the box goes to pytest-codspeed's `--codspeed-max-time`, with `--codspeed-max-rounds` at
+  the selection's iterations so that fast cases keep their run count there too. The macro-runner jobs
+  (bench.yml `codspeed` and `readme`, release.yml `post`) get `timeout-minutes: 55`. Only these rules stop a
+  case: FalkorDB's client runs without its 5 s socket timeout (`socket_timeout=None`), and Grafeo without its
+  30 s query timeout (`query_timeout=None`, grafeo 0.6.1 and later); the other databases have no default timeout
+  below the ceiling.
 
 ### Changed
 
+- **Selections and silence limit**: `full` runs the medium scale only (push keeps small, under CodSpeed on every
+  push); its warm-up, iteration and binding counts stay. The silence limit (`--case-timeout`) drops from 600 to
+  120 s.
 - **Fairness rules**: FAIRNESS.md is rewritten for the embedded comparison: one process per database,
   single-threaded runs (all-cores runs return with grafeo 0.6.4), in-memory storage where supported, each
   database's fastest documented bulk load, its vendor-recommended API, checked answers and the budget rule.
