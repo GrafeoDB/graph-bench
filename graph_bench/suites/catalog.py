@@ -178,7 +178,9 @@ SELECTIONS: dict[str, Selection] = {
     "full": Selection(
         "full",
         frozenset(CATEGORY_ORDER),
-        ("small", "medium"),
+        # Medium only (Task T, 2026-10-31): push keeps small, under CodSpeed on every commit, so the full run fits
+        # in the CodSpeed macro runner's hour; the time box (`graph_bench.runner.TIME_BOX_S`) bounds the counts.
+        ("medium",),
         (1,),
         warmup=2,
         iterations=10,

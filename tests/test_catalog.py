@@ -32,6 +32,19 @@ def test_full_selection_single_threaded() -> None:
     assert all(c.threads == 1 for c in result)
 
 
+def test_full_selection_is_medium_only() -> None:
+    """Task T: `full` runs the medium scale only (push keeps small, under CodSpeed on every commit); its warm-up,
+    iteration and binding counts stay, and the time box bounds the rest."""
+    full = catalog.selection("full")
+    assert full.scales == ("medium",)
+    assert (full.warmup, full.iterations, full.load_iterations, full.bindings) == (2, 10, 3, 20)
+    result = cases("full", ["grafeo"])
+    assert result
+    assert {c.scale for c in result} == {"medium"}
+    assert {lid.rsplit("[", 1)[1] for lid in catalog.load_ids("full", ["grafeo"])} == {"grafeo-medium]"}
+    assert catalog.selection("push").scales == ("small",)
+
+
 def test_bench_id_format() -> None:
     is1 = _item("snb_is1")
     case = Case(is1, "ladybug", "small", 1)
