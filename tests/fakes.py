@@ -13,9 +13,10 @@ KeyboardInterrupt, `hang:<item_id>` sleeps an hour, `slow:<item_id>` sleeps 0.2 
 `slow_check:<item_id>` answers at once but returns rows that take 0.2 s to iterate (so the worker's answer check, not
 the database call, is slow), `wrong:<item_id>` returns a perturbed answer and
 `unsupported:<item_id>` raises NotSupported.
-`crash:load_<dataset>` and `hang:load_<dataset>` do the same while loading that dataset into the graph store
-(`load_<dataset>_rdf` into the RDF store: the load's benchmark name), and `crash_soft:environment` makes
-`prepare_environment` raise.
+`crash:load_<dataset>`, `hang:load_<dataset>` and `slow:load_<dataset>` do the same while loading that dataset into
+the graph store (`load_<dataset>_rdf` into the RDF store: the load's benchmark name), `slower:load_<dataset>` sleeps
+2 s in that load (past a ceiling the other, unslowed loads stay well under on a busy host), and `crash_soft:environment`
+makes `prepare_environment` raise.
 `counts()` counts the rows of the dataset's CSVs; with `short:count_<dataset>` it reports one edge too few (a load
 that lost an edge), `unsupported:count_<dataset>` raises NotSupported and `crash_soft:count_<dataset>` raises
 RuntimeError. After a query-language load the flags are `short:count_ql_<dataset>` and so on.
@@ -137,7 +138,12 @@ class FakeDatabase(Database):
     def load(self, dataset: Dataset) -> None:
         self._trace("load")
         benchmark = catalog.load_benchmark(dataset.name, self.store)
-        self._misbehave(self._flags(benchmark))
+        flags = self._flags(benchmark)
+        self._misbehave(flags)
+        if "slow" in flags:
+            time.sleep(0.2)
+        if "slower" in flags:
+            time.sleep(2.0)
         for mib in self._values("memory", benchmark):
             self.ballast.append(b"\x01" * (int(mib) << 20))
         for size in self._values("disk", benchmark):

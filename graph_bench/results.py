@@ -1,6 +1,8 @@
 """results.json: one entry per benchmark result, one resource record per measured load, and the run's metadata.
 
-Schema 2 added `resources` and `machine.memory_bytes`; a schema 1 document still reads (no resources).
+Schema 2 added `resources` and `machine.memory_bytes`; a schema 1 document still reads (no resources). Schema 3
+added `source` (`types.Source`) to every entry, Memory and Disk record and database info, and `sources`, the run
+behind each source (`Results.run`); an older document reads without a migration, every source `ci`.
 """
 
 import json
@@ -9,11 +11,11 @@ from pathlib import Path
 from typing import Any, Literal, NotRequired, TypedDict
 
 from graph_bench.databases.base import DatabaseInfo
-from graph_bench.types import AnswerVerdict, Category, Model, Status, Store, Timing
+from graph_bench.types import AnswerVerdict, Category, Model, Source, Status, Store, Timing
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 # The older schemas `from_dict` still reads.
-READABLE_VERSIONS = (1, 2)
+READABLE_VERSIONS = (1, 2, 3)
 
 Reference = Literal["python", "networkx"]
 
@@ -32,6 +34,17 @@ class Machine(TypedDict):
     os: str
     # Physical memory, `psutil.virtual_memory().total`; absent in schema 1.
     memory_bytes: NotRequired[int]
+
+
+class Run(TypedDict):
+    """The run behind one source of a results.json: when and where it ran, with which harness and selection."""
+
+    started_at: str
+    machine: Machine
+    graph_bench_commit: str
+    grafeo: GrafeoSource
+    selection: str
+    mode: str
 
 
 @dataclass
@@ -53,10 +66,13 @@ class Entry:
     timing: Timing | None = None
     preflight_ns: int | None = None
     load_ns: int | None = None
+    load_iterations: int | None = None
     answer: AnswerVerdict = "unchecked"
     reference: Reference | None = None
     answer_digest: str | None = None
     detail: str | None = None
+    # The run that measured it (`Results.run`); absent before schema 3, which reads as `ci`.
+    source: Source = "ci"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -101,6 +117,8 @@ class Resource:
     sample_interval_ms: float | None = None
     processes: int | None = None
     disk_bytes: int | None = None
+    # As `Entry.source`.
+    source: Source = "ci"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -112,7 +130,12 @@ class Resource:
 
 @dataclass(kw_only=True)
 class Results:
-    """The whole results.json document."""
+    """The whole results.json document.
+
+    The top-level `started_at`, `machine`, `graph_bench_commit`, `grafeo`, `selection` and `mode` are those of the
+    `ci` run. `sources` holds the run of each source when results of several are merged (`graph-bench merge
+    --local`), and is empty for a plain run.
+    """
 
     schema_version: int = SCHEMA_VERSION
     graph_bench_commit: str
@@ -124,6 +147,23 @@ class Results:
     databases: dict[str, DatabaseInfo]
     entries: list[Entry] = field(default_factory=list)
     resources: list[Resource] = field(default_factory=list)
+    sources: dict[str, Run] = field(default_factory=dict)
+
+    def run(self, source: str) -> Run:
+        """The run behind `source`: from `sources`; for `ci` without a record (a plain run, or an older document),
+        the document's own. Raises ValueError for another source without a record."""
+        if source in self.sources:
+            return self.sources[source]
+        if source != "ci":
+            raise ValueError(f"the results hold no record of the {source} run (`sources` has no {source!r})")
+        return {
+            "started_at": self.started_at,
+            "machine": self.machine,
+            "graph_bench_commit": self.graph_bench_commit,
+            "grafeo": self.grafeo,
+            "selection": self.selection,
+            "mode": self.mode,
+        }
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -137,6 +177,7 @@ class Results:
             "databases": {name: asdict(info) for name, info in self.databases.items()},
             "entries": [entry.to_dict() for entry in self.entries],
             "resources": [resource.to_dict() for resource in self.resources],
+            "sources": {name: dict(run) for name, run in self.sources.items()},
         }
 
     @classmethod
@@ -157,6 +198,7 @@ class Results:
             databases={name: DatabaseInfo(**info) for name, info in doc["databases"].items()},
             entries=[Entry.from_dict(e) for e in doc["entries"]],
             resources=[Resource.from_dict(r) for r in doc.get("resources", [])],
+            sources=doc.get("sources", {}),
         )
 
     def write(self, path: Path) -> None:

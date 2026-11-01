@@ -2,38 +2,61 @@
 
 It names no database other than Grafeo (user decision, 2026-10-30): it holds counts only, and never a combined
 score. It covers the single-threaded results at the largest scale present, plus the Startup row (whose scale is
-the empty database).
+the empty database). Grafeo is ranked only against the databases of its own source (`report.ranking`): with a
+local snapshot merged in, the header counts its databases, marked, and a footer line names its date and machine.
 """
 
 import statistics
 from dataclasses import dataclass
 
-from graph_bench.report.ranking import Ranked, is_load, rank, scale_key
-from graph_bench.results import Entry, Results
+from graph_bench.report.ranking import LOCAL_MARK, Ranked, is_load, local_databases, rank, scale_key
+from graph_bench.results import Entry, GrafeoSource, Machine, Results
+from graph_bench.runner import CASE_CEILING_S, LOAD_CEILING_S, RUN_DEADLINE_S, deadline_over, load_over
 from graph_bench.suites.catalog import STARTUP_SCALE
 from graph_bench.types import CATEGORY_NAMES, CATEGORY_ORDER, marker
 
 RESULTS_URL = "https://github.com/GrafeoDB/graph-bench#results"
-LEGEND = "⊘ not available · ✗ failing · ≠ wrong answer · ⏱ beyond 10x the top-3 average"
+# The generated overview page (`graph-bench report --format overview`): every version, source and run.
+OVERVIEW_URL = "https://github.com/GrafeoDB/graph-bench/blob/main/docs/results.md"
+# ⏱ covers the final budget rule and the run-time limits (FAIRNESS.md rules 8 and 9), and the cases CI's run
+# deadline left unstarted.
+LEGEND = (
+    "⊘ not available · ✗ failing · ≠ wrong answer · ⏱ beyond 10x the top-3 average, "
+    f"over {CASE_CEILING_S:g} s, {load_over(LOAD_CEILING_S)} or not started by the {deadline_over(RUN_DEADLINE_S)}"
+)
 GRAFEO = "grafeo"
 
 
-def grafeo_label(results: Results) -> str:
+def grafeo_text(grafeo: GrafeoSource) -> str:
     """`Grafeo <version> (<sha[:7]>)`, with `-dirty` kept and the install source in place of a missing sha.
 
     The grafeo commit (`git_sha`) is preferred over a wheel's file SHA-256, which names no commit.
     """
-    version = results.grafeo.get("version") or "unknown"
-    sha = results.grafeo.get("git_sha") or results.grafeo.get("sha")
+    version = grafeo.get("version") or "unknown"
+    sha = grafeo.get("git_sha") or grafeo.get("sha")
     if not sha:
-        return f"Grafeo {version} ({results.grafeo.get('source', 'unknown')})"
+        return f"Grafeo {version} ({grafeo.get('source', 'unknown')})"
     dirty = "-dirty" if sha.endswith("-dirty") else ""
     return f"Grafeo {version} ({sha[:7]}{dirty})"
 
 
-def machine_label(results: Results) -> str:
-    m = results.machine
+def grafeo_label(results: Results) -> str:
+    """`grafeo_text` of the CI run's Grafeo."""
+    return grafeo_text(results.grafeo)
+
+
+def machine_text(m: Machine) -> str:
     return f"{m['cpu']}, {m['cores']} cores, {m['os']}"
+
+
+def machine_label(results: Results) -> str:
+    return machine_text(results.machine)
+
+
+def local_run_label(results: Results) -> str:
+    """`<date> on <machine>` of the local snapshot's run."""
+    run = results.run("local")
+    return f"{run['started_at'][:10]} on {machine_text(run['machine'])}"
 
 
 def _agreed(entry: Entry) -> bool:
@@ -93,7 +116,7 @@ def summary_data(results: Results) -> SummaryData:
         if not any(e.category == category for e in grafeo_entries):
             continue
         in_row: list[Ranked] = [r for r in ranked if r.category == category]
-        dbs = {db for r in in_row for db, _ in r.order}
+        dbs = {db for r in in_row for db in r.peers(GRAFEO)}  # Grafeo's own source only
         positions = [p for r in in_row if (p := r.position(GRAFEO)) is not None]
         fastest = sum(1 for p in positions if p == 1)
         agreed = sum(1 for e in grafeo_entries if e.category == category and _agreed(e))
@@ -105,10 +128,13 @@ def render_summary(results: Results, *, results_url: str = RESULTS_URL) -> str:
     """The summary block, between `<!-- graph-bench:start -->` and `<!-- graph-bench:end -->`."""
     data = summary_data(results)
     rows = [f"| {r.category} | {r.databases} | {r.fastest} / {r.agreed} | {r.median_rank} |" for r in data.rows]
+    local = local_databases(results)
+    count = f"{len(results.databases)} embedded databases"
+    if local:
+        count += f" ({len(local)}{LOCAL_MARK} from a local snapshot)"
     lines = [
         "<!-- graph-bench:start -->",
-        f"**graph-bench** · {grafeo_label(results)} · {machine_label(results)} · {results.started_at[:10]}"
-        f" · {len(results.databases)} embedded databases",
+        f"**graph-bench** · {grafeo_label(results)} · {machine_label(results)} · {results.started_at[:10]} · {count}",
         "",
         "| Category | DBs | Grafeo fastest | Grafeo median rank |",
         "|---|---|---|---|",
@@ -119,7 +145,15 @@ def render_summary(results: Results, *, results_url: str = RESULTS_URL) -> str:
     footer += [f"Grafeo: {m} on {benchmark}" for benchmark, m in data.marked]
     if data.marked:
         footer.append(LEGEND)
+    if local:
+        run = results.run("local")
+        footer.append(
+            f"{LOCAL_MARK} {len(local)} of the {len(results.databases)} databases come from a local snapshot"
+            f" ({run['started_at'][:10]}, {machine_text(run['machine'])}): Grafeo is ranked only against the"
+            " databases measured with it."
+        )
     footer.append(f"Full results, with every database named: {results_url}")
+    footer.append(f"Every database's version, source and run: {OVERVIEW_URL}")
     for line in footer:
         lines += ["", line]
     lines.append("<!-- graph-bench:end -->")

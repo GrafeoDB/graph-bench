@@ -3,11 +3,21 @@
 # Daily (and on demand) the `detect` job reads the newest stable grafeo version on PyPI and compares it with the
 # last one posted, kept in the file grafeo-version.txt on the branch bot/state (committed with the job's
 # GITHUB_TOKEN; not actions/cache, which evicts, and not repository variables, which GITHUB_TOKEN cannot write).
-# When it is new, the `post` job runs the full selection on the Graviton runner, exactly like bench.yml's README job
-# (the shared composite action .github/actions/prepare), posts the result through the webhook in the secret
-# DISCORD_BENCH_WEBHOOK, and only then records the version. It is its own workflow, not a job of bench.yml, because
-# its trigger (a new release) and its permissions (writing bot/state) differ from the push and README jobs, and a
-# release run must not wait on bench.yml's queue.
+# When it is new, the `post` job runs the full selection on the Graviton runner, exactly like bench.yml's README
+# legs (the shared composite action .github/actions/prepare): one leg per database of the CI roster
+# (catalog.CI_DATABASES, Grafeo last), one at a time, each on a fresh box because the runner dies about 60 minutes
+# after boot. Every leg installs exactly the grafeo version `detect` resolved. Each leg stops starting cases at the
+# run deadline (`graph-bench ci-settings`, counted from the job's first step), passes the results of the legs before
+# it in the roster as `--yardstick` (`graph-bench ci-yardsticks`) and uploads `results-release-<db>` (overwriting,
+# so a re-run leg can upload again). The `post-results` job on ubuntu-latest then merges them (`graph-bench merge`;
+# a leg without results shows as "no results", failed), posts the result through the webhook in the secret
+# DISCORD_BENCH_WEBHOOK, and only then records the version. When Grafeo itself has no results (its leg left none, or
+# Grafeo did not start), it posts nothing and records nothing, with a warning, so the next daily run benchmarks the
+# release again. It is its own workflow, not a job of bench.yml, because its trigger (a new release) and its
+# permissions (writing bot/state) differ from the push and README jobs. It shares bench.yml's workflow-level
+# concurrency group, so its macro-runner legs never run beside bench.yml's; a release run waits for a running
+# bench.yml run, and a newer queued run of either replaces it while it is pending (the version is then not recorded,
+# so the next day's run posts it).
 #
 # Without the secret the run goes on to the results artifact but skips the post and the state update (the log
 # says so), so the version is posted once the secret exists. The webhook URL is never written anywhere.
@@ -26,8 +36,12 @@ on:
 permissions:
   contents: read
 
+# One macro-runner job at a time, across this workflow and bench.yml: two at once lost their runners (2026-10-31).
+# The group is on the workflow, not on the jobs: a concurrency group keeps one pending job and cancels older pending
+# ones, so matrix legs in a job-level group would cancel each other. Inside a run, `max-parallel: 1` runs the legs
+# one at a time and `needs` chains the jobs.
 concurrency:
-  group: release-post
+  group: macro-runner
   cancel-in-progress: false
 
 jobs:
@@ -103,21 +117,88 @@ jobs:
           echo "run=$run" >> "$GITHUB_OUTPUT"
 
   post:
-    name: Benchmark and post (full selection)
+    name: Benchmark (full selection, ${{ matrix.db }})
     needs: detect
     if: needs.detect.outputs.run == 'true'
-    # Same runner as bench.yml's README job.
+    # Same runner as bench.yml's README legs.
     runs-on: codspeed-macro-arm64-graviton-ubuntu-22-04
-    # One macro-runner job at a time across workflows: two at once lost their runners (2026-10-31).
-    concurrency:
-      group: macro-runner
-      cancel-in-progress: false
+    # The macro runner dies about 60 minutes after boot, with no log (Task T, 2026-10-31): GitHub cancels the job
+    # at 55 minutes instead, so the log of an overlong run is kept.
+    timeout-minutes: 55
+    strategy:
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        # catalog.CI_DATABASES, in its order (tests/test_workflows.py checks it). GitHub starts the legs in matrix
+        # order in practice but does not document it, and a re-run leg finds the later legs' artifacts too, so a
+        # leg takes as yardsticks only the legs before it in the roster (`graph-bench ci-yardsticks`).
+        db: [neug, ladybug, turingdb, oxigraph, duckdb, grafeo]
+    permissions:
+      contents: write  # the heartbeat pushes bot/heartbeat
+    steps:
+      - name: Job start
+        id: start
+        run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/prepare
+        with:
+          selection: full
+          # Every leg measures the release `detect` found, even if a newer one appears during the run.
+          grafeo-version: ${{ needs.detect.outputs.version }}
+      - name: Run settings
+        id: ci
+        run: uv run --no-sync graph-bench ci-settings >> "$GITHUB_OUTPUT"
+      # The results of this run's legs so far; `ci-yardsticks` keeps those before this one in the roster.
+      - uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          pattern: results-release-*
+          path: yardstick
+      - name: Yardstick arguments
+        id: yardstick
+        run: |
+          args=$(uv run --no-sync graph-bench ci-yardsticks --db ${{ matrix.db }} yardstick)
+          echo "yardsticks: ${args:-none}"
+          echo "args=$args" >> "$GITHUB_OUTPUT"
+      # The run deadline counts from the job's first step; 0 when setup took all of it (every case is then
+      # ⏱ "run deadline" and results.json is still written).
+      - name: Time left before the run deadline
+        id: deadline
+        run: |
+          left=$(( ${{ steps.ci.outputs.deadline_s }} - ($(date +%s) - ${{ steps.start.outputs.epoch }}) ))
+          if [ "$left" -lt 0 ]; then left=0; fi
+          echo "${left} s of the ${{ steps.ci.outputs.deadline_s }} s run deadline left"
+          echo "seconds=$left" >> "$GITHUB_OUTPUT"
+      - name: Run the benchmarks
+        # GitHub keeps no log of a lost runner (one died 68 minutes into this run on 2026-10-31), so a heartbeat
+        # pushes the run's state to the branch bot/heartbeat every minute (.github/scripts/heartbeat.sh).
+        run: |
+          set -o pipefail  # the bench's exit status, not tee's
+          bash .github/scripts/heartbeat.sh out "$RUNNER_TEMP/bench.log" &
+          heartbeat=$!
+          trap 'kill "$heartbeat" 2>/dev/null || true' EXIT
+          uv run --no-sync graph-bench bench --selection full --db ${{ matrix.db }} --deadline-s ${{ steps.deadline.outputs.seconds }} --deadline-total-s ${{ steps.ci.outputs.deadline_s }} ${{ steps.yardstick.outputs.args }} --out out 2>&1 | tee "$RUNNER_TEMP/bench.log"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: results-release-${{ matrix.db }}
+          path: out/results.json
+          if-no-files-found: warn
+          overwrite: true
+
+  post-results:
+    name: Merge and post
+    needs: [detect, post]
+    # After every leg, whatever its outcome, unless the run was cancelled (a cancelled run posts and records
+    # nothing) or the legs were skipped: a database whose leg left no results is posted as failed.
+    if: ${{ !cancelled() && needs.post.result != 'skipped' && needs.detect.outputs.run == 'true' }}
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v7
       # The state branch gets its own checkout (path state, with the job token configured for that clone), so the
-      # push at the end does not depend on credentials of another work tree. Checked out before the benchmark so a
+      # push at the end does not depend on credentials of another work tree. Checked out before the merge so a
       # problem shows before anything is posted. On the very first run the branch does not exist yet.
       - name: Does bot/state exist?
         id: state
@@ -145,26 +226,45 @@ jobs:
         run: |
           git checkout --orphan bot/state
           git rm -rf --quiet .
-      - uses: ./.github/actions/prepare
+      - uses: astral-sh/setup-uv@v10.3.3
         with:
-          selection: full
-      - name: Run the benchmarks
-        # GitHub keeps no log of a lost runner (one died 68 minutes into this run on 2026-10-31), so a heartbeat
-        # pushes the run's state to the branch bot/heartbeat every minute (.github/scripts/heartbeat.sh).
+          python-version: "3.13"
+      - run: uv sync --frozen
+      - name: Run settings
+        id: ci
+        run: uv run --no-sync graph-bench ci-settings >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          pattern: results-release-*
+          path: legs
+      - name: Merge the results
         run: |
-          set -o pipefail  # the bench's exit status, not tee's
-          bash .github/scripts/heartbeat.sh out "$RUNNER_TEMP/bench.log" &
-          heartbeat=$!
-          trap 'kill "$heartbeat" 2>/dev/null || true' EXIT
-          uv run --no-sync graph-bench bench --selection full --out out 2>&1 | tee "$RUNNER_TEMP/bench.log"
+          set -- legs/*/results.json
+          if [ ! -f "$1" ]; then
+            echo "::error title=No results::no leg of this run left a results.json; nothing is posted"
+            exit 1
+          fi
+          uv run --no-sync graph-bench merge --out merged --db "${{ steps.ci.outputs.databases }}" "$@"
       - uses: actions/upload-artifact@v7
-        if: always()
         with:
           name: results-release
-          path: out/results.json
+          path: merged/results.json
           if-no-files-found: warn
+          overwrite: true
+      # A post without Grafeo's results would record the version with none of its numbers, so that release would
+      # never be posted with them: skip the post and the record, and the next daily run benchmarks it again.
+      - name: Did Grafeo run?
+        id: grafeo
+        run: |
+          if python3 -c "import json, sys; sys.exit('grafeo' not in json.load(open('merged/results.json'))['databases'])"; then
+            echo "ran=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ran=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=No Grafeo results::the grafeo leg left no results or Grafeo did not start; not posting and not recording the version, so the next daily run tries again"
+          fi
       - name: Post to Discord
-        if: needs.detect.outputs.webhook == 'true'
+        if: needs.detect.outputs.webhook == 'true' && steps.grafeo.outputs.ran == 'true'
         env:
           DISCORD_BENCH_WEBHOOK: ${{ secrets.DISCORD_BENCH_WEBHOOK }}
         run: |
@@ -172,7 +272,9 @@ jobs:
           # instead of repeating them. After the last attempt the job fails and nothing is recorded; the next
           # run benchmarks again and posts a complete new set.
           attempt=1
-          until uv run --no-sync graph-bench notify --in out/results.json --webhook-env DISCORD_BENCH_WEBHOOK             --progress notify-progress.txt             --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"; do
+          until uv run --no-sync graph-bench notify --in merged/results.json --webhook-env DISCORD_BENCH_WEBHOOK \
+              --progress notify-progress.txt \
+              --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"; do
             if [ "$attempt" -ge 3 ]; then
               echo "::error title=Discord post failed::gave up after $attempt attempts; $(cat notify-progress.txt 2>/dev/null || echo 0) messages went out"
               exit 1
@@ -181,11 +283,11 @@ jobs:
             sleep 30
           done
       - name: Record the posted version on bot/state
-        if: needs.detect.outputs.webhook == 'true'
+        if: needs.detect.outputs.webhook == 'true' && steps.grafeo.outputs.ran == 'true'
         working-directory: state
         run: |
-          # The version that was benchmarked (results.json), which can be newer than the detected one.
-          version=$(python3 -c "import json; print(json.load(open('../out/results.json'))['grafeo']['version'])")
+          # The version that was benchmarked (results.json): the detected one, which every leg installed.
+          version=$(python3 -c "import json; print(json.load(open('../merged/results.json'))['grafeo']['version'])")
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           echo "$version" > grafeo-version.txt

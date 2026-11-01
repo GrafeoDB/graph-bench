@@ -20,7 +20,9 @@ benchmark moves to `legacy/` untouched and is deleted once the new comparison re
   SQL/PGQ model; a load a database's models do not reach is ⊘. Grafeo runs all three models.
 - **Grafeo build provenance**: `setup --grafeo <wheel> --grafeo-sha <commit>` records the grafeo commit a wheel was
   built from as `git_sha` in `results.json`, beside the wheel's SHA-256; a checkout records its own commit. The
-  summary label shows the commit.
+  summary label shows the commit. The record counts only while the installed grafeo is that build (its
+  `direct_url.json`, when present, names the recorded wheel); a wheel installed over it is reported by its local
+  path or URL.
 - **One process per database**: `graph-bench bench` runs one worker process per database, one after another, and
   writes `results.json` (schema in the design spec) with the machine, the Grafeo build and each database's
   version, process kind, storage and thread setting.
@@ -31,8 +33,8 @@ benchmark moves to `legacy/` untouched and is deleted once the new comparison re
   all results at the end, so the run order never decides a marker from this final rule. During the run a
   runaway guard cuts a preflight's database call (cold first run, harness work excluded) off at 30x the average
   of the 3 fastest earlier preflights and never below 10 s, once 3 earlier results exist; this guard depends on which databases ran
-  earlier. Before that a hard cap applies (`--case-timeout`, default 600 s of worker silence). Startup and both
-  load rows are exempt from the budget.
+  earlier. Before that only the run-time limits below and the silence limit apply (`--case-timeout`, default
+  120 s of worker silence). Startup and both load rows are exempt from the budget.
 - **Load count check**: right after each timed load, outside the clock, the adapter's optional `counts()` counts
   the nodes and edges loaded through the database's own query interface; a mismatch with the dataset's counts
   (recorded in schema.json when the CSVs are written) makes the load ≠. Grafeo and LadybugDB count with Cypher.
@@ -94,9 +96,56 @@ benchmark moves to `legacy/` untouched and is deleted once the new comparison re
   adopted when it exits.
 - **Known disagreements**: `docs/known-disagreements.md` records wrong answers, slow cases and engine findings as
   they are, instead of working around them in the adapters.
+- **One macro-runner job per roster database**: bench.yml's `codspeed` and `readme` jobs and release.yml's `post` job
+  are matrices over `catalog.CI_DATABASES` (NeuG, LadybugDB, TuringDB, Oxigraph, DuckDB + DuckPGQ, Grafeo), one leg at
+  a time (`max-parallel: 1`, `fail-fast: false`, 55-minute timeout), each on a fresh box. Each leg passes what is left
+  of the run deadline (`graph-bench ci-settings`, counted from the job's first step, never below 0) as `--deadline-s`
+  and the results of the legs before it in the roster as `--yardstick` (picked by the new `graph-bench ci-yardsticks`,
+  so a re-run or out-of-order leg never takes a later one), a new option of `bench` and `codspeed` whose correct
+  entries set the in-run budgets as earlier databases of the same run would. A bench worker gets the deadline too
+  (`--deadline-at`) and starts no case or load past it; `--deadline-total-s`, the whole 48 minutes, is the figure the
+  ⏱ message names ("run deadline: 48 min"). Every leg installs one grafeo version, resolved once per run
+  (bench.yml's `resolve` job, release.yml's `detect`; the prepare action's new `grafeo-version` input).
+  `codspeed-results`, `readme-results` and `post-results` on ubuntu-latest merge the legs, unless the run was
+  cancelled or the legs were skipped, with the new `graph-bench merge` (inputs must agree on selection, mode,
+  graph-bench commit and Grafeo; the 10x rule applies once over the merged CI entries; a leg without results shows as
+  ✗ "no results"), then upload the merged results, open the README pull request or post to Discord as before. A
+  release run whose merged results hold no Grafeo posts and records nothing, with a warning. Every upload overwrites,
+  so a re-run job can upload again. The `macro-runner` concurrency group moves to workflow level on both workflows
+  (replacing release.yml's `release-post`), since a job-level group would let matrix legs cancel each other.
+- **Local snapshot of all ten** (FAIRNESS.md, "The CI roster and the local snapshot"): `results/local/results.json`,
+  written by `.github/scripts/local-bench.sh` (the full selection over every database in one `ubuntu:24.04` container on
+  the dev box) and committed. `graph-bench merge --local FILE` adds its databases outside the CI roster.
+  results.json schema 3 tags every entry, Memory and Disk record and database info with its `source` (`ci` or `local`)
+  and records each source's run (date, machine, commit, Grafeo) in `sources`; an older document reads as `ci`. The 10x
+  rule and every rank (README bold, the summary block's counts) stay within one source. The README puts the CI columns
+  first and the local ones after, marked `†` with a footnote naming the snapshot's date and machine; the summary block
+  counts them, marked, and both link the new overview page. `graph-bench report --format overview --write
+  docs/results.md` writes that page: every database's version, source, machine and run date, then every per-case table.
+  `graph-bench local-check --local FILE` lists the snapshot's databases outside the roster whose newest stable release
+  on PyPI (Neo4j: its pin) differs from the version it measured. bench.yml's `readme-results` merges the snapshot when
+  it is committed, writes `docs/results.md` into the pull request and raises a notice from `local-check`. The merge jobs
+  download the legs into `legs/`, since `results/*/results.json` would match the snapshot.
+- **Run-time limits** (FAIRNESS.md rule 9), the same for every database at any position in the run order, so a
+  run fits in the CodSpeed macro runner's hour: every case stops 60 s after it starts (with at least 3 timed runs
+  it keeps its timing, else ⏱ "too slow: over 60 s"; the supervisor kills a single call still running 5 s past
+  the ceiling); the load ceiling applies per Load row (one dataset in one store): a load still running 5 minutes
+  after it starts is stopped, ⏱ "load over 5 min", together with the cases that read that load, the dataset's
+  Load (query language) row and the load's Memory and Disk record; and a case starts no further timed run
+  once its timed runs total 5 s and at least 3 ran (loads: 1). The recorded run count is what ran. In
+  `graph-bench codspeed` the box goes to pytest-codspeed's `--codspeed-max-time`, with `--codspeed-max-rounds` at
+  the selection's iterations so that fast cases keep their run count there too. The macro-runner jobs
+  (bench.yml `codspeed` and `readme`, release.yml `post`) get `timeout-minutes: 55`. Only these rules stop a
+  case: FalkorDB's client runs without its 5 s socket timeout (`socket_timeout=None`), and Grafeo without its
+  30 s query timeout (`query_timeout=None`, grafeo 0.6.1 and later); the other databases have no default timeout
+  below the ceiling.
 
 ### Changed
 
+- **Selections and silence limit**: `full` runs the medium scale only (push keeps small, under CodSpeed on every
+  push); its warm-up, iteration and binding counts stay. The silence limit (`--case-timeout`) drops from 600 to
+  120 s. A startup child keeps its own 120 s limit, no longer half the silence limit; the supervisor waits past
+  it during the Startup row.
 - **Fairness rules**: FAIRNESS.md is rewritten for the embedded comparison: one process per database,
   single-threaded runs (all-cores runs return with grafeo 0.6.4), in-memory storage where supported, each
   database's fastest documented bulk load, its vendor-recommended API, checked answers and the budget rule.

@@ -1,5 +1,6 @@
 """The pytest-codspeed entry point (`benches/`) and the `codspeed` command."""
 
+import dataclasses
 import json
 import os
 import subprocess
@@ -475,6 +476,12 @@ def test_pytest_argv_budgets_and_deselect() -> None:
     assert after("--case-timeout") == "7.0"
     assert after("--gb-out") == "o.jsonl"
     assert after("--threads") == "1"
+    # Task T: the same 5 s time box through pytest-codspeed's documented `--codspeed-max-time`, capped at the
+    # selection's iterations by `--codspeed-max-rounds` (else a fast case fills the whole 5 s), and the ceilings.
+    assert after("--codspeed-max-time") == "5.0"
+    assert after("--codspeed-max-rounds") == str(catalog.selection("push").iterations)
+    assert after("--gb-case-ceiling") == "60.0"
+    assert after("--gb-load-ceiling") == "300.0"
 
 
 def test_codspeed_rejects_unknown_db_before_install(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -686,3 +693,48 @@ def test_codspeed_startup_series_stops_at_the_first_failing_child(
     entry = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()][-1]
     assert (entry["status"], entry["error"], entry["timing"]) == ("failed", "RuntimeError: soft crash", None)
     assert entry["preflight_ns"] > 0
+
+
+def test_codspeed_case_and_load_ceilings(push_data_dir: Path, tmp_path: Path) -> None:
+    """In pytest: a case past its ceiling after the preflight is ⏱ "too slow: over ..." and never reaches
+    `benchmark`; a load past the load ceiling is ⏱ "load over ...", and so are its dataset's cases and its Load
+    (query language) test, none of them run. The other dataset runs as usual.
+
+    `slow:snb_is2` sleeps 0.2 s per call and snb_is2 has 10 bindings, so its preflight alone takes 2 s, past the
+    1 s ceiling: the case is over its ceiling before any benchmark call, whatever the prediction."""
+    out = tmp_path / "ceilings.jsonl"
+    env = {**_env(push_data_dir, "slow:snb_is2,slow:load_graphalytics"), "GRAPH_BENCH_SPY": str(tmp_path / "spy.txt")}
+    args = ["--db", "fake", "--selection", "push", "-p", "tests.benchmark_spy", "--gb-out", str(out)]
+    args += ["--gb-case-ceiling", "1.0", "--gb-load-ceiling", "0.1", "-k", "snb_is or graphalytics"]
+    proc = _pytest(args, env)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    lines = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
+    entries = {line["id"]: line for line in lines if line["kind"] == "entry"}
+    slow = entries[_id("snb_is2")]
+    assert (slow["status"], slow["error"], slow["answer"]) == ("timeout", "too slow: over 1 s", "agree")
+    assert slow["preflight_ns"] > 1e9  # the preflight itself ran past the ceiling
+    spied = set((tmp_path / "spy.txt").read_text(encoding="utf-8").splitlines())
+    assert _id("snb_is2") not in spied and _id("snb_is1") in spied
+    load_id = catalog.load_id("graphalytics", "fake", "small", 1)
+    assert (entries[load_id]["status"], entries[load_id]["error"]) == ("timeout", "load over 0.1 s")
+    for item in catalog.ITEMS:
+        if item.dataset == "graphalytics" and _id(item.id) in entries:
+            line = entries[_id(item.id)]
+            assert (line["status"], line["error"]) == ("timeout", "load over 0.1 s"), item.id
+            assert _id(item.id) not in spied
+
+
+def test_pytest_argv_passes_the_deadline() -> None:
+    request = supervisor.LaunchRequest("fake", "push", 1, Path("w"), Path("o.jsonl"), 5.0, [], {}, deadline_at=123.5)
+    argv = supervisor.pytest_argv(request)
+    assert argv[argv.index("--gb-deadline-at") + 1] == "123.5"
+    assert "--gb-deadline-at" not in supervisor.pytest_argv(dataclasses.replace(request, deadline_at=None))
+
+
+def test_codspeed_session_past_the_deadline_skips_every_test(push_data_dir: Path, tmp_path: Path) -> None:
+    out = tmp_path / "gb.jsonl"
+    args = ["--db", "fake", "--selection", "push", "--gb-out", str(out), "--gb-deadline-at", "1.0"]
+    args += ["-k", "test_snb_is2 or test_snb_is3"]
+    proc = _pytest(args, _env(push_data_dir))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "entry" not in out.read_text(encoding="utf-8")  # no case, load or startup row started

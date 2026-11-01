@@ -4,6 +4,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+from graph_bench import databases
 from graph_bench.cli import app
 from graph_bench.suites import GRAPH_MODELS, Write, catalog, scans, snb_rdf, snb_sql
 from graph_bench.suites.catalog import Case, cases
@@ -30,6 +31,19 @@ def test_full_selection_single_threaded() -> None:
     result = cases("full", ["grafeo", "ladybug"])
     assert result
     assert all(c.threads == 1 for c in result)
+
+
+def test_full_selection_is_medium_only() -> None:
+    """Task T: `full` runs the medium scale only (push keeps small, under CodSpeed on every commit); its warm-up,
+    iteration and binding counts stay, and the time box bounds the rest."""
+    full = catalog.selection("full")
+    assert full.scales == ("medium",)
+    assert (full.warmup, full.iterations, full.load_iterations, full.bindings) == (2, 10, 3, 20)
+    result = cases("full", ["grafeo"])
+    assert result
+    assert {c.scale for c in result} == {"medium"}
+    assert {lid.rsplit("[", 1)[1] for lid in catalog.load_ids("full", ["grafeo"])} == {"grafeo-medium]"}
+    assert catalog.selection("push").scales == ("small",)
 
 
 def test_bench_id_format() -> None:
@@ -324,3 +338,9 @@ def test_write_reference_holds_ready_only_when_defined(tmp_path: Path) -> None:
     assert catalog.load_write_ready(path) == [[["a"]]]
     assert catalog.load_write_reference(path) == ([{}], [[]], [[]])
     assert not _WRITE.ready
+
+
+def test_ci_roster_is_built_in_with_grafeo_last() -> None:
+    assert catalog.CI_DATABASES == ("neug", "ladybug", "turingdb", "oxigraph", "duckdb", "grafeo")
+    assert set(catalog.CI_DATABASES) <= set(databases.REGISTRY)
+    assert catalog.CI_DATABASES[-1] == "grafeo"

@@ -15,13 +15,15 @@ the database's `process_env` (e.g. `RAYON_NUM_THREADS=1` for Grafeo) yourself, e
 `RAYON_NUM_THREADS=1 python -m pytest benches --codspeed -o addopts= --db grafeo`.
 """
 
+import time
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from benches._cases import Bench, LoadCase, LoadQlCase, StartupCase, case_key
-from graph_bench.runner.worker import DEFAULT_CASE_TIMEOUT_S, parse_budget
+from graph_bench.runner import CASE_CEILING_S, DEFAULT_CASE_TIMEOUT_S, LOAD_CEILING_S, STARTUP_CHILD_TIMEOUT_S
+from graph_bench.runner.worker import parse_budget
 from graph_bench.suites import Write, catalog
 from graph_bench.suites.catalog import Case
 
@@ -52,6 +54,41 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         metavar="SECONDS",
         help="Preflight budget of a case without --gb-budget.",
     )
+    group.addoption(
+        "--gb-case-ceiling",
+        type=float,
+        default=CASE_CEILING_S,
+        metavar="SECONDS",
+        help="Wall time of a case from its start line.",
+    )
+    group.addoption(
+        "--gb-load-ceiling",
+        type=float,
+        default=LOAD_CEILING_S,
+        metavar="SECONDS",
+        help="Wall time of a load from its start; a load past it takes its dataset's cases with it.",
+    )
+    group.addoption(
+        "--gb-startup-timeout",
+        type=float,
+        default=STARTUP_CHILD_TIMEOUT_S,
+        metavar="SECONDS",
+        help="How long a startup child may take to answer before it is killed.",
+    )
+    group.addoption(
+        "--gb-deadline-at",
+        type=float,
+        default=None,
+        metavar="EPOCH",
+        help="Wall-clock time (time.time()) after which no case, load or startup row starts; the rest is skipped.",
+    )
+
+
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    """Past the run deadline start nothing: skip the test (the supervisor marks its id timeout "run deadline")."""
+    deadline = item.config.getoption("--gb-deadline-at")
+    if deadline is not None and time.time() >= deadline:
+        pytest.skip("run deadline")
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -71,6 +108,9 @@ def pytest_configure(config: pytest.Config) -> None:
         Path(workdir) if workdir else None,
         dict(config.getoption("--gb-budget")),
         config.getoption("--case-timeout"),
+        config.getoption("--gb-case-ceiling"),
+        config.getoption("--gb-load-ceiling"),
+        config.getoption("--gb-startup-timeout"),
     )
 
 

@@ -74,7 +74,8 @@ CodSpeed records a benchmark as either measured or skipped. When a benchmark tha
 | ⊘ | not available: the database lacks the capability or the data model | `not_supported` | skipped, reason `not available: ...` | absent (never measured) |
 | ✗ | failing: error or crash | `failed` | failed, reason `error: ...` | Skipped ⏩ if measured before, else absent |
 | ≠ | wrong answer: fails the answer check | `ok` / `disagree` | failed, reason `wrong answer: ...` | Skipped ⏩ if measured before, else absent |
-| ⏱ | too slow: did not finish within 10x the average of the top 3 | `timeout` | failed, reason `too slow: ...` | Skipped ⏩ if measured before, else absent |
+| ⏱ | too slow: did not finish within 10x the average of the top 3, or over a limit of rule 9 ("too slow: over 60 s", "load over 5 min") | `timeout` | failed, reason `too slow: ...` | Skipped ⏩ if measured before, else absent |
+| ⏱ `run deadline: 48 min` | not started: CI's run deadline had passed before the case, load or startup row could start (an unsupported case stays ⊘) | `timeout` | skipped, reason `run deadline` | absent |
 
 One exception: a ⏱ that only the final rule assigns (applied after every database has run, see fairness rule 8) comes after CodSpeed has already measured the case. CodSpeed then shows that case as measured, while results.json and the matrix show ⏱. A ⏱ from the in-run cutoff is never measured.
 
@@ -94,9 +95,14 @@ These go into FAIRNESS.md, which is trimmed to embedded use.
 6. Queries return scalar values only (no node or edge objects) and order fully, with tie-breakers, whenever they use `LIMIT`.
 7. PageRank is compared at convergence (damping 0.85), with the LDBC relative epsilon of 0.0001.
 8. The time budget per benchmark is 10x the average median of the 3 fastest *other* databases with correct answers (the average over those available if fewer than 3; no budget when no other database has a correct result). This final rule, on medians, decides the ⏱ marker.
-   - **During a run, a runaway guard:** databases run one after another. Once at least 3 earlier databases have correct times, a later database's preflight, its first (cold) run, is cut off at 30x the average of their 3 fastest preflights, and never below 10 s: the supervisor kills the worker as soon as the preflight's database call runs past that budget and records ⏱ with "too slow: cut off at <b> s (30x the top-3 average of earlier databases, at least 10 s)". The floor exists because a cold first run (a JVM compiling a new query, a first plan) can take tens of milliseconds where the timed median is within budget; it was added after a full run in which Neo4j, run last, had most of its small-scale cases cut off at 30 to 260 ms although their medians were within the final rule. The window is the database call alone: the worker writes a `run` line immediately before the call and a `progress` line immediately after it, and the supervisor arms the cutoff on the first and disarms it on the second, so reference loading and the answer check never count. The cutoff only stops runaway cases early; because it measures cold first runs, it is set well above the final rule. It depends on which databases ran earlier, so a ⏱ from the cutoff can depend on the run order. Before 3 earlier results exist, only a hard cap applies (`--case-timeout`, default 600 s, measured as silence: the worker reports progress after every run).
+   - **During a run, a runaway guard:** databases run one after another. Once at least 3 earlier databases have correct times, a later database's preflight, its first (cold) run, is cut off at 30x the average of their 3 fastest preflights, and never below 10 s: the supervisor kills the worker as soon as the preflight's database call runs past that budget and records ⏱ with "too slow: cut off at <b> s (30x the top-3 average of earlier databases, at least 10 s)". The floor exists because a cold first run (a JVM compiling a new query, a first plan) can take tens of milliseconds where the timed median is within budget; it was added after a full run in which Neo4j, run last, had most of its small-scale cases cut off at 30 to 260 ms although their medians were within the final rule. The window is the database call alone: the worker writes a `run` line immediately before the call and a `progress` line immediately after it, and the supervisor arms the cutoff on the first and disarms it on the second, so reference loading and the answer check never count. The cutoff only stops runaway cases early; because it measures cold first runs, it is set well above the final rule. It depends on which databases ran earlier, so a ⏱ from the cutoff can depend on the run order. Before 3 earlier results exist, only the case ceiling (rule 9) and the silence limit apply (`--case-timeout`, default 120 s, measured as silence: the worker reports progress after every run); whichever of the cutoff and the ceiling comes first stops the case.
    - **After the run:** the 10x rule is applied over all results, each entry against the other databases. Any benchmark beyond its budget becomes ⏱. The run order never decides a ⏱ from this final rule (unlike the in-run cutoff above).
    - Startup and both load rows (Load, Load (query language)) are exempt from this rule, in the run and at the end. Loads are count-checked: right after each timed load, outside the clock, the worker calls the adapter's optional `counts()` (the number of nodes and edges loaded, counted through the database's own query interface, e.g. a Cypher count over all nodes and over all relationships) and compares it with the dataset's `node_count` and `edge_count` in schema.json. A mismatch gives the load answer `disagree` (≠) with a detail like "loaded 4177 nodes, 37000 edges; expected 4177 nodes, 37860 edges"; an adapter without `counts()` (it raises `NotSupported`) leaves the load `unchecked`; an error while counting makes the load entry `failed` (✗), while its cases still run on the loaded instance.
+9. **Run-time limits (user decision, 2026-10-31), the same for every database at any position in the run order.** The CodSpeed Graviton macro runner dies about 60 minutes after boot, so a run must fit in that; the constants live in `graph_bench/runner/__init__.py`.
+   - **Case ceiling, 60 s** from a case's start line, warm-ups, timed runs and answer checks included. The worker starts no warm-up or timed run once it is reached (nor one that, as long as the previous run, would end after the supervisor's kill); with at least 3 timed runs the timing stands over the runs done, with fewer the case is ⏱ "too slow: over 60 s". The supervisor kills a single call still running 5 s past the ceiling (it cannot be interrupted in-process) and relaunches the worker. The in-run budget of rule 8 stays; the effective cutoff is the smaller of the two.
+   - **Load ceiling, 5 min, per Load row** (one dataset in one store), for either Load row, the Memory and Disk record's load and an answer-only fixture's load: a load not finished 5 minutes after it started is stopped (the supervisor kills a load it cannot interrupt and relaunches the worker), ⏱ "load over 5 min", and so are every case of that dataset and store for that database and its Memory and Disk record, and for a graph-store load the dataset's Load (query language) row (that row exists only for the graph store), without being run.
+   - **Time box, 5 s:** in bench mode, after its warm-ups a case or load starts no further timed run once its timed runs total 5 s and at least 3 ran (loads: at least 1); the recorded `iterations` is what ran. In CodSpeed mode the same box goes to pytest-codspeed's documented `--codspeed-max-time` for query and algorithm cases, and a write gets as many `pedantic` rounds as the box holds at its preflight's duration. CodSpeed loads have no box: their `pedantic` rounds are fixed at the selection's load iterations.
+   - The silence limit (`--case-timeout`) is 120 s; GitHub cancels each macro-runner job at 55 minutes (`timeout-minutes`), so an overlong run keeps its log.
 
 ## Datasets
 
@@ -117,23 +123,29 @@ These go into FAIRNESS.md, which is trimmed to embedded use.
 | `graph-bench list --selection S` | stable, sorted plan: one benchmark id per line |
 | `graph-bench bench --selection S [--db a,b] [--grafeo PATH] --out DIR` | local and pre-release run: one worker process per database, writes `DIR/results.json` |
 | `graph-bench codspeed --selection S --out DIR` | CI entry point: one `pytest benches/ --codspeed --db X` process per database, keeps `CODSPEED_PROFILE_FOLDER`, then writes `DIR/results.json` (answers, no timings) |
-| `graph-bench report --format summary\|readme --in results.json` | summary block for grafeo's README / full section for graph-bench's README |
+| `graph-bench report --format summary\|readme\|overview --in results.json` | summary block for grafeo's README / full section for graph-bench's README / the overview page `docs/results.md` (every version, source, machine and run date, then every per-case table; `--write` writes the whole file) |
+| `graph-bench merge --out DIR [--db a,b] [--local FILE] IN...` | one results.json from CI's per-database results; `--local` adds the local snapshot's databases that are not in the inputs, tagged `local` |
+| `graph-bench local-check --local FILE` | prints the snapshot's databases outside the CI roster whose newest stable PyPI release (Neo4j: `pins.NEO4J_VERSION`) differs from the version it measured, one per line; a failed lookup is unknown; exits 0 |
 
 - Benchmark names: `benches/test_<category>.py::test_<benchmark>[<db>-<scale>]`, e.g. `benches/test_complex_queries.py::test_snb_is1[ladybug-small]`, `benches/test_load.py::test_load_<dataset>[<db>-<scale>]`, `benches/test_load_ql.py::test_load_ql_<dataset>[<db>-<scale>]` and `benches/test_startup.py::test_startup[<db>-empty]` (the Startup row's scale is `empty`). Names must be unique across processes.
 - Selections:
   - `push`: small scale, property-graph core categories, single-threaded.
-  - `full`: every category and scale, single-threaded. All-cores runs come back with grafeo 0.6.4.
+  - `full`: every category at medium scale only (2026-10-31: push keeps small under CodSpeed on every commit, so full fits the runner's hour), single-threaded. All-cores runs come back with grafeo 0.6.4.
 - Exit codes: 0 even when grafeo is slower or disagrees; non-zero only for harness errors.
 
 ### results.json
 
 Top level:
-- `schema_version` (2; a schema 1 file, without `resources` and `machine.memory_bytes`, still reads)
+- `schema_version` (3; a schema 1 or 2 file still reads: without `resources` and `machine.memory_bytes`, and
+  without `source`, which then reads as `ci`)
 - `graph_bench_commit`
 - `grafeo` `{version, source, sha}`
 - `machine` `{cpu, cores, os, memory_bytes}`
 - `selection`, `mode` (`bench` | `codspeed`), `started_at`
-- `databases` `{name: {version, process, storage, threads_configurable, threads_note, java}}`
+- `databases` `{name: {version, process, storage, threads_configurable, threads_note, java, source}}`
+- `sources` `{source: {started_at, machine, graph_bench_commit, grafeo, selection, mode}}`: the run behind each
+  source when a local snapshot is merged in (`merge --local`); empty for a plain run, whose top-level fields are
+  the `ci` run's
 
 `entries[]`, one per (category, benchmark, database, scale, threads):
 - `id`, `category`, `model` (`property_graph` | `sql_pgq` | `rdf`), `benchmark`, `database`, `scale`, `threads`
@@ -141,11 +153,14 @@ Top level:
 - `error`
 - `timing` `{median_ns, p99_ns, min_ns, iterations}` (null in codspeed mode)
 - `preflight_ns` (the untimed first run, wall-clocked; null when it did not complete)
-- `load_ns`
+- `load_ns` (a load's median) and `load_iterations` (how many loads it is the median of: fewer than the
+  selection's `load_iterations` when the time box stopped them)
 - `answer`: `agree` | `disagree` | `unchecked`
 - `reference`: `python` | `networkx`
 - `answer_digest`
 - `detail`
+- `source`: `ci` | `local` (the local snapshot's databases after `merge --local`); budgets and ranks never
+  compare two sources
 
 `resources[]`, one per (database, dataset, store, scale, threads), the Memory and Disk records (never in CodSpeed):
 - `id` (`resources::<load benchmark>[<db>-<scale>]`, e.g. `resources::load_snb_rdf[grafeo-small]`), `database`,
@@ -157,6 +172,7 @@ Top level:
   samples in that window), `sample_interval_ms` (nominal), `processes` (the largest process count seen during
   the load, not the count at the peak reading)
 - `disk_bytes` (the store's files after `close()`; null for an in-memory store)
+- `source`, as in `entries[]`
 
 The grafeo side annotates entries that match `database == "grafeo" and answer == "disagree"`.
 
@@ -181,6 +197,10 @@ grafeo's README never names other graph databases unless the user decides on tha
 - "DBs" counts the databases with at least one correct result in that row.
 - "Grafeo fastest" is `k / n`: n is the number of benchmarks where Grafeo's answer agreed, ⏱ included (a load counts when it completed and its count check did not disagree; an entry that failed after its answer agreed does not count), and k the number where Grafeo has the lowest median time.
 - "Median rank" is Grafeo's median position over those benchmarks.
+- Grafeo is ranked only against the databases of its own source. With a local snapshot merged in, the header
+  reads `<N> embedded databases (<k>† from a local snapshot)` and a footer line names the snapshot's date and
+  machine. A last footer line always links the overview page,
+  `https://github.com/GrafeoDB/graph-bench/blob/main/docs/results.md`.
 - When Grafeo itself has a marker, a line under the table names the benchmark and the marker, e.g. `Grafeo: ≠ on snb_ic6`, so Grafeo's own gaps are never hidden. The legend line `⊘ not available · ✗ failing · ≠ wrong answer · ⏱ beyond 10x the top-3 average` is added only when such a line exists.
 
 ## CI and publishing
@@ -190,7 +210,15 @@ grafeo's README never names other graph databases unless the user decides on tha
 - **Grafeo build:** the workflow measures the latest PyPI release of grafeo, like every other database; grafeo's own CodSpeed suite covers main. This is the user's choice (2026-10-31). `setup --grafeo <path>` stays a local option.
 - **Database versions:** before each benchmark run the workflow syncs the non-database extras from the lock, then installs each database package of the `embedded` extra on its own at its newest stable release (`graph-bench packages`, `.github/scripts/install-databases.sh`), without changing uv.lock. A package with no installable build for the runner is logged with the installer's reason and does not stop the job; its database then shows as failed ("not installed") for every case, since vendors fix their own platform gaps. FalkorDB is the one such gap on this runner: falkordblite 0.11.0 ships only `manylinux_2_38` wheels and the runner has glibc 2.35. Neo4j's Temurin JRE is pinned for linux x86_64, linux aarch64 and windows amd64. The test CI stays on the lock.
 - **Pins:** `pins.yml` checks weekly for a newer stable Neo4j Community release and a newer Temurin JRE of the Java major Neo4j requires, and opens a pull request on `bot/pins` that updates `graph_bench/databases/pins.py`.
-- **graph-bench README:** a scheduled `full` run regenerates its results section and opens a bot PR.
+- **graph-bench README:** a scheduled `full` run regenerates its results section and `docs/results.md` and opens
+  a bot PR.
+- **CI roster and local snapshot (user, 2026-10-31):** CI measures Grafeo against a fixed roster
+  (`catalog.CI_DATABASES`: NeuG, LadybugDB, TuringDB, Oxigraph, DuckDB + DuckPGQ). The other databases come from
+  `results/local/results.json`, a committed run of all ten in one Linux container on the dev box
+  (`.github/scripts/local-bench.sh`), refreshed by hand. The README job merges its non-roster databases in
+  (`merge --local`): the CI columns first, the local ones after, each marked `†` with a footnote naming the
+  snapshot's date and machine. Budgets and ranks stay within each source. `graph-bench local-check` raises a
+  notice in that job when the newest stable release of a non-roster database differs from the snapshot's version.
 - **grafeo README:** at each grafeo release (from 0.6.1), the pre-release checklist runs `setup --grafeo <wheel>`, `bench --selection full` and `report --format summary` locally, and commits the block on grafeo's release branch. No automation writes to grafeo.
 - **Workflow switch-on:** the grafeo-side workflow trigger is gone; the graph-bench workflow is enabled once the adapters and the answer check have settled.
 

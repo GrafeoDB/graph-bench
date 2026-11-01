@@ -17,22 +17,34 @@ the limit is at least `STARTUP_TIMEOUT_S`.
 
 Time budgets (spec rule 8): a case gets an in-run `--budget` only when at least 3 earlier databases have an
 ok/agree preflight for it: 30x the mean of their 3 fastest, a runaway guard on first (cold) runs. This cutoff
-depends on which databases ran earlier. The supervisor enforces it too: it arms the cutoff on the case's `run`
-line, which the worker writes immediately before the preflight's database call, and disarms it on the next line
-(the `progress` line right after the call). A worker silent for longer than the budget in that window is killed
-and the case becomes `timeout` ("too slow: cut off at ..."); harness work (reference loading, the answer check)
-is outside the window. At the end `apply_budget_rule` compares every entry with the other databases only, at
-10x on the final timings; that decides the marker, and that final rule does not depend on the run order. Startup and
-both load rows (`types.BUDGET_EXEMPT`) and the answer-only items (`catalog.answer_only`) have no budget, in the run or
-at the end, and are no yardstick.
+depends on which databases ran earlier; with `yardstick` (`--yardstick`: the results of CI's earlier
+per-database jobs on the same hardware) their entries count as earlier databases too. The supervisor enforces it
+too: it arms the cutoff on the case's `run` line, which the worker writes immediately before the preflight's
+database call, and disarms it on the next line (the `progress` line right after the call). A worker silent for
+longer than the budget in that window is killed and the case becomes `timeout` ("too slow: cut off at ...");
+harness work (reference loading, the answer check) is outside the window. At the end `apply_budget_rule`
+compares every entry with the other databases only, at 10x on the final timings; that decides the marker, and
+that final rule does not depend on the run order. Startup and both load rows (`types.BUDGET_EXEMPT`) and the
+answer-only items (`catalog.answer_only`) have no budget, in the run or at the end, and are no yardstick.
+
+Ceilings (Task T, `graph_bench.runner`): every case stops `CASE_CEILING_S` after its `start` line and every load
+`LOAD_CEILING_S` after its start, for every database at any position in the run order. The worker stops itself
+first (it gets both ceilings as `--case-ceiling` and `--load-ceiling`); the supervisor kills it only when a single
+call is still running `CEILING_GRACE_S` past a ceiling. A load's start is its `start` line (Load, Load (query
+language)) or the `load` line before an unreported load. A killed case is ⏱ "too slow: over 60 s"; a killed load
+is ⏱ "load over 5 min", and so is every not yet recorded case of its dataset and store and, for the graph store,
+its Load (query language) entry. Then a new worker starts, as after a hang. The in-run budget below still applies
+in the preflight; whichever cutoff comes first stops it.
 
 Resources (the Memory and Disk records, `Selection.resources`): after a database's worker (or pytest) process for
 one thread setting has finished, in both modes, the supervisor measures each load the database's models reach, one
 fresh child per (dataset, store, scale), sampling the child's process tree from here
 (`graph_bench.runner.resources.run_resource`). The child inherits the worker's environment and may stay silent for
 `case_timeout_s` (at least `STARTUP_TIMEOUT_S` before its first line), each load in its own directory under
-`<workdir>/<db>-<threads>-resources/`. The selection's other loads get ⊘ records, a database that is not
-installed ✗ records, and a harness error in this process a `failed` record ("resources harness: ...").
+`<workdir>/<db>-<threads>-resources/`; its load stops at the load ceiling too. The selection's other loads get ⊘
+records, a database that is not installed ✗ records, a load whose Load entry already went over the load ceiling a
+⏱ record ("load over 5 min", not run again), and a harness error in this process a `failed` record ("resources
+harness: ...").
 These go to results.json `resources`, never to CodSpeed.
 
 Resume rule: when a worker exits non-zero or is killed for silence, the last `start` id without an entry
@@ -55,6 +67,8 @@ import statistics
 import subprocess
 import sys
 import time
+import urllib.parse
+import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -67,10 +81,22 @@ from graph_bench.databases import model_support
 from graph_bench.databases.base import DatabaseInfo
 from graph_bench.datasets import cache
 from graph_bench.results import Entry, GrafeoSource, Machine, Reference, Resource, Results
-from graph_bench.runner import message
+from graph_bench.runner import (
+    CASE_CEILING_S,
+    CEILING_GRACE_S,
+    DEFAULT_CASE_TIMEOUT_S,
+    LOAD_CEILING_S,
+    SILENCE_MARGIN_S,
+    STARTUP_CHILD_TIMEOUT_S,
+    TIME_BOX_S,
+    deadline_over,
+    load_over,
+    message,
+    over_ceiling,
+)
 from graph_bench.runner.resources import run_resource, unmeasured
-from graph_bench.runner.startup import STARTUP_TIMEOUT_S
-from graph_bench.runner.worker import DEFAULT_CASE_TIMEOUT_S, reference_kind
+from graph_bench.runner.startup import STARTUP_TIMEOUT_S, kill_tree
+from graph_bench.runner.worker import reference_kind
 from graph_bench.suites import catalog
 from graph_bench.suites.catalog import Selection
 from graph_bench.suites.startup import primary_model
@@ -260,6 +286,44 @@ def _budgets(entries: Sequence[Entry], db: str, meta: dict[str, _Meta]) -> dict[
     return budgets
 
 
+def check_yardstick(doc: Results, selection: str, mode: str) -> None:
+    """Raise ValueError unless `doc`, a `--yardstick` results.json, is of `selection` and `mode`.
+
+    A yardstick's entries count as those of earlier databases of the run (`_budgets`), so they must measure the
+    same cases the same way: preflight times of another selection or mode would set a wrong budget.
+    """
+    for name, value, expected in (("selection", doc.selection, selection), ("mode", doc.mode, mode)):
+        if value != expected:
+            raise ValueError(f"its {name} is {value!r}, this run's is {expected!r}")
+
+
+def failed_database(sel: Selection, db: str, error: str) -> tuple[list[Entry], list[Resource]]:
+    """The entries and Memory and Disk records of a database that did not run, at every thread setting.
+
+    Every id it would run is `failed` with `error`, every id its models do not reach `not_supported`, as for a
+    database whose driver does not import; `graph-bench merge` records a database without results the same way.
+    """
+    entries: list[Entry] = []
+    resources: list[Resource] = []
+    for threads in sel.threads:
+        for bench_id, m in _expected(sel, db, threads).items():
+            if m.supported:
+                entries.append(m.entry(bench_id, status="failed", error=error))
+            else:
+                entries.append(m.entry(bench_id, status="not_supported", error=f"model {m.model} not supported"))
+        if not sel.resources:
+            continue
+        reached = set(catalog.load_keys(sel.name, model_support(db)))
+        for (dataset, store), model in catalog.all_load_keys(sel.name).items():
+            for scale in sel.scales:
+                if (dataset, store) in reached:
+                    resources.append(unmeasured(db, dataset, store, scale, threads, "failed", error))
+                else:
+                    unsupported = f"model {model} not supported"
+                    resources.append(unmeasured(db, dataset, store, scale, threads, "not_supported", unsupported))
+    return entries, resources
+
+
 def apply_budget_rule(results: Results) -> None:
     """Turn every ok/agree entry slower than 10x the mean of the 3 fastest other databases into `timeout`.
 
@@ -269,14 +333,18 @@ def apply_budget_rule(results: Results) -> None:
     (`catalog.answer_only`) are exempt, as entries and as yardsticks. The entry itself never counts, so the outcome
     does not depend on order. Speed is `timing.median_ns` in bench mode and `preflight_ns` in codspeed mode. The
     timing of a marked entry is kept.
+
+    Entries of different sources (`Entry.source`: the CI run and the local snapshot `graph-bench merge --local`
+    adds) are never compared: each source is its own benchmark, so a timing on one machine sets no budget for one
+    on another.
     """
-    groups: dict[tuple[str, str, int | None], list[tuple[Entry, float]]] = {}
+    groups: dict[tuple[str, str, int | None, str], list[tuple[Entry, float]]] = {}
     for e in results.entries:
         if e.status != "ok" or e.answer != "agree" or e.category in BUDGET_EXEMPT or catalog.answer_only(e.benchmark):
             continue  # exempt: no budget and no yardstick (as in the in-run `_budgets`)
         speed = (e.timing.median_ns if e.timing is not None else None) if results.mode == "bench" else e.preflight_ns
         if speed is not None:
-            groups.setdefault((e.benchmark, e.scale, e.threads), []).append((e, float(speed)))
+            groups.setdefault((e.benchmark, e.scale, e.threads, e.source), []).append((e, float(speed)))
     marked: list[tuple[Entry, float]] = []
     for members in groups.values():
         for i, (e, speed) in enumerate(members):
@@ -301,25 +369,60 @@ def graph_bench_commit() -> str:
     return proc.stdout.strip() or "unknown"
 
 
-def grafeo_source() -> GrafeoSource:
-    """The Grafeo under test: `.graph-bench/grafeo.json` (cwd-relative), else the installed wheel.
+def _installed_direct_url() -> dict[str, Any] | None:
+    """The installed grafeo's `direct_url.json` (PEP 610), or None for a registry install or no grafeo."""
+    try:
+        text = importlib.metadata.distribution("grafeo").read_text("direct_url.json")
+    except importlib.metadata.PackageNotFoundError:
+        return None
+    return json.loads(text) if text else None
 
-    The file counts only while its version is the installed one: after a later `uv sync` replaced the recorded
-    build it is stale, and the installed version is reported with source "pypi".
+
+def _url_path(url: str) -> Path | None:
+    """The local path of a `file:` url, else None."""
+    parsed = urllib.parse.urlparse(url)
+    return Path(urllib.request.url2pathname(parsed.path)) if parsed.scheme == "file" else None
+
+
+def _same_build(doc: dict[str, Any], direct: dict[str, Any]) -> bool:
+    """Whether the installed `direct_url.json` is the build `.graph-bench/grafeo.json` records: the same wheel file,
+    or, for a checkout, a wheel `graph-bench setup` built into `.graph-bench/wheels`."""
+    installed = _url_path(str(direct.get("url", "")))
+    if installed is None:
+        return False
+    source = Path(str(doc.get("source", "")))
+    if source.suffix == ".whl":
+        return os.path.normcase(os.path.abspath(installed)) == os.path.normcase(os.path.abspath(source))
+    built = os.path.normcase(os.path.abspath(GRAFEO_FILE.parent / "wheels"))
+    return os.path.normcase(os.path.abspath(installed.parent)) == built
+
+
+def grafeo_source() -> GrafeoSource:
+    """The Grafeo under test: `.graph-bench/grafeo.json` (cwd-relative), else the installed build.
+
+    The file counts only while it describes the installed build: its version is the installed one, and when the
+    installed grafeo has a `direct_url.json` that url is the wheel the file records (for a checkout, a wheel
+    `setup` built from it). Otherwise it is stale (a later `uv sync`, or a wheel installed directly) and the
+    installed build is reported: a direct-url install by its local path or url, a registry install as "pypi".
     """
     try:
         version: str | None = importlib.metadata.version("grafeo")
     except importlib.metadata.PackageNotFoundError:
         version = None
+    direct = _installed_direct_url()
     if GRAFEO_FILE.is_file():
         doc = json.loads(GRAFEO_FILE.read_text(encoding="utf-8"))
-        if doc.get("version") == version:
+        if doc.get("version") == version and (direct is None or _same_build(doc, direct)):
             return {
                 "version": version,
                 "source": doc.get("source", "unknown"),
                 "sha": doc.get("sha"),
                 "git_sha": doc.get("git_sha"),
             }
+    if direct is not None:
+        url = str(direct.get("url", ""))
+        path = _url_path(url)
+        return {"version": version, "source": str(path) if path is not None else url, "sha": None, "git_sha": None}
     return {"version": version, "source": "pypi", "sha": None, "git_sha": None}
 
 
@@ -395,6 +498,10 @@ class LaunchRequest:
     case_timeout_s: float
     skip: list[str]
     budgets: dict[str, float]
+    case_ceiling_s: float = CASE_CEILING_S
+    load_ceiling_s: float = LOAD_CEILING_S
+    startup_timeout_s: float = STARTUP_CHILD_TIMEOUT_S
+    deadline_at: float | None = None  # wall clock (`time.time()`) after which a worker or pytest starts nothing new
 
 
 def worker_argv(r: LaunchRequest) -> list[str]:
@@ -402,6 +509,10 @@ def worker_argv(r: LaunchRequest) -> list[str]:
     argv = [sys.executable, "-m", "graph_bench.runner.worker", "--db", r.db, "--selection", r.selection]
     argv += ["--threads", _tag(r.threads), "--workdir", str(r.workdir), "--out", str(r.out)]
     argv += ["--case-timeout", repr(r.case_timeout_s)]
+    argv += ["--case-ceiling", repr(r.case_ceiling_s), "--load-ceiling", repr(r.load_ceiling_s)]
+    argv += ["--startup-timeout", repr(r.startup_timeout_s)]
+    if r.deadline_at is not None:
+        argv += ["--deadline-at", repr(r.deadline_at)]
     if r.skip:
         argv += ["--skip", *r.skip]
     if r.budgets:
@@ -412,11 +523,21 @@ def worker_argv(r: LaunchRequest) -> list[str]:
 def pytest_argv(r: LaunchRequest) -> list[str]:
     """`python -m pytest benches --codspeed ...`, run from the repository root; done ids are deselected.
 
-    `-o addopts=` drops the test suite's coverage options from pyproject.toml.
+    `-o addopts=` drops the test suite's coverage options from pyproject.toml. Both documented pytest-codspeed
+    round limits are passed, so CodSpeed mode stops where bench mode does: `--codspeed-max-time` is the time box
+    (`TIME_BOX_S`; its default is 3 s), and `--codspeed-max-rounds` caps the rounds at the selection's
+    `iterations`. Without the round cap, pytest-codspeed sizes the rounds to fill the whole max time, so a fast
+    case would run 5 s instead of its `iterations` runs.
     """
     argv = [sys.executable, "-m", "pytest", "benches", "--codspeed", "-o", "addopts=", "-p", "no:cacheprovider"]
     argv += ["-v", "-rfEs", "--db", r.db, "--selection", r.selection, "--threads", _tag(r.threads)]
     argv += ["--workdir", str(r.workdir), "--gb-out", str(r.out), "--case-timeout", repr(r.case_timeout_s)]
+    argv += ["--codspeed-max-time", repr(TIME_BOX_S)]
+    argv += ["--codspeed-max-rounds", str(catalog.selection(r.selection).iterations)]
+    argv += ["--gb-case-ceiling", repr(r.case_ceiling_s), "--gb-load-ceiling", repr(r.load_ceiling_s)]
+    argv += ["--gb-startup-timeout", repr(r.startup_timeout_s)]
+    if r.deadline_at is not None:
+        argv += ["--gb-deadline-at", repr(r.deadline_at)]
     for bench_id in r.skip:
         argv += ["--deselect", bench_id]
     for bench_id, seconds in r.budgets.items():
@@ -483,6 +604,13 @@ class _Attempt:
     silence_s: float = 0.0
     pending: str | None = None
     cutoff_s: float | None = None  # set when killed at the pending case's in-run budget
+    over: Literal["case", "load"] | None = None  # set when killed at a ceiling
+    # What runs now and since when (`time.monotonic()`): a case, or a load with its (dataset, store, scale) and,
+    # for a Load (query language) entry, kind "load_ql". None between them (startup, harness work).
+    phase: tuple[Kind, tuple[str, Store, str] | None, float] | None = None
+    load_key: tuple[Kind, tuple[str, Store, str]] | None = None  # the load killed at its ceiling
+    in_startup: bool = False  # between the Startup row's `start` and `entry` lines
+    deadline: bool = False  # set when stopped at the run deadline, between cases, by the supervisor or the worker
 
 
 @dataclass
@@ -495,6 +623,30 @@ class _Run:
     runner: Runner = WORKER
     recorded: dict[str, Entry] = field(default_factory=dict)
     retired: set[str] = field(default_factory=set)
+    deadline_s: float | None = None  # `--deadline-s`; None: no deadline
+    deadline_total_s: float | None = None  # `--deadline-total-s`, the figure the ⏱ message names; None: deadline_s
+    deadline_at: float | None = None  # `time.monotonic()` of the deadline
+    # `--yardstick` entries: earlier databases' results from other jobs on the same hardware. They count in the
+    # in-run budget as entries of earlier databases of this run would, and are never recorded here.
+    yardstick: list[Entry] = field(default_factory=list)
+
+    def expired(self) -> bool:
+        """Whether the run deadline has passed: nothing new starts from then on."""
+        return self.deadline_at is not None and time.monotonic() >= self.deadline_at
+
+    def _deadline_error(self) -> str:
+        assert self.deadline_s is not None
+        return deadline_over(self.deadline_s if self.deadline_total_s is None else self.deadline_total_s)
+
+    def _mark_deadline(self, meta: dict[str, _Meta]) -> None:
+        """Every unrecorded id of `meta` that would run is timeout "run deadline: ..." (an unsupported one stays so)."""
+        for bench_id, m in meta.items():
+            if bench_id in self.recorded:
+                continue
+            if m.supported:
+                self.record(m.entry(bench_id, status="timeout", error=self._deadline_error()))
+            else:
+                self.record(m.entry(bench_id, status="not_supported", error=f"model {m.model} not supported"))
 
     def record(self, entry: Entry) -> None:
         if entry.id not in self.recorded:
@@ -502,31 +654,30 @@ class _Run:
             self.results.entries.append(entry)
 
     def database(self, db: str) -> None:
+        if self.expired():  # not even probed
+            for threads in self.sel.threads:
+                self._mark_deadline(_expected(self.sel, db, threads))
+                self._resources(db, threads, None)
+            return
         probe = _probe(db, max(self.case_timeout_s, STARTUP_TIMEOUT_S))
+        if "error" in probe:
+            entries, resources = failed_database(self.sel, db, _not_installed_reason(probe["error"]))
+            for entry in entries:
+                self.record(entry)
+            self.results.resources.extend(resources)
+            return
         for threads in self.sel.threads:
             meta = _expected(self.sel, db, threads)
-            if "error" in probe:
-                self._not_installed(meta, probe["error"])
-                self._resources(db, threads, None, missing=_not_installed_reason(probe["error"]))
-            else:
-                extra_env = probe["env"][_tag(threads)]
-                self._worker(db, threads, meta, extra_env)
-                self._resources(db, threads, extra_env)
+            extra_env = probe["env"][_tag(threads)]
+            self._worker(db, threads, meta, extra_env)
+            self._resources(db, threads, extra_env)
 
-    def _not_installed(self, meta: dict[str, _Meta], error: str) -> None:
-        for bench_id, m in meta.items():
-            if m.supported:
-                self.record(m.entry(bench_id, status="failed", error=_not_installed_reason(error)))
-            else:
-                self.record(m.entry(bench_id, status="not_supported", error=f"model {m.model} not supported"))
-
-    def _resources(
-        self, db: str, threads: int | None, extra_env: dict[str, str] | None, *, missing: str | None = None
-    ) -> None:
+    def _resources(self, db: str, threads: int | None, extra_env: dict[str, str] | None) -> None:
         """The Memory and Disk records of one database and thread setting, after its worker finished.
 
         Every (dataset, store) of the selection at every scale gets one: measured in a fresh child where the
-        database's models reach the load, ⊘ where they do not, ✗ with `missing` when the database is not installed.
+        database's models reach the load, ⊘ where they do not (a database that is not installed gets its records
+        from `failed_database`).
         """
         if not self.sel.resources:
             return
@@ -536,11 +687,14 @@ class _Run:
         for (dataset, store), model in catalog.all_load_keys(self.sel.name).items():
             for scale in self.sel.scales:
                 record: Resource
+                over = self.recorded.get(catalog.load_id(dataset, db, scale, threads, store))
                 if (dataset, store) not in reached:
                     error = f"model {model} not supported"
                     record = unmeasured(db, dataset, store, scale, threads, "not_supported", error)
-                elif missing is not None:
-                    record = unmeasured(db, dataset, store, scale, threads, "failed", missing)
+                elif over is not None and over.status == "timeout" and over.error == load_over(LOAD_CEILING_S):
+                    record = unmeasured(db, dataset, store, scale, threads, "timeout", over.error)
+                elif self.expired():
+                    record = unmeasured(db, dataset, store, scale, threads, "timeout", self._deadline_error())
                 else:
                     name = f"{catalog.load_benchmark(dataset, store)}-{scale}"
                     try:
@@ -555,6 +709,7 @@ class _Run:
                             raw=raw,
                             env=env,
                             timeout_s=self.case_timeout_s,
+                            load_ceiling_s=LOAD_CEILING_S,
                         )
                     except Exception as exc:  # a harness error fails this record only; the run goes on
                         error = f"resources harness: {message(exc)}"
@@ -567,11 +722,14 @@ class _Run:
         raw.mkdir(parents=True, exist_ok=True)
         out = raw / f"{name}.jsonl"
         workdir = self.workdir / f"{db}-{_tag(threads)}"
-        budgets = _budgets(self.results.entries, db, meta)
+        budgets = _budgets([*self.yardstick, *self.results.entries], db, meta)
         env = {**os.environ, **dict(self.runner.env), **extra_env}
         try:
             launch = any(i not in self.recorded for i in meta)
             while launch:
+                if self.expired():
+                    self._mark_deadline(meta)
+                    break
                 skip = self._skip(meta)
                 request = LaunchRequest(
                     db=db,
@@ -582,12 +740,21 @@ class _Run:
                     case_timeout_s=self.case_timeout_s,
                     skip=skip,
                     budgets={i: budgets[i] for i in meta if i in budgets and i not in skip},
+                    case_ceiling_s=CASE_CEILING_S,
+                    load_ceiling_s=LOAD_CEILING_S,
+                    startup_timeout_s=STARTUP_CHILD_TIMEOUT_S,
+                    deadline_at=self._deadline_epoch(),
                 )
                 argv = self.runner.argv(request)
                 attempt = self._attempt(argv, env, out, raw / f"{name}.log", db, meta, request.budgets)
                 launch = self._settle(attempt, meta) and self._again(attempt, meta)
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
+
+    def _deadline_epoch(self) -> float | None:
+        if self.deadline_at is None:
+            return None
+        return time.time() + (self.deadline_at - time.monotonic())
 
     def _again(self, attempt: _Attempt, meta: dict[str, _Meta]) -> bool:
         """Whether to relaunch after a hung or crashed attempt that `_settle` let continue.
@@ -620,7 +787,14 @@ class _Run:
 
     def _settle(self, attempt: _Attempt, meta: dict[str, _Meta]) -> bool:
         """Record what a finished attempt left open; whether to start another worker."""
-        if attempt.cutoff_s is not None:
+        if attempt.deadline:
+            self._mark_deadline(meta)
+            return False
+        if attempt.over == "load" and attempt.load_key is not None:
+            return self._settle_load(attempt, meta)
+        if attempt.over == "case":
+            status, error = "timeout", over_ceiling(CASE_CEILING_S)
+        elif attempt.cutoff_s is not None:
             budget = f"{attempt.cutoff_s:.3g}"
             status, error = (
                 "timeout",
@@ -634,6 +808,12 @@ class _Run:
         else:
             status, error = "failed", f"{self.runner.name} exited without a result"
         pending = attempt.pending
+        clean = self.runner.mode == "codspeed" and attempt.code in (0, PYTEST_TESTS_FAILED)
+        if pending is None and not attempt.hung and clean and self.expired():
+            # A pytest session that ended on its own past the deadline (exit 0, or 1 when a test failed) skipped
+            # the rest of its cases (benches/conftest.py). A worker that exits 0 without results stays a failure.
+            self._mark_deadline(meta)
+            return False
         if pending is None or (not attempt.hung and not attempt.code):
             for bench_id, m in meta.items():
                 if bench_id not in self.recorded:
@@ -649,6 +829,36 @@ class _Run:
                 same_data = (m.dataset, m.store, m.scale) == (failed.dataset, failed.store, failed.scale)
                 if m.kind == "case" and same_data and bench_id not in self.recorded:
                     self.record(m.entry(bench_id, status="failed", error=f"load failed: {pending}"))
+        return True
+
+    def _settle_load(self, attempt: _Attempt, meta: dict[str, _Meta]) -> bool:
+        """A load killed at the load ceiling: it is ⏱ "load over ...", and so are, for a Load (reported or not),
+        every case of its dataset and store not yet recorded and, for the graph store, the Load (query language)
+        entry of that dataset and scale; all of them are retired. Relaunch for the rest.
+
+        Should nothing be marked (no open id, no such case left), every unrecorded id gets the error and the
+        database is done, so the loop always ends.
+        """
+        assert attempt.load_key is not None
+        kind, (dataset, store, scale) = attempt.load_key
+        error = load_over(LOAD_CEILING_S)
+        marked = [attempt.pending] if attempt.pending is not None else []
+        if kind == "load":
+            for bench_id, m in meta.items():
+                case = m.kind == "case" and (m.dataset, m.store, m.scale) == (dataset, store, scale)
+                ql = m.kind == "load_ql" and store == "graph" and (m.dataset, m.scale) == (dataset, scale)
+                if case or ql:
+                    marked.append(bench_id)
+        fresh = [bench_id for bench_id in marked if bench_id not in self.retired]
+        if not fresh:
+            for bench_id, m in meta.items():
+                if bench_id not in self.recorded:
+                    self.record(m.entry(bench_id, status="timeout", error=error))
+            return False
+        for bench_id in marked:
+            self.retired.add(bench_id)
+            if bench_id not in self.recorded:
+                self.record(meta[bench_id].entry(bench_id, status="timeout", error=error))
         return True
 
     def _attempt(
@@ -670,14 +880,16 @@ class _Run:
         offset = out.stat().st_size if out.exists() else 0
         attempt = _Attempt()
         echo = _Echo(log_path, self.runner.echo)
+        before = {p.pid for p in psutil.Process().children(recursive=True)}
         with log_path.open("ab") as log:
             proc = _launch(argv, env, log, self.runner.cwd)
             try:
                 return self._follow(proc, out, offset, attempt, db, meta, echo, budgets)
             finally:
-                if proc.poll() is None:  # a harness error or Ctrl+C: leave no worker appending to `out`
-                    proc.kill()
-                    proc.wait()
+                # Killed (silence, a cutoff, a ceiling), a harness error or Ctrl+C: leave no worker appending to
+                # `out`, and none of the processes it started (a bulk importer's JVMs) running on into the next one.
+                if proc.poll() is None:
+                    kill_tree(proc, {}, before)
                 echo.pump()
                 if self.runner.mode == "codspeed":
                     drop_empty_codspeed_result(env, proc.pid)
@@ -693,11 +905,13 @@ class _Run:
         echo: _Echo,
         budgets: dict[str, float],
     ) -> _Attempt:
-        """Read the worker's new lines until it exits or stays silent too long.
+        """Read the worker's new lines until it exits, stays silent too long or runs past a ceiling.
 
         Silence is limited to `case_timeout_s`, and right after the `run` line of a case with an in-run budget
         (its preflight's database call) to that budget, until the next line: a preflight call beyond it is cut
-        off there instead of running to its end.
+        off there instead of running to its end. A case still running `CEILING_GRACE_S` past `CASE_CEILING_S` after
+        its `start` line, and a load past `LOAD_CEILING_S` (and the grace) after its start, are killed whatever the
+        worker writes meanwhile (`_Attempt.over`).
         """
         started = False
         cutoff: float | None = None  # the in-run budget of the case whose `run` line is the last line
@@ -723,32 +937,75 @@ class _Run:
             if code is not None:
                 attempt.code = code
                 return attempt
+            if self._between_cases(attempt) and self.runner.mode == "bench" and self.expired():
+                # Nothing is running and nothing new may start; `_attempt` kills the worker. (A pytest session is
+                # not killed: it would lose its CodSpeed measurements, so it skips the rest itself.)
+                attempt.deadline = True
+                return attempt
             limit = self.case_timeout_s if started else max(self.case_timeout_s, STARTUP_TIMEOUT_S)
+            if attempt.phase is not None and attempt.phase[0] != "case":
+                # A load writes nothing while it runs: the load ceiling, not the silence limit, bounds it.
+                limit = max(limit, LOAD_CEILING_S + CEILING_GRACE_S + SILENCE_MARGIN_S)
+            if attempt.in_startup:
+                # The worker kills a silent startup child itself, at its fixed limit (plus the kill's grace).
+                limit = max(limit, STARTUP_CHILD_TIMEOUT_S + CEILING_GRACE_S + SILENCE_MARGIN_S)
             silent = time.monotonic() - last
             if cutoff is not None and cutoff < limit and silent > cutoff:  # `_attempt` kills it
                 attempt.hung, attempt.silence_s, attempt.cutoff_s = True, cutoff, cutoff
                 return attempt
+            if attempt.phase is not None:
+                kind, key, since = attempt.phase
+                ceiling = CASE_CEILING_S if kind == "case" else LOAD_CEILING_S
+                if time.monotonic() - since > ceiling + CEILING_GRACE_S:
+                    attempt.hung, attempt.silence_s = True, silent
+                    attempt.over = "case" if kind == "case" else "load"
+                    if key is not None:
+                        attempt.load_key = (kind, key)
+                    return attempt
             if silent > limit:
                 attempt.hung, attempt.silence_s = True, limit
                 return attempt
             time.sleep(_POLL_S)
 
+    @staticmethod
+    def _between_cases(attempt: _Attempt) -> bool:
+        """Whether the worker runs no case, load or startup row: it has just ended one or not yet begun the next.
+
+        The Startup row counts as one running unit: it is atomic and runs first, so a deadline that passes during it
+        waits for its children (each limited by `STARTUP_CHILD_TIMEOUT_S`); nothing after it starts.
+        """
+        return attempt.pending is None and attempt.phase is None and not attempt.in_startup
+
     def _line(self, raw: bytes, attempt: _Attempt, db: str, meta: dict[str, _Meta]) -> str | None:
         """Handle one worker line; its kind, or None for an unreadable line.
 
         Every line resets the silence timer in `_follow`; that is all a `progress` line does, and a `run` line
-        also arms the in-run cutoff there.
+        also arms the in-run cutoff there. A `start` line starts a case's or a load's ceiling clock
+        (`_Attempt.phase`; the startup has its own limits), a `load` line an unreported load's, and an `entry`
+        line stops it. A `deadline` line says the worker stopped at the run deadline (`_Attempt.deadline`).
         """
         try:
             line = json.loads(raw)
         except ValueError:
             return None  # the end of a line a killed worker left unfinished
         kind = line.pop("kind", None)
+        now = time.monotonic()
         if kind == "database":
             self.results.databases[db] = DatabaseInfo(**line)
         elif kind == "start":
             attempt.pending = line["id"]
+            m = meta.get(line["id"])
+            attempt.phase = None
+            attempt.in_startup = m is not None and m.kind == "startup"
+            if m is not None and m.kind != "startup":
+                attempt.phase = (m.kind, None if m.kind == "case" else (m.dataset, m.store, m.scale), now)
+        elif kind == "load":
+            attempt.phase = ("load", (line["dataset"], line["store"], line["scale"]), now)
+        elif kind == "deadline":  # the worker stopped before a new case or load: the deadline had passed
+            attempt.deadline = True
         elif kind == "entry":
+            attempt.phase = None
+            attempt.in_startup = False
             bench_id = line.pop("id")
             if attempt.pending == bench_id:
                 attempt.pending = None
@@ -765,13 +1022,26 @@ def run_bench(
     *,
     workdir: Path,
     case_timeout_s: float = DEFAULT_CASE_TIMEOUT_S,
+    deadline_s: float | None = None,
+    yardstick: Sequence[Results] = (),
+    deadline_total_s: float | None = None,
 ) -> Results:
     """Run every database of `dbs` in order, one worker per thread setting, and write `out_dir/results.json`.
 
     Later databases get a preflight budget per case from the earlier ones; at the end `apply_budget_rule`
     marks entries far slower than the top 3. Worker lines, logs and answers go to `out_dir/raw/<db>-<threads>/`.
+
+    With `deadline_s`, counted from this call, nothing new starts once it has passed: a case, load or startup row
+    already running finishes within its own limits, every id not yet run is timeout "run deadline: ...", and
+    results.json is written as usual. The message names `deadline_total_s` when given (CI passes the time left
+    of its 48 minutes as `deadline_s` and the 48 minutes as the total), else `deadline_s`.
+
+    `yardstick` holds results of earlier databases from other runs on the same hardware (CI runs one database per
+    job): their ok/agree entries set the in-run budgets as earlier databases of this run would (`_budgets`). They
+    are not part of this run's results, and the final rule does not compare with them; `graph-bench merge`
+    applies it over the merged runs. Each must be of this selection and mode (`check_yardstick`).
     """
-    return _run_all(selection, dbs, out_dir, workdir, case_timeout_s, WORKER)
+    return _run_all(selection, dbs, out_dir, workdir, case_timeout_s, WORKER, deadline_s, yardstick, deadline_total_s)
 
 
 def drop_empty_codspeed_result(env: Mapping[str, str], pid: int) -> bool:
@@ -802,6 +1072,9 @@ def run_codspeed(
     *,
     workdir: Path,
     case_timeout_s: float = DEFAULT_CASE_TIMEOUT_S,
+    deadline_s: float | None = None,
+    yardstick: Sequence[Results] = (),
+    deadline_total_s: float | None = None,
 ) -> Results:
     """As `run_bench`, with one `pytest benches --codspeed` process per database and thread setting.
 
@@ -811,14 +1084,25 @@ def run_codspeed(
     (a relaunch left with only skipped cases) leaves a results file without benchmarks, which the CodSpeed
     runner rejects for the whole job; `drop_empty_codspeed_result` removes that one file, and only it.
     """
-    return _run_all(selection, dbs, out_dir, workdir, case_timeout_s, PYTEST)
+    return _run_all(selection, dbs, out_dir, workdir, case_timeout_s, PYTEST, deadline_s, yardstick, deadline_total_s)
 
 
 def _run_all(
-    selection: str, dbs: Sequence[str], out_dir: Path, workdir: Path, case_timeout_s: float, runner: Runner
+    selection: str,
+    dbs: Sequence[str],
+    out_dir: Path,
+    workdir: Path,
+    case_timeout_s: float,
+    runner: Runner,
+    deadline_s: float | None,
+    yardstick: Sequence[Results] = (),
+    deadline_total_s: float | None = None,
 ) -> Results:
+    begun = time.monotonic()
     sel = catalog.selection(selection)
     catalog.cases(selection, dbs)  # unknown names fail here, before anything runs
+    for doc in yardstick:
+        check_yardstick(doc, selection, runner.mode)
     out_dir.mkdir(parents=True, exist_ok=True)
     started_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     cache.prepare(selection)  # generate data now, so no worker spends its silence budget on it
@@ -832,6 +1116,10 @@ def _run_all(
         databases={},
     )
     run = _Run(sel, out_dir, workdir, case_timeout_s, results, runner)
+    run.yardstick = [e for doc in yardstick for e in doc.entries]
+    if deadline_s is not None:
+        run.deadline_s, run.deadline_at = deadline_s, begun + deadline_s
+        run.deadline_total_s = deadline_total_s
     for db in dbs:
         run.database(db)
     results.entries.sort(key=lambda e: e.id)
@@ -848,6 +1136,8 @@ __all__ = [
     "LaunchRequest",
     "Runner",
     "apply_budget_rule",
+    "check_yardstick",
+    "failed_database",
     "grafeo_source",
     "graph_bench_commit",
     "machine",

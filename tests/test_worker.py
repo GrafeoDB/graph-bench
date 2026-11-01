@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from graph_bench.databases import get_database
 from graph_bench.databases.base import Database, DatabaseInfo, NotSupported
 from graph_bench.datasets import cache
 from graph_bench.datasets.schema import Dataset
@@ -94,8 +95,8 @@ def test_worker_emits_start_before_entry(standard: tuple[Lines, Path]) -> None:
     for line in lines[1:]:
         if line["kind"] == "start":
             started.add(line["id"])
-        elif line == {"kind": "progress", "id": None}:
-            continue  # an unreported load: the multigraph fixture's, which has no Load entry
+        elif line == {"kind": "progress", "id": None} or line["kind"] == "load":
+            continue  # a load's own line, and the progress of an unreported load (the multigraph fixture's)
         else:
             assert line["id"] in started, line
     entries = _entries(lines)
@@ -118,6 +119,8 @@ def test_worker_times_agreeing_cases(standard: tuple[Lines, Path]) -> None:
     for load_id in catalog.load_ids("push", ["fake"]):
         assert entries[load_id]["status"] == "ok"
         assert entries[load_id]["load_ns"] > 0
+        # The fake's loads are fast, so all of the selection's load iterations ran.
+        assert entries[load_id]["load_iterations"] == catalog.selection("push").load_iterations
         assert entries[load_id]["answer"] == "agree"  # the node and edge counts match the dataset's
 
 
@@ -552,6 +555,133 @@ def test_write_case_run_error_fails(writes_dir: Path, tmp_path: Path) -> None:
     assert (entry["status"], entry["error"]) == ("failed", "RuntimeError: soft crash")
 
 
+def test_only_queries_and_algorithms_seed_the_first_run_with_the_preflight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The preflight's duration predicts a query's or algorithm's first timed run. A write's full run adds its
+    setup, read-back and teardown to what the preflight timed, so it is not seeded: its first run is predicted
+    from nothing and later runs from the full run before them."""
+    from types import SimpleNamespace
+
+    from graph_bench.types import Timing
+    from tests.fake_writes import WRITES as FAKE_WRITES
+
+    seeds: dict[str, Any] = {}
+    query = next(i for i in catalog.ITEMS if i.id == "snb_is2")
+
+    def fake_measure(fn: Any, **kwargs: Any) -> tuple[Timing, None]:
+        seeds[current[0]] = kwargs["first_s"]
+        return Timing(1.0, 1.0, 1, 3), None
+
+    def fake_start(case: Case, *args: Any) -> tuple[worker.Preflight, dict[str, Any]]:
+        write = SimpleNamespace(run=list, prepare=lambda: None, readback=lambda: None, baseline=None)
+        pf = worker.Preflight(run=list, bindings=[], preflight_ns=2_000_000_000, answer="agree")
+        if case.item is not query:
+            pf.write = write  # type: ignore[assignment]
+        return pf, {"kind": "entry", "id": case.bench_id}
+
+    monkeypatch.setattr(worker, "measure", fake_measure)
+    monkeypatch.setattr(worker, "start_case", fake_start)
+    settings = worker._Settings(catalog.selection("push"), tmp_path / "w.jsonl", {}, 60.0)
+    current = ["query"]
+    worker._run_case(Case(query, "fake", "small", 1), None, tmp_path, settings, lambda line: None)  # type: ignore[arg-type]
+    current[0] = "write"
+    worker._run_case(Case(FAKE_WRITES[0], "fake", "small", 1), None, tmp_path, settings, lambda line: None)  # type: ignore[arg-type]
+    assert seeds == {"query": 2.0, "write": None}
+
+
+def _deadline_worker(
+    push_data_dir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    keep: set[str],
+    deadline_at: float,
+    passes_at: str = "test_snb_is",
+) -> tuple[Lines, list[float]]:
+    """`worker.run` in this process on the fake database, every id but `keep` skipped, with `worker._now` a clock
+    the test moves: it reads 1000 until the first entry whose id contains `passes_at` is written (by default the
+    first case's), then 2000. Returns the lines in order."""
+    monkeypatch.setenv("GRAPH_BENCH_DATA_DIR", str(push_data_dir))
+    monkeypatch.setenv("GRAPH_BENCH_FAKE", "")
+    clock = [1000.0]
+    monkeypatch.setattr(worker, "_now", lambda: clock[0])
+    lines: Lines = []
+    real = worker.emitter
+
+    def emitter(fh: Any) -> worker.Emit:
+        emit = real(fh)
+
+        def hooked(line: dict[str, Any]) -> None:
+            emit(line)
+            lines.append(line)
+            if line["kind"] == "entry" and passes_at in line["id"]:
+                clock[0] = 2000.0  # the deadline passes as the case or load writes its entry
+
+        return hooked
+
+    monkeypatch.setattr(worker, "emitter", emitter)
+    ids = catalog.all_ids("push", ["fake"])
+    assert keep <= set(ids)
+    out = tmp_path / "w.jsonl"
+    worker.run(
+        "fake", "push", 1, workdir=tmp_path / "work", out=out, skip=frozenset(set(ids) - keep), deadline_at=deadline_at
+    )
+    assert lines == [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
+    return lines, clock
+
+
+def test_worker_starts_nothing_past_the_deadline(
+    push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The deadline passes as a case writes its entry, the moment the supervisor may read that entry and the next
+    `start` in one batch. The worker starts nothing more (no case, no load of the dataset or of another one, no
+    Load (query language) entry): it writes a `deadline` line and returns, and the supervisor marks the rest."""
+    load_snb = catalog.load_id("snb", "fake", "small", 1)
+    keep = {_id("snb_is2"), _id("snb_is3"), load_snb, catalog.load_id("snb", "fake", "small", 1, "rdf")}
+    keep.add(catalog.load_ql_id("snb", "fake", "small", 1))
+    lines, _ = _deadline_worker(push_data_dir, tmp_path, monkeypatch, keep, deadline_at=1500.0)
+    starts = [line["id"] for line in lines if line["kind"] == "start"]
+    assert starts[0] == load_snb and len(starts) == 2 and starts[1] in (_id("snb_is2"), _id("snb_is3")), starts
+    ended = next(i for i, line in enumerate(lines) if line["kind"] == "entry" and line["id"] == starts[1])
+    assert lines[ended + 1 :] == [{"kind": "deadline"}]
+
+
+def test_worker_starts_no_query_language_load_past_the_deadline(
+    push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The deadline passes as the graph load writes its entry: the dataset's Load (query language) entry, which
+    runs next on instances of its own, is not started."""
+    load_snb = catalog.load_id("snb", "fake", "small", 1)
+    keep = {load_snb, catalog.load_ql_id("snb", "fake", "small", 1)}
+    lines, _ = _deadline_worker(push_data_dir, tmp_path, monkeypatch, keep, 1500.0, passes_at=load_snb)
+    assert [line["id"] for line in lines if line["kind"] == "start"] == [load_snb]
+    ended = next(i for i, line in enumerate(lines) if line["kind"] == "entry" and line["id"] == load_snb)
+    assert lines[ended + 1 :] == [{"kind": "deadline"}]
+
+
+def test_worker_starts_no_next_load_past_the_deadline(
+    push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The deadline passes as the graph load writes its entry: the RDF load of the same dataset, next in order, is
+    not started."""
+    load_snb = catalog.load_id("snb", "fake", "small", 1)
+    keep = {load_snb, catalog.load_id("snb", "fake", "small", 1, "rdf")}
+    lines, _ = _deadline_worker(push_data_dir, tmp_path, monkeypatch, keep, 1500.0, passes_at=load_snb)
+    assert [line["id"] for line in lines if line["kind"] == "start"] == [load_snb]
+    assert [line["kind"] for line in lines if line["kind"] == "load"] == ["load"]
+    ended = next(i for i, line in enumerate(lines) if line["kind"] == "entry" and line["id"] == load_snb)
+    assert lines[ended + 1 :] == [{"kind": "deadline"}]
+
+
+def test_worker_past_the_deadline_starts_no_startup_row(
+    push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    keep = {catalog.startup_id("fake", 1), _id("snb_is2"), catalog.load_id("snb", "fake", "small", 1)}
+    lines, _ = _deadline_worker(push_data_dir, tmp_path, monkeypatch, keep, deadline_at=500.0)
+    assert [line["kind"] for line in lines if line["kind"] in ("start", "load", "deadline")] == ["deadline"]
+    assert lines[0]["kind"] == "database"
+
+
 # Load (query language) ------------------------------------------------------------------------------------------
 
 
@@ -693,3 +823,55 @@ def test_worker_database_panic_in_close_does_not_kill_the_worker(push_data_dir: 
     for item in ("snb_is4", "graphalytics_bfs"):  # both datasets' cases ran, so the first close did not end it
         assert (entries[_id(item)]["status"], entries[_id(item)]["answer"]) == ("ok", "agree")
     assert entries[catalog.load_id("snb", "fake", "small", 1)]["status"] == "ok"
+
+
+def test_worker_load_over_the_ceiling_skips_its_cases(
+    push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cooperative load ceiling: `slower:load_snb` takes 2 s, past a 1 s ceiling that the other fake loads (a few
+    ms each, more on a busy host) stay under. The worker records the Load entry ⏱ "load over 1 s" and every case of
+    that dataset and store, and the dataset's Load (query language) entry, ⏱ with the same error, each after its
+    `start` line and without running it; the RDF store and the other datasets load as usual. Each load's `load`
+    line names its dataset, store and scale for the supervisor's hard path."""
+    trace = tmp_path / "trace.txt"
+    monkeypatch.setenv("GRAPH_BENCH_FAKE_TRACE", str(trace))
+    lines, proc = run_worker(tmp_path / "fake.jsonl", push_data_dir, "--load-ceiling", "1", fake="slower:load_snb")
+    assert proc.returncode == 0, proc.stderr
+    entries = _entries(lines)
+    over = ("timeout", "load over 1 s")
+    load_id = catalog.load_id("snb", "fake", "small", 1)
+    ql_id = catalog.load_ql_id("snb", "fake", "small", 1)
+    assert (entries[load_id]["status"], entries[load_id]["error"]) == over
+    assert (entries[ql_id]["status"], entries[ql_id]["error"]) == over
+    graph_cases = [_id(i.id) for i in catalog.ITEMS if (i.dataset, i.store) == ("snb", "graph")]
+    started = {line["id"] for line in lines if line["kind"] == "start"}
+    for bench_id in graph_cases:
+        assert (entries[bench_id]["status"], entries[bench_id]["error"]) == over, bench_id
+        assert bench_id in started
+    assert not [line for line in lines if line["kind"] == "run" and line["id"] in graph_cases]
+    rdf = entries[catalog.load_id("snb", "fake", "small", 1, "rdf")]
+    assert (rdf["status"], rdf["answer"]) == ("ok", "agree")
+    # snb's query-language load never starts; the other datasets' do (graphalytics in the push selection).
+    others = [i for i in entries if "test_load_ql.py" in i and i != ql_id]
+    assert all((entries[i]["status"], entries[i]["answer"]) == ("ok", "agree") for i in others), others
+    assert _calls(trace).count("load_ql") == len(others)
+    loads = [(line["dataset"], line["store"], line["scale"]) for line in lines if line["kind"] == "load"]
+    assert ("snb", "graph", "small") in loads and ("multigraph", "graph", "small") in loads
+
+
+def test_worker_time_boxes_the_load_iterations(
+    push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Loads follow the time box with a minimum of one: of three load iterations of 0.2 s each only the first runs
+    once the box is 0.1 s; the median is over the load that ran."""
+    monkeypatch.setattr(worker, "TIME_BOX_S", 0.1)
+    monkeypatch.setenv("GRAPH_BENCH_DATA_DIR", str(push_data_dir))
+    monkeypatch.setenv("GRAPH_BENCH_FAKE", "slow:load_snb")
+    data = cache.prepare("push")[("snb", "small")]
+    loaded = worker.load(get_database("fake"), data, tmp_path / "work", 1, 3, check=True)
+    try:
+        assert loaded.iterations == 1
+        assert loaded.load_ns >= 0.2e9
+        assert worker.load_entry("x", loaded.load_ns, loaded.check, loaded.iterations)["load_iterations"] == 1
+    finally:
+        worker.close_quietly(loaded.db)

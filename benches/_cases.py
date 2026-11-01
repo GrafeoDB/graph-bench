@@ -13,11 +13,21 @@ preflight's outcome to pytest, always after appending the entry line:
 
 A write case's setup, read-back and teardown are untimed: `benchmark.pedantic(run, setup=...)`, where the setup of
 round k+1 first runs the read-back and teardown of round k (and the last round's run after `pedantic` returns).
+
+Limits (`graph_bench.runner`, Task T), as in bench mode where pytest-codspeed allows: a read case's rounds stop at
+the time box through pytest-codspeed's `--codspeed-max-time`, capped at the selection's iterations by
+`--codspeed-max-rounds` (the supervisor passes both); a write case gets as many
+rounds as the box holds at its preflight's duration (`boxed_rounds`). A case is ⏱ "too slow: over 60 s", without
+being benchmarked, when its ceiling (`--gb-case-ceiling`, from its `start` line) has passed after the preflight or
+the calls CodSpeed makes at least would, at the preflight's duration, run past the supervisor's kill. A load that
+ends past the load ceiling (`--gb-load-ceiling`) is ⏱ "load over 5 min", and so are its dataset's cases and its
+Load (query language) test.
 The startup's first child is its untimed preflight; CodSpeed then times `startup_iterations - 1` further children
 (at least one), each the whole child process, interpreter start included, while results.json records the
 children's in-process times (`graph_bench.runner.startup`).
 """
 
+import math
 import statistics
 import tempfile
 import time
@@ -32,12 +42,24 @@ from graph_bench.databases import get_database
 from graph_bench.databases.base import Database, NotSupported
 from graph_bench.datasets import cache
 from graph_bench.datasets.schema import Dataset
-from graph_bench.runner import close_quietly, reraise_control
+from graph_bench.runner import (
+    CASE_CEILING_S,
+    CEILING_GRACE_S,
+    LOAD_CEILING_S,
+    MIN_ITERATIONS,
+    STARTUP_CHILD_TIMEOUT_S,
+    TIME_BOX_S,
+    close_quietly,
+    load_over,
+    over_ceiling,
+    reraise_control,
+)
 from graph_bench.runner.startup import Child, fresh_dir, passed, run_child, spawn_child, startup_entry, summarize
 from graph_bench.runner.worker import (
     Emit,
     LoadCheck,
     Loaded,
+    LoadOverCeiling,
     ReadbackDiffers,
     SetupDiffers,
     WriteRun,
@@ -53,7 +75,6 @@ from graph_bench.runner.worker import (
     probe_case,
     remove,
     start_case,
-    startup_timeout,
     unsupported_load_entry,
     write_guard,
 )
@@ -125,8 +146,26 @@ class LoadFailed(Exception):
     """The dataset a case needs could not be loaded."""
 
 
+class LoadOver(LoadFailed):
+    """The dataset a case needs took longer to load than the load ceiling; the message is the entry's error."""
+
+
 class EnvironmentFailed(Exception):
     """The database's `prepare_environment` failed; the message is the worker's load error text."""
+
+
+# The calls `benchmark(fn)` makes at least in pytest-codspeed's wall-time mode (instruments/walltime.py, `measure`):
+# one untimed call for the result, at least one warm-up call and at least one round.
+CODSPEED_MIN_CALLS = 3
+
+
+def boxed_rounds(preflight_ns: int | None, iterations: int) -> int:
+    """The rounds of a write case under the time box, at its preflight's duration: as many as `TIME_BOX_S` holds, at
+    least `MIN_ITERATIONS`, at most `iterations` (bench mode's rule for runs of equal length)."""
+    if not preflight_ns:
+        return iterations
+    held = math.ceil(TIME_BOX_S * 1e9 / preflight_ns)
+    return min(iterations, max(MIN_ITERATIONS, held))
 
 
 def _load_error(exc: BaseException) -> str:
@@ -146,6 +185,9 @@ class Bench:
         workdir: Path | None,
         budgets: dict[str, float],
         case_timeout_s: float,
+        case_ceiling_s: float = CASE_CEILING_S,
+        load_ceiling_s: float = LOAD_CEILING_S,
+        startup_timeout_s: float = STARTUP_CHILD_TIMEOUT_S,
     ) -> None:
         self.db = db
         self.selection = selection
@@ -153,6 +195,9 @@ class Bench:
         self.out = out
         self.budgets = budgets
         self.case_timeout_s = case_timeout_s
+        self.case_ceiling_s = case_ceiling_s
+        self.load_ceiling_s = load_ceiling_s
+        self.startup_timeout_s = startup_timeout_s
         self._workdir = workdir
         self._own_workdir: Path | None = None
         self._fh: IO[str] | None = None
@@ -161,6 +206,7 @@ class Bench:
         self._datasets: dict[tuple[str, str], Dataset] | None = None
         self._loaded: tuple[DataKey, Loaded] | None = None
         self._failed: dict[DataKey, str] = {}
+        self._over: set[DataKey] = set()  # loads that went over the load ceiling
         self._setup: tuple[str | None] | None = None  # (error,) once `prepare_environment` ran
 
     # The plan, as `graph-bench list` prints it.
@@ -252,7 +298,13 @@ class Bench:
         return self.budgets.get(bench_id, self.case_timeout_s)
 
     def database(self, key: DataKey) -> Database:
-        """The instance holding `key` (a dataset in a store), loaded once (untimed) unless the load test left it."""
+        """The instance holding `key` (a dataset in a store), loaded once (untimed) unless the load test left it.
+
+        `LoadOver` when that load (or the load test's) went over the load ceiling; the load is announced with a
+        `load` line, as the worker does, so the supervisor can stop it there.
+        """
+        if key in self._over:
+            raise LoadOver(load_over(self.load_ceiling_s))
         if key in self._failed:
             raise LoadFailed(self._failed[key])
         if self._loaded is not None and self._loaded[0] == key:
@@ -265,7 +317,13 @@ class Bench:
             def on_load() -> None:
                 self.emit(progress)
 
-            loaded = load(self.db_cls, self.dataset(key), self.workdir, key[3], 1, on_load, store=key[1])
+            data = self.dataset(key)
+            self.emit({"kind": "load", "dataset": key[0], "store": key[1], "scale": key[2]})
+            deadline = time.monotonic() + self.load_ceiling_s
+            loaded = load(self.db_cls, data, self.workdir, key[3], 1, on_load, store=key[1], deadline=deadline)
+        except LoadOverCeiling as exc:
+            self._over.add(key)
+            raise LoadOver(load_over(self.load_ceiling_s)) from exc
         except BaseException as exc:
             reraise_control(exc)
             self._failed[key] = _load_error(exc)
@@ -280,6 +338,12 @@ class Bench:
 
     def load_failed(self, key: DataKey, error: str) -> None:
         self._failed[key] = error
+
+    def load_over(self, key: DataKey) -> None:
+        self._over.add(key)
+
+    def over(self, key: DataKey) -> bool:
+        return key in self._over
 
     def release(self) -> None:
         if self._loaded is not None:
@@ -319,22 +383,40 @@ def _ok(entry: dict[str, Any]) -> bool:
     return entry.get("status") == "ok" and entry.get("answer") != "disagree"
 
 
+def _fits(bench: Bench, started: float, preflight_ns: int | None, calls: int) -> bool:
+    """Whether a case that started at `started` (`time.monotonic()`) may be benchmarked: its ceiling has not
+    passed, and `calls` more calls of its preflight's duration end before the supervisor's kill."""
+    now = time.monotonic()
+    deadline = started + bench.case_ceiling_s
+    return now < deadline and now + calls * (preflight_ns or 0) / 1e9 <= deadline + CEILING_GRACE_S
+
+
 def run_case(benchmark: Any, bench: Bench, case: Case) -> None:
-    """Preflight the case; benchmark it only when it completed in budget with a correct answer."""
+    """Preflight the case; benchmark it only when it completed in budget with a correct answer and fits its
+    ceiling (`_fits`)."""
     if not case.item.supported_by(bench.db_cls.models):
         error = f"model {case.item.model} not supported"
         bench.emit(case_entry(case, status="not_supported", error=error))
         pytest.skip(f"not available: {error}")
     try:
         db = bench.database(case_key(case))
+    except LoadOver as exc:
+        entry = case_entry(case, status="timeout", error=str(exc))
+        bench.emit({"kind": "start", "id": case.bench_id})
+        bench.emit(entry)
+        _outcome(entry)
     except LoadFailed as exc:
         bench.emit({"kind": "start", "id": case.bench_id})
         bench.emit(case_entry(case, status="failed", error=f"load failed: {exc}"))
         _fail("error: ", f"load failed: {exc}")
+    started = time.monotonic()
     pf, entry = start_case(case, db, bench.base, bench.out, bench.budget(case.bench_id), bench.emit)
     if pf.passed:
-        if pf.write is not None:
-            _bench_write(benchmark, bench, pf.write, entry)
+        rounds = boxed_rounds(pf.preflight_ns, bench.selection.iterations)
+        if not _fits(bench, started, pf.preflight_ns, rounds if pf.write is not None else CODSPEED_MIN_CALLS):
+            entry["status"], entry["error"] = "timeout", over_ceiling(bench.case_ceiling_s)
+        elif pf.write is not None:
+            _bench_write(benchmark, bench, pf.write, entry, rounds)
         else:
             try:
                 benchmark(pf.run)
@@ -347,7 +429,7 @@ def run_case(benchmark: Any, bench: Bench, case: Case) -> None:
         _outcome(entry)
 
 
-def _bench_write(benchmark: Any, bench: Bench, write: WriteRun, entry: dict[str, Any]) -> None:
+def _bench_write(benchmark: Any, bench: Bench, write: WriteRun, entry: dict[str, Any], rounds: int) -> None:
     """CodSpeed times the write runs; each round's setup is untimed, and so are its read-back and teardown, which
     run in the next round's setup and, for the last round, after `pedantic` returns."""
     pending = [False]
@@ -371,7 +453,7 @@ def _bench_write(benchmark: Any, bench: Bench, write: WriteRun, entry: dict[str,
         pending[0] = True
 
     try:
-        benchmark.pedantic(target, setup=setup, rounds=bench.selection.iterations)
+        benchmark.pedantic(target, setup=setup, rounds=rounds)
         settle()
     except ReadbackDiffers as exc:
         entry["answer"], entry["detail"] = "disagree", str(exc)
@@ -389,7 +471,9 @@ def run_load(benchmark: Any, bench: Bench, lc: LoadCase) -> None:
 
     `load_ns` is the median of the loads this test ran, as the worker reports it; CodSpeed times them too. Each
     instance's node and edge counts are checked outside the timed target (in the next round's setup, and after the
-    last round), so a ≠ or a counting error is known only after CodSpeed measured the load.
+    last round), so a ≠ or a counting error is known only after CodSpeed measured the load. A test whose loads end
+    past the load ceiling is ⏱ "load over ...", and so are its dataset's cases (`Bench.load_over`). The rounds are
+    fixed (pytest-codspeed's `pedantic` has no time limit); push loads once.
     """
     if (lc.dataset, lc.store) not in catalog.load_keys(bench.selection.name, bench.db_cls.models):
         model = catalog.all_load_keys(bench.selection.name)[(lc.dataset, lc.store)]
@@ -398,6 +482,7 @@ def run_load(benchmark: Any, bench: Bench, lc: LoadCase) -> None:
         pytest.skip(f"not available: {entry['error']}")
     key = lc.key
     bench.emit({"kind": "start", "id": lc.bench_id})
+    started = time.monotonic()
     bench.release()
     progress = {"kind": "progress", "id": lc.bench_id}
     instances: list[tuple[Database, Path]] = []
@@ -431,15 +516,26 @@ def run_load(benchmark: Any, bench: Bench, lc: LoadCase) -> None:
     except BaseException as exc:
         reraise_control(exc)
         drop()
+        if time.monotonic() - started >= bench.load_ceiling_s:  # the adapter's own timeout, past the ceiling
+            bench.load_over(key)
+            entry = {"kind": "entry", "id": lc.bench_id, "status": "timeout", "error": load_over(bench.load_ceiling_s)}
+            bench.emit(entry)
+            _outcome(entry)
         error = _load_error(exc)
         bench.load_failed(key, error)
         bench.emit({"kind": "entry", "id": lc.bench_id, "status": "failed", "error": error})
         _fail("error: ", error)
     check.add(instances[-1][0], datasets[0])
     bench.emit(progress)
+    if time.monotonic() - started >= bench.load_ceiling_s:
+        drop()
+        bench.load_over(key)
+        entry = {"kind": "entry", "id": lc.bench_id, "status": "timeout", "error": load_over(bench.load_ceiling_s)}
+        bench.emit(entry)
+        _outcome(entry)
     db, db_dir = instances.pop()
     bench.adopt(key, db, db_dir)
-    entry = load_entry(lc.bench_id, int(statistics.median(times)), check)
+    entry = load_entry(lc.bench_id, int(statistics.median(times)), check, len(times))
     bench.emit(entry)
     if not _ok(entry):
         _outcome(entry)
@@ -450,7 +546,9 @@ def run_load_ql(benchmark: Any, bench: Bench, lq: LoadQlCase) -> None:
     count-checked, content-probed and closed outside the timed target; no case uses these instances.
 
     It releases the session's loaded instance first, so it runs once its dataset's cases are done (`conftest`
-    orders it after them). A failure fails this test alone: the dataset's cases keep their own load.
+    orders it after them). A failure fails this test alone: the dataset's cases keep their own load. Loads that end
+    past the load ceiling make it ⏱ "load over ...", and so does a Load of its dataset that went over it (then it
+    does not run).
     """
     if (lq.dataset, "graph") not in catalog.load_keys(bench.selection.name, bench.db_cls.models):
         model = catalog.load_ql_keys(bench.selection.name)[lq.dataset]
@@ -458,6 +556,11 @@ def run_load_ql(benchmark: Any, bench: Bench, lq: LoadQlCase) -> None:
         bench.emit(entry)
         pytest.skip(f"not available: {entry['error']}")
     bench.emit({"kind": "start", "id": lq.bench_id})
+    started = time.monotonic()
+    if bench.over(lq.key):
+        entry = {"kind": "entry", "id": lq.bench_id, "status": "timeout", "error": load_over(bench.load_ceiling_s)}
+        bench.emit(entry)
+        _outcome(entry)
     bench.release()
     progress = {"kind": "progress", "id": lq.bench_id}
     instances: list[tuple[Database, Path]] = []  # the current instance, until its round is finished
@@ -504,9 +607,15 @@ def run_load_ql(benchmark: Any, bench: Bench, lq: LoadQlCase) -> None:
             remove(db_dir)
         status = "not_supported" if isinstance(exc, NotSupported) else "failed"
         entry = {"kind": "entry", "id": lq.bench_id, "status": status, "error": _load_error(exc)}
+        if time.monotonic() - started >= bench.load_ceiling_s:  # the adapter's own timeout, past the ceiling
+            entry = {"kind": "entry", "id": lq.bench_id, "status": "timeout", "error": load_over(bench.load_ceiling_s)}
         bench.emit(entry)
         _outcome(entry)
-    entry = load_entry(lq.bench_id, int(statistics.median(times)), check)
+    if time.monotonic() - started >= bench.load_ceiling_s:
+        entry = {"kind": "entry", "id": lq.bench_id, "status": "timeout", "error": load_over(bench.load_ceiling_s)}
+        bench.emit(entry)
+        _outcome(entry)
+    entry = load_entry(lq.bench_id, int(statistics.median(times)), check, len(times))
     bench.emit(entry)
     if not _ok(entry):
         _outcome(entry)
@@ -527,7 +636,7 @@ def run_startup(benchmark: Any, bench: Bench, sc: StartupCase) -> None:
         bench.emit(entry)
         _outcome(entry)
     model = primary_model(bench.db_cls.models)
-    timeout_s = startup_timeout(bench.case_timeout_s)
+    timeout_s = bench.startup_timeout_s
     progress = {"kind": "progress", "id": sc.bench_id}
     children: list[Child] = [run_child(bench.db, sc.threads, bench.workdir / "startup-0", timeout_s)]
     bench.emit(progress)

@@ -7,16 +7,20 @@ both modes (its children's in-process times, which a CodSpeed run records too). 
 `timing.median_ns` in bench mode and by `preflight_ns` in codspeed mode, where timings are null. An answer-only
 item (`catalog.answer_only`) is never ranked: it counts as correct when it agrees (`is_ranked`) but has no place in
 the speed order, so it is nobody's fastest and no rank position.
+
+Ranks never cross sources (`Entry.source`): a database is ranked only against those of its own run, so a local
+snapshot's timing (`graph-bench merge --local`) is never compared with one from CI. Columns put the CI databases
+first and the local ones after, each local name marked `LOCAL_MARK`.
 """
 
 import math
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from graph_bench.databases import display_name
 from graph_bench.results import Entry, Results
 from graph_bench.suites.catalog import ITEMS, answer_only, load_benchmark, load_ql_benchmark
-from graph_bench.types import CATEGORY_ORDER, LOAD_CATEGORIES, Category
+from graph_bench.types import CATEGORY_ORDER, LOAD_CATEGORIES, SOURCES, Category
 
 SCALE_ORDER: tuple[str, ...] = ("small", "medium", "large")
 
@@ -43,13 +47,18 @@ _LOAD_QL_ORDER = list(_LOADS_QL)
 LOAD_PREFIX = "load_"
 LOAD_QL_PREFIX = "load_ql_"
 STARTUP_TITLE = "Empty database"
+# The mark after a local snapshot database's name, in column headers and tables ("FalkorDB†").
+LOCAL_MARK = "†"
 
 _CATEGORY_INDEX: dict[str, int] = {c: i for i, c in enumerate(CATEGORY_ORDER)}
 
 
 @dataclass
 class Ranked:
-    """One benchmark at one scale and thread setting: `order` holds (database, speed in ns), fastest first."""
+    """One benchmark at one scale and thread setting: `order` holds (database, speed in ns), fastest first.
+
+    `sources` maps a database to the source of its entry (absent: `ci`); positions and the fastest are per source.
+    """
 
     category: Category
     benchmark: str
@@ -57,20 +66,31 @@ class Ranked:
     scale: str
     threads: int | None
     order: list[tuple[str, float]]
+    sources: dict[str, str] = field(default_factory=dict)
+
+    def source(self, db: str) -> str:
+        return self.sources.get(db, "ci")
+
+    def peers(self, db: str) -> list[str]:
+        """The ranked databases of `db`'s source, fastest first; `db` among them when it is ranked."""
+        own = self.source(db)
+        return [other for other, _ in self.order if self.source(other) == own]
 
     def position(self, db: str) -> int | None:
-        """1 + the number of databases strictly faster than `db`; None when `db` is not ranked."""
+        """1 + the number of databases of the same source strictly faster than `db`; None when `db` is not
+        ranked."""
         speeds = dict(self.order)
         if db not in speeds:
             return None
-        return 1 + sum(1 for _, s in self.order if s < speeds[db])
+        own = self.source(db)
+        return 1 + sum(1 for other, s in self.order if s < speeds[db] and self.source(other) == own)
 
     def fastest(self) -> set[str]:
-        """The databases with the lowest speed (several on a tie, none when nothing is ranked)."""
-        if not self.order:
-            return set()
-        best = self.order[0][1]
-        return {db for db, s in self.order if s == best}
+        """The databases with the lowest speed of their source (several on a tie, none when nothing is ranked)."""
+        best: dict[str, float] = {}
+        for db, s in self.order:
+            best.setdefault(self.source(db), s)  # `order` is fastest first
+        return {db for db, s in self.order if s == best[self.source(db)]}
 
 
 def is_load(entry: Entry) -> bool:
@@ -156,7 +176,8 @@ def rank(results: Results) -> list[Ranked]:
             if is_ranked(e) and value is not None and not answer_only(e.benchmark):
                 order.append((e.database, value))
         order.sort(key=lambda pair: (pair[1], pair[0]))
-        ranked.append(Ranked(members[0].category, benchmark, title(benchmark), scale, threads, order))
+        sources = {e.database: e.source for e in members if e.source != "ci"}
+        ranked.append(Ranked(members[0].category, benchmark, title(benchmark), scale, threads, order, sources))
     return ranked
 
 
@@ -186,7 +207,31 @@ def format_sig3(value: float) -> str:
     return f"{rounded:.{max(0, 2 - exponent)}f}"
 
 
+def database_source(results: Results, db: str) -> str:
+    """The source of a database: its info's, else its first entry's, else `ci`."""
+    info = results.databases.get(db)
+    if info is not None:
+        return info.source
+    return next((e.source for e in results.entries if e.database == db), "ci")
+
+
+def _source_index(source: str) -> int:
+    return SOURCES.index(source) if source in SOURCES else len(SOURCES)
+
+
 def all_databases(results: Results) -> list[str]:
-    """Every database in the results, from `databases` and the entries, in column order."""
+    """Every database in the results, from `databases` and the entries, in column order: the CI databases
+    (`ordered_databases`), then the local snapshot's."""
     names: Sequence[str] = [*results.databases, *(e.database for e in results.entries)]
-    return ordered_databases(names)
+    return sorted(ordered_databases(names), key=lambda n: _source_index(database_source(results, n)))
+
+
+def local_databases(results: Results) -> list[str]:
+    """The databases of the results that are not from CI, in column order."""
+    return [db for db in all_databases(results) if database_source(results, db) != "ci"]
+
+
+def column_name(results: Results, db: str) -> str:
+    """The display name of a database, with `LOCAL_MARK` when it is not from CI."""
+    name = safe_display_name(db)
+    return name if database_source(results, db) == "ci" else name + LOCAL_MARK

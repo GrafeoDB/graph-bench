@@ -1,28 +1,57 @@
-"""The newest stable Grafeo release on PyPI, for the release-post workflow.
+"""The newest stable release of a PyPI package: Grafeo's for the release-post workflow, the databases' for
+`graph-bench local-check`.
 
-`python -m graph_bench.release latest` prints it; `newer LATEST POSTED` exits 0 when LATEST is strictly newer
-(numeric order). Pre-releases (a, b, rc, dev, post and local versions) and releases whose files are all yanked
-are ignored.
+`python -m graph_bench.release latest` prints Grafeo's; `newer LATEST POSTED` exits 0 when LATEST is strictly newer
+(numeric order). Pre-releases (a, b, rc, dev and local versions) and releases whose files are all yanked are
+ignored, and so are post releases unless asked for (`post=True`: arcadedb-embedded publishes `.postN` releases,
+which an install of the newest stable picks).
 """
 
 import json
 import re
 import sys
+import urllib.parse
 import urllib.request
 from typing import Any
 
-PYPI_URL = "https://pypi.org/pypi/grafeo/json"
+PYPI_URL = "https://pypi.org/pypi/{package}/json"
 _STABLE = re.compile(r"\d+(\.\d+)*")
+_POST = re.compile(r"(\d+(?:\.\d+)*)(?:\.post(\d+))?")
 
 
-def newest_stable(releases: dict[str, list[dict[str, Any]]]) -> str | None:
-    """The highest stable version among PyPI's `releases` mapping (version -> files), or None."""
+def _order(version: str) -> tuple[tuple[int, ...], int]:
+    """Numeric order of a stable or post version: release numbers with trailing zeros dropped (1.0.post1 is
+    1.0.0.post1), then the post number (-1 for none)."""
+    match = _POST.fullmatch(version)
+    assert match is not None
+    return _trim(tuple(int(p) for p in match.group(1).split("."))), int(match.group(2)) if match.group(2) else -1
+
+
+def newest_stable(releases: dict[str, list[dict[str, Any]]], *, post: bool = False) -> str | None:
+    """The highest stable version among PyPI's `releases` mapping (version -> files), or None; with `post`, post
+    releases (`1.2.post1`) count too."""
+    pattern = _POST if post else _STABLE
     stable = [
         version
         for version, files in releases.items()
-        if _STABLE.fullmatch(version) and any(not f.get("yanked", False) for f in files)
+        if pattern.fullmatch(version) and any(not f.get("yanked", False) for f in files)
     ]
-    return max(stable, key=lambda v: tuple(int(p) for p in v.split(".")), default=None)
+    return max(stable, key=_order, default=None)
+
+
+def same_version(a: str, b: str) -> bool:
+    """Whether two versions are equal, trailing zeros aside (0.6 equals 0.6.0); else plain string equality."""
+    if _POST.fullmatch(a) and _POST.fullmatch(b):
+        (nums_a, post_a), (nums_b, post_b) = _order(a), _order(b)
+        return (_trim(nums_a), post_a) == (_trim(nums_b), post_b)
+    return a == b
+
+
+def _trim(parts: tuple[int, ...]) -> tuple[int, ...]:
+    trimmed = list(parts)
+    while len(trimmed) > 1 and trimmed[-1] == 0:
+        trimmed.pop()
+    return tuple(trimmed)
 
 
 def parse_stable(version: str) -> tuple[int, ...]:
@@ -42,12 +71,14 @@ def is_newer(latest: str, posted: str) -> bool:
     return parse_stable(latest) > parse_stable(posted.strip())
 
 
-def fetch_latest(url: str = PYPI_URL) -> str:
-    with urllib.request.urlopen(url, timeout=30) as response:
+def fetch_latest(package: str = "grafeo", *, post: bool = False) -> str:
+    """The newest stable release of `package` on PyPI (`newest_stable`); raises OSError on a network error and
+    ValueError when there is none."""
+    with urllib.request.urlopen(PYPI_URL.format(package=urllib.parse.quote(package, safe="")), timeout=30) as response:
         releases = json.load(response)["releases"]
-    version = newest_stable(releases)
+    version = newest_stable(releases, post=post)
     if version is None:
-        raise ValueError("PyPI lists no stable grafeo release")
+        raise ValueError(f"PyPI lists no stable {package} release")
     return version
 
 

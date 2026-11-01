@@ -15,7 +15,7 @@ from graph_bench import databases
 from graph_bench.cli import app
 from graph_bench.databases.base import DatabaseInfo
 from graph_bench.results import Entry, Results
-from graph_bench.runner import supervisor
+from graph_bench.runner import STARTUP_CHILD_TIMEOUT_S, supervisor
 from graph_bench.runner.supervisor import apply_budget_rule, run_bench
 from graph_bench.suites import catalog
 from graph_bench.suites.catalog import Case
@@ -135,16 +135,27 @@ def test_supervisor_metadata(two_dbs: tuple[Results, list[list[str]], Path]) -> 
     assert results.machine["cores"] > 0
     assert results.machine["cpu"]
     assert results.machine["os"]
-    assert results.grafeo["source"] == "pypi"
+    # The installed grafeo: "pypi", or for a direct-url build (a local wheel) its path.
+    direct = supervisor._installed_direct_url()
+    expected = "pypi" if direct is None else str(supervisor._url_path(direct["url"]) or direct["url"])
+    assert results.grafeo["source"] == expected
     assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", results.started_at)
 
 
-def _grafeo_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, installed: str) -> dict[str, str]:
-    """Write `.graph-bench/grafeo.json` for version 0.6.1.dev0 in the cwd and fake the installed grafeo version."""
+def _grafeo_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    installed: str,
+    source: str = "git",
+    direct: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    """Write `.graph-bench/grafeo.json` for version 0.6.1.dev0 (recording `source`) in the cwd, and fake the
+    installed grafeo: its version and its `direct_url.json` (None: a registry install)."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(supervisor.importlib.metadata, "version", lambda name: installed)
+    monkeypatch.setattr(supervisor, "_installed_direct_url", lambda: direct)
     (tmp_path / ".graph-bench").mkdir()
-    doc = {"version": "0.6.1.dev0", "source": "git", "sha": "abc123", "git_sha": "abc123"}
+    doc = {"version": "0.6.1.dev0", "source": source, "sha": "abc123", "git_sha": "abc123"}
     (tmp_path / ".graph-bench" / "grafeo.json").write_text(json.dumps(doc), encoding="utf-8")
     return doc
 
@@ -158,6 +169,35 @@ def test_grafeo_source_ignores_a_stale_file(tmp_path: Path, monkeypatch: pytest.
     """A later `uv sync` replaced the recorded build: the installed version wins, from PyPI."""
     _grafeo_file(tmp_path, monkeypatch, installed="0.6.0")
     assert supervisor.grafeo_source() == {"version": "0.6.0", "source": "pypi", "sha": None, "git_sha": None}
+
+
+def test_grafeo_source_checks_the_installed_direct_url(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Same version, but another wheel installed directly (as e8b04ed2 over a recorded 639bc2e): the installed
+    build is reported, by its local path. The recorded wheel itself, or a wheel `setup` built from a recorded
+    checkout, keeps the file's record."""
+    recorded = tmp_path / "wheels-639bc2e" / "grafeo-0.6.1.dev0-cp312-abi3-win_amd64.whl"
+    other = tmp_path / "wheels-e8b04ed" / "grafeo-0.6.1.dev0-cp312-abi3-win_amd64.whl"
+    direct = {"url": other.as_uri(), "archive_info": {}}
+    _grafeo_file(tmp_path, monkeypatch, "0.6.1.dev0", source=str(recorded), direct=direct)
+    assert supervisor.grafeo_source() == {"version": "0.6.1.dev0", "source": str(other), "sha": None, "git_sha": None}
+    monkeypatch.setattr(supervisor, "_installed_direct_url", lambda: {"url": recorded.as_uri(), "archive_info": {}})
+    assert supervisor.grafeo_source()["source"] == str(recorded)
+    assert supervisor.grafeo_source()["git_sha"] == "abc123"
+    built = tmp_path / ".graph-bench" / "wheels" / "grafeo-0.6.1.dev0-cp312-abi3-win_amd64.whl"
+    monkeypatch.setattr(supervisor, "_installed_direct_url", lambda: {"url": built.as_uri(), "archive_info": {}})
+    (tmp_path / ".graph-bench" / "grafeo.json").unlink()
+    checkout = _grafeo_file_doc(tmp_path, str(tmp_path / "grafeo"))
+    assert supervisor.grafeo_source() == checkout
+    vcs = {"url": "https://github.com/GrafeoDB/grafeo", "vcs_info": {"vcs": "git", "commit_id": "e8b04ed2"}}
+    monkeypatch.setattr(supervisor, "_installed_direct_url", lambda: vcs)
+    assert supervisor.grafeo_source()["source"] == "https://github.com/GrafeoDB/grafeo"
+
+
+def _grafeo_file_doc(tmp_path: Path, source: str) -> dict[str, str]:
+    """Write `.graph-bench/grafeo.json` (version 0.6.1.dev0, recording `source`) in `tmp_path`; the record."""
+    doc = {"version": "0.6.1.dev0", "source": source, "sha": "abc123", "git_sha": "abc123"}
+    (tmp_path / ".graph-bench" / "grafeo.json").write_text(json.dumps(doc), encoding="utf-8")
+    return doc
 
 
 def test_supervisor_marks_wrong_answer(two_dbs: tuple[Results, list[list[str]], Path]) -> None:
@@ -219,6 +259,57 @@ def test_in_run_floor_keeps_cold_first_runs() -> None:
     meta = supervisor._expected(catalog.selection("push"), "fake", 1)
     fast = [_entry("a", 1), _entry("b", 2), _entry("c", 3)]
     assert set(supervisor._budgets(fast, "fake", meta).values()) == {supervisor.IN_RUN_FLOOR_S}
+
+
+def test_yardstick_sets_the_in_run_budget(bench_env: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`--yardstick FILE`: earlier databases' results.json from another job seed the in-run budget exactly as
+    earlier databases of the same run would. They add no entry or database to this run, and the final 10x rule
+    does not compare with them (that runs once at `graph-bench merge`): with 1 ns yardsticks a 10x rule over them
+    would mark every fake case."""
+    launches = _recording_launches(bench_env)
+    earlier = _results([_entry("a", 1e-6), _entry("b", 1e-6), _entry("c", 1e-6), _entry("d", 1e-6, answer="disagree")])
+    first = tmp_path / "a.json"
+    earlier.write(first)
+    second = tmp_path / "b.json"
+    _results([_entry("e", 1e-6)]).write(second)
+    out = tmp_path / "out"
+    argv = ["bench", "--selection", "push", "--db", "fake", "--out", str(out)]
+    result = CliRunner().invoke(app, [*argv, "--yardstick", str(first), "--yardstick", str(second)])
+    assert result.exit_code == 0, result.output
+    meta = supervisor._expected(catalog.selection("push"), "fake", 1)
+    expected = supervisor._budgets([*earlier.entries, _entry("e", 1e-6)], "fake", meta)
+    assert expected == {_id("snb_ic13"): supervisor.IN_RUN_FLOOR_S}
+    budget = launches[0][launches[0].index("--budget") + 1 :]
+    assert budget == [f"{i}={s!r}" for i, s in expected.items()]
+    results = Results.read(out / "results.json")
+    assert set(results.databases) == {"fake"}
+    assert {e.database for e in results.entries} == {"fake"}
+    assert _by_id(results)[_id("snb_ic13")].status == "ok"
+
+
+def test_yardstick_must_match_the_run(bench_env: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A yardstick of another selection or mode, or a missing file, stops the command before anything runs."""
+    launches = _recording_launches(bench_env)
+    other_selection = tmp_path / "full.json"
+    dataclasses.replace(_results([_entry("a", 1)]), selection="full").write(other_selection)
+    other_mode = tmp_path / "codspeed.json"
+    _results([_entry("a", 1)], mode="codspeed").write(other_mode)
+    out = tmp_path / "out"
+    for command, path, words in [
+        ("bench", other_selection, ("selection", "full", "push")),
+        ("bench", other_mode, ("mode", "codspeed", "bench")),
+        ("codspeed", tmp_path / "missing.json", ("missing.json",)),
+    ]:
+        argv = [command, "--selection", "push", "--db", "fake", "--out", str(out), "--yardstick", str(path)]
+        result = CliRunner().invoke(app, argv)
+        assert result.exit_code == 2, result.output
+        assert all(word in result.output for word in words), result.output
+        if path.exists():
+            assert path.name in result.output
+    assert launches == []
+    assert not (out / "results.json").exists()
+    with pytest.raises(ValueError, match="selection"):
+        supervisor.check_yardstick(Results.read(other_selection), "push", "bench")
 
 
 def test_in_run_cutoff_kills_a_slow_preflight(bench_env: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -458,16 +549,38 @@ def test_load_ql_crash_does_not_fail_the_cases(bench_env: pytest.MonkeyPatch, tm
 
 
 def test_startup_hang_is_a_timeout_without_cascade(bench_env: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """The worker kills a silent startup child at half the case timeout (at most `STARTUP_TIMEOUT_S`), before
-    the supervisor's silence limit, so no child outlives its worker; the entry is ⏱ and nothing else is touched."""
+    """The worker kills a silent startup child at its own fixed limit (`STARTUP_CHILD_TIMEOUT_S`, patched to 6 s),
+    independent of the silence limit: with a 3 s silence limit the supervisor still waits during the Startup row,
+    so the worker kills its child first and no child outlives its worker; the entry is ⏱ and nothing else is
+    touched."""
     bench_env.setenv("GRAPH_BENCH_FAKE", "hang:startup")
-    results = run_bench("push", ["fake"], tmp_path / "out", workdir=tmp_path / "work", case_timeout_s=HANG_TIMEOUT_S)
+    bench_env.setattr(supervisor, "STARTUP_CHILD_TIMEOUT_S", 6.0)
+    results = run_bench("push", ["fake"], tmp_path / "out", workdir=tmp_path / "work", case_timeout_s=3.0)
     entries = _by_id(results)
     assert set(entries) == _expected_ids("fake")
     hung = entries.pop(catalog.startup_id("fake", 1))
     assert (hung.status, hung.category, hung.scale) == ("timeout", "startup", "empty")
-    assert hung.error == f"startup child 1 gave no answer within {HANG_TIMEOUT_S / 2:g} s"
+    assert hung.error == "startup child 1 gave no answer within 6 s"  # not "no output for 3 s"
     assert all(e.status == "ok" for e in entries.values()), [e for e in entries.values() if e.status != "ok"]
+
+
+def test_startup_child_limit_is_fixed() -> None:
+    """The startup child limit is its own constant (120 s), passed to the worker and to pytest whatever the
+    silence limit."""
+    assert STARTUP_CHILD_TIMEOUT_S == 120.0
+    request = supervisor.LaunchRequest(
+        db="fake",
+        selection="push",
+        threads=1,
+        workdir=Path("w"),
+        out=Path("o"),
+        case_timeout_s=7.0,
+        skip=[],
+        budgets={},
+    )
+    worker, pytest_ = supervisor.worker_argv(request), supervisor.pytest_argv(request)
+    assert worker[worker.index("--startup-timeout") + 1] == "120.0"
+    assert pytest_[pytest_.index("--gb-startup-timeout") + 1] == "120.0"
 
 
 def test_budget_rule_exempts_loads() -> None:
@@ -593,3 +706,337 @@ def test_budget_rule_exempts_answer_only_items() -> None:
     ]
     assert set(supervisor._budgets(earlier, "fake", meta)) == {a1}
     assert not [i for i in meta if "multigraph" in i]  # no Load or Load (query language) entry for the fixture
+
+
+def _recording_launches(mp: pytest.MonkeyPatch) -> list[list[str]]:
+    launches: list[list[str]] = []
+    launch = supervisor._launch
+
+    def recording(argv: list[str], *args: Any) -> Any:
+        launches.append(list(argv))
+        return launch(argv, *args)
+
+    mp.setattr(supervisor, "_launch", recording)
+    return launches
+
+
+def test_case_over_the_ceiling_is_too_slow(bench_env: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Cooperative path: `slow:snb_is2` takes 2 s per run (10 bindings at 0.2 s), past a 1 s ceiling already in
+    its preflight; the worker then starts no further run, records ⏱ "too slow: over 1 s" itself and goes on, so the
+    worker is never killed or relaunched. The grace is long, so only the worker can have stopped it."""
+    bench_env.setenv("GRAPH_BENCH_FAKE", "slow:snb_is2")
+    bench_env.setattr(supervisor, "CASE_CEILING_S", 1.0)
+    bench_env.setattr(supervisor, "CEILING_GRACE_S", 30.0)
+    launches = _recording_launches(bench_env)
+    results = run_bench("push", ["fake"], tmp_path / "out", workdir=tmp_path / "work", case_timeout_s=60)
+    entries = _by_id(results)
+    slow = entries.pop(_id("snb_is2"))
+    assert (slow.status, slow.error, slow.answer) == ("timeout", "too slow: over 1 s", "agree"), slow
+    assert slow.timing is None
+    assert slow.preflight_ns is not None and slow.preflight_ns > 1e9
+    assert len(launches) == 1
+    assert "--case-ceiling" in launches[0] and launches[0][launches[0].index("--case-ceiling") + 1] == "1.0"
+    assert all(e.status == "ok" for e in entries.values()), [e for e in entries.values() if e.status != "ok"]
+
+
+# A stand-in worker: argv is out file, bench id. Its preflight returns at once; then one single call (a timed run)
+# stays silent for 5 s.
+_LONG_CALL_WORKER = """\
+import json, sys, time
+out, bench_id = sys.argv[1:3]
+def emit(**line):
+    with open(out, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(line) + "\\n")
+emit(kind="database", name="fake", version="1", process="in-process", threads_configurable=False,
+     threads_note="", storage="in-memory")
+emit(kind="start", id=bench_id)
+emit(kind="run", id=bench_id)
+time.sleep(5.0)  # the database call: nothing comes between `run` and `progress`
+emit(kind="progress", id=bench_id)
+emit(kind="entry", id=bench_id, status="ok", answer="agree", preflight_ns=1000)
+"""
+
+
+def test_single_call_past_the_ceiling_is_killed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hard path: a single call that runs past the ceiling (and its grace) cannot be stopped in the worker, so the
+    supervisor kills it there, well inside the silence limit, records ⏱ "too slow: over ..." and relaunches."""
+    monkeypatch.setattr(supervisor, "CASE_CEILING_S", 0.5)
+    monkeypatch.setattr(supervisor, "CEILING_GRACE_S", 0.2)
+    sel = catalog.selection("push")
+    run = supervisor._Run(sel, tmp_path, tmp_path, 30.0, _results([]))
+    meta = supervisor._expected(sel, "fake", 1)
+    bench_id = _id("snb_is2")
+    out = tmp_path / "worker.jsonl"
+    argv = [sys.executable, "-c", _LONG_CALL_WORKER, str(out), bench_id]
+    started = time.monotonic()
+    attempt = run._attempt(argv, dict(os.environ), out, tmp_path / "worker.log", "fake", meta, {})
+    assert time.monotonic() - started < 4.5
+    assert (attempt.hung, attempt.over, attempt.pending) == (True, "case", bench_id)
+    assert run._settle(attempt, meta)  # relaunch for the rest
+    assert (run.recorded[bench_id].status, run.recorded[bench_id].error) == ("timeout", "too slow: over 0.5 s")
+
+
+def test_first_database_gets_the_ceiling(bench_env: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The first database has no in-run budgets (no earlier databases), yet a hung case stops at the ceiling, not
+    at the silence limit; the relaunched worker runs the rest."""
+    bench_env.setenv("GRAPH_BENCH_FAKE", "hang:snb_is4")
+    bench_env.setattr(supervisor, "CASE_CEILING_S", 1.0)
+    bench_env.setattr(supervisor, "CEILING_GRACE_S", 0.5)
+    launches = _recording_launches(bench_env)
+    started = time.monotonic()
+    results = run_bench("push", ["fake"], tmp_path / "out", workdir=tmp_path / "work", case_timeout_s=120)
+    assert time.monotonic() - started < 120
+    assert all("--budget" not in argv for argv in launches)
+    assert len(launches) == 2
+    entries = _by_id(results)
+    assert set(entries) == _expected_ids("fake")
+    hung = entries.pop(_id("snb_is4"))
+    assert (hung.status, hung.error, hung.timing) == ("timeout", "too slow: over 1 s", None)
+    assert all(e.status == "ok" for e in entries.values()), [e for e in entries.values() if e.status != "ok"]
+
+
+def test_load_over_the_ceiling_marks_the_dataset(bench_env: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A load still running at the load ceiling is killed: its Load entry, every case of that dataset and store,
+    the dataset's Load (query language) entry and its Memory and Disk record are ⏱ "load over ..." without being
+    run; the RDF store's load and the other datasets run as usual."""
+    bench_env.setenv("GRAPH_BENCH_FAKE", "hang:load_snb")
+    bench_env.setitem(catalog.SELECTIONS, "push", dataclasses.replace(catalog.SELECTIONS["push"], resources=True))
+    bench_env.setattr(supervisor, "LOAD_CEILING_S", 1.0)
+    bench_env.setattr(supervisor, "CEILING_GRACE_S", 0.5)
+    launches = _recording_launches(bench_env)
+    results = run_bench("push", ["fake"], tmp_path / "out", workdir=tmp_path / "work", case_timeout_s=60)
+    entries = _by_id(results)
+    assert set(entries) == _expected_ids("fake")
+    over = ("timeout", "load over 1 s")
+    load_id = catalog.load_id("snb", "fake", "small", 1)
+    assert (entries[load_id].status, entries[load_id].error) == over
+    ql_id = catalog.load_ql_id("snb", "fake", "small", 1)
+    assert (entries[ql_id].status, entries[ql_id].error) == over
+    graph_cases = {i.id for i in catalog.ITEMS if (i.dataset, i.store) == ("snb", "graph")}
+    for entry in entries.values():
+        if entry.id in (load_id, ql_id):
+            continue
+        if entry.benchmark in graph_cases:
+            assert (entry.status, entry.error) == over, entry
+        else:
+            assert entry.status == "ok", entry
+    records = {r.id: r for r in results.resources}
+    snb = records[catalog.resource_id("snb", "fake", "small", 1, "graph")]
+    assert (snb.status, snb.error, snb.peak_bytes) == ("timeout", "load over 1 s", None)
+    assert records[catalog.resource_id("snb", "fake", "small", 1, "rdf")].status == "ok"
+    assert len(launches) == 2
+
+
+# A stand-in worker for the deadline tests: argv is out file, bench id, seconds the case runs. It writes the `start`
+# and, after that time, the `entry` line of one case, then stays silent for 30 s (as a worker between cases would).
+_ONE_CASE_WORKER = """\
+import json, sys, time
+out, bench_id, seconds = sys.argv[1], sys.argv[2], float(sys.argv[3])
+def emit(**line):
+    with open(out, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(line) + "\\n")
+emit(kind="database", name="fake", version="1", process="in-process", threads_configurable=False,
+     threads_note="", storage="in-memory")
+emit(kind="start", id=bench_id)
+time.sleep(seconds)
+emit(kind="entry", id=bench_id, status="ok", answer="agree", preflight_ns=1000)
+time.sleep(30)
+"""
+
+
+def _deadline_run(tmp_path: Path, deadline_s: float) -> supervisor._Run:
+    run = supervisor._Run(catalog.selection("push"), tmp_path, tmp_path, 30.0, _results([]))
+    run.deadline_s = deadline_s
+    run.deadline_at = time.monotonic() + deadline_s
+    return run
+
+
+def test_deadline_marks_the_remaining_cases(bench_env: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A deadline that has passed before a database starts: no worker is launched, every id of the database is
+    ⏱ "run deadline: ..."; a database whose worker is between cases at the deadline is stopped there and its
+    unrecorded ids are marked the same way, the recorded one keeps its verdict."""
+    launches = _recording_launches(bench_env)
+    results = run_bench("push", ["fake"], tmp_path / "out", workdir=tmp_path / "work", deadline_s=0)
+    assert launches == []
+    assert set(_by_id(results)) == _expected_ids("fake")
+    for entry in results.entries:
+        assert (entry.status, entry.error) == ("timeout", "run deadline: 0 s"), entry
+
+    sel = catalog.selection("push")
+    run = _deadline_run(tmp_path, 1.0)
+    meta = supervisor._expected(sel, "fake", 1)
+    bench_id = _id("snb_is2")
+    out = tmp_path / "worker.jsonl"
+    argv = [sys.executable, "-c", _ONE_CASE_WORKER, str(out), bench_id, "0.1"]
+    started = time.monotonic()
+    attempt = run._attempt(argv, dict(os.environ), out, tmp_path / "worker.log", "fake", meta, {})
+    assert time.monotonic() - started < 10
+    assert attempt.deadline and not attempt.hung
+    assert not run._settle(attempt, meta)  # nothing is relaunched
+    assert run.recorded[bench_id].status == "ok"
+    assert set(run.recorded) == set(meta)
+    for other, entry in run.recorded.items():
+        if other != bench_id:
+            assert (entry.status, entry.error) == ("timeout", "run deadline: 1 s"), entry
+
+
+def test_worker_argv_passes_the_deadline() -> None:
+    """A bench worker gets the deadline as codspeed's pytest does, and stops before a new case or load past it."""
+    request = supervisor.LaunchRequest("fake", "push", 1, Path("w"), Path("o.jsonl"), 5.0, [], {}, deadline_at=123.5)
+    argv = supervisor.worker_argv(request)
+    assert argv[argv.index("--deadline-at") + 1] == "123.5"
+    assert "--deadline-at" not in supervisor.worker_argv(dataclasses.replace(request, deadline_at=None))
+    from graph_bench.runner import worker
+
+    assert worker._parser().parse_args(argv[3:]).deadline_at == 123.5
+
+
+_DEADLINE_WORKER = """\
+import json, sys
+out, bench_id = sys.argv[1], sys.argv[2]
+with open(out, "a", encoding="utf-8") as fh:
+    for line in [
+        dict(kind="database", name="fake", version="1", process="in-process", threads_configurable=False,
+             threads_note="", storage="in-memory"),
+        dict(kind="start", id=bench_id),
+        dict(kind="entry", id=bench_id, status="ok", answer="agree", preflight_ns=1000),
+        dict(kind="deadline"),
+    ]:
+        fh.write(json.dumps(line) + "\\n")
+"""
+
+
+def test_worker_stopped_at_the_deadline_marks_the_rest(tmp_path: Path) -> None:
+    """A worker that writes a `deadline` line and exits 0 stopped at the run deadline: the recorded case keeps its
+    verdict, the rest are ⏱ "run deadline", and nothing is relaunched (not "exited without a result")."""
+    meta = supervisor._expected(catalog.selection("push"), "fake", 1)
+    run = _deadline_run(tmp_path, 3600.0)
+    bench_id = _id("snb_is2")
+    out = tmp_path / "worker.jsonl"
+    argv = [sys.executable, "-c", _DEADLINE_WORKER, str(out), bench_id]
+    attempt = run._attempt(argv, dict(os.environ), out, tmp_path / "worker.log", "fake", meta, {})
+    assert attempt.deadline and attempt.code == 0
+    assert not run._settle(attempt, meta)
+    assert run.recorded[bench_id].status == "ok"
+    assert set(run.recorded) == set(meta)
+    for other, entry in run.recorded.items():
+        if other != bench_id and meta[other].supported:
+            assert (entry.status, entry.error) == ("timeout", "run deadline: 60 min"), entry
+
+
+def test_deadline_over_names_whole_minutes_only() -> None:
+    """A deadline that is a whole number of minutes is named in minutes, any other in seconds."""
+    assert supervisor.deadline_over(48 * 60) == "run deadline: 48 min"
+    assert supervisor.deadline_over(60) == "run deadline: 1 min"
+    assert supervisor.deadline_over(90) == "run deadline: 90 s"
+    assert supervisor.deadline_over(60.5) == "run deadline: 60.5 s"
+    assert supervisor.deadline_over(1) == "run deadline: 1 s"
+
+
+def test_deadline_writes_results(bench_env: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """results.json is written as usual when the deadline has passed, with every entry and Memory and Disk record
+    of the database marked, and the CLI takes `--deadline-s`."""
+    bench_env.setitem(catalog.SELECTIONS, "push", dataclasses.replace(catalog.SELECTIONS["push"], resources=True))
+    out = tmp_path / "out"
+    result = CliRunner().invoke(
+        app, ["bench", "--selection", "push", "--db", "fake", "--out", str(out), "--deadline-s", "0.001"]
+    )
+    assert result.exit_code == 0, result.output
+    results = Results.read(out / "results.json")
+    assert {e.id for e in results.entries} == _expected_ids("fake")
+    assert {(e.status, e.error) for e in results.entries} == {("timeout", "run deadline: 0.001 s")}
+    assert results.resources and {(r.status, r.error) for r in results.resources} == {
+        ("timeout", "run deadline: 0.001 s")
+    }
+
+
+@pytest.mark.parametrize("command", ["bench", "codspeed"])
+def test_deadline_message_names_the_total(bench_env: pytest.MonkeyPatch, tmp_path: Path, command: str) -> None:
+    """CI passes what is left of the deadline as `--deadline-s` (the cutoff) and the whole deadline as
+    `--deadline-total-s`, which the ⏱ message names: "run deadline: 48 min", not the seconds left. Without it the
+    message names `--deadline-s`; on its own it is refused."""
+    launches = _recording_launches(bench_env)
+    out = tmp_path / command
+    argv = [command, "--selection", "push", "--db", "fake", "--out", str(out), "--deadline-s", "0"]
+    result = CliRunner().invoke(app, [*argv, "--deadline-total-s", "2880"])
+    assert result.exit_code == 0, result.output
+    assert launches == []  # the cutoff is still `--deadline-s`
+    results = Results.read(out / "results.json")
+    assert {(e.status, e.error) for e in results.entries if e.status != "not_supported"} == {
+        ("timeout", "run deadline: 48 min")
+    }
+    alone = CliRunner().invoke(app, [command, "--selection", "push", "--db", "fake", "--deadline-total-s", "2880"])
+    assert alone.exit_code == 2
+
+
+def test_deadline_zero_still_writes_results(bench_env: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`--deadline-s 0`, what CI passes when the job's setup took the whole deadline: the command exits 0 without
+    launching a worker and writes results.json with every case ⏱ "run deadline: 0 s"."""
+    launches = _recording_launches(bench_env)
+    out = tmp_path / "out"
+    argv = ["bench", "--selection", "push", "--db", "fake", "--out", str(out), "--deadline-s", "0"]
+    result = CliRunner().invoke(app, argv)
+    assert result.exit_code == 0, result.output
+    assert launches == []
+    results = Results.read(out / "results.json")
+    assert {e.id for e in results.entries} == _expected_ids("fake")
+    assert {(e.status, e.error) for e in results.entries} == {("timeout", "run deadline: 0 s")}
+
+
+def test_running_case_keeps_its_ceiling_past_the_deadline(tmp_path: Path) -> None:
+    """A case that started before the deadline is not cut at it: it records its own entry, and only then does the
+    run stop."""
+    sel = catalog.selection("push")
+    run = _deadline_run(tmp_path, 1.0)
+    meta = supervisor._expected(sel, "fake", 1)
+    bench_id = _id("snb_is2")
+    out = tmp_path / "worker.jsonl"
+    argv = [sys.executable, "-c", _ONE_CASE_WORKER, str(out), bench_id, "2.5"]
+    started = time.monotonic()
+    attempt = run._attempt(argv, dict(os.environ), out, tmp_path / "worker.log", "fake", meta, {})
+    assert time.monotonic() - started > 2.4  # waited for the case, well past the 1 s deadline
+    assert attempt.deadline
+    assert (run.recorded[bench_id].status, run.recorded[bench_id].error) == ("ok", None)
+
+
+def _expired_run(tmp_path: Path, runner: supervisor.Runner = supervisor.WORKER) -> supervisor._Run:
+    run = supervisor._Run(catalog.selection("push"), tmp_path, tmp_path, 30.0, _results([]), runner)
+    run.deadline_s, run.deadline_at = 60.0, time.monotonic() - 1
+    return run
+
+
+def test_codspeed_failed_session_marks_the_skipped_cases_run_deadline(tmp_path: Path) -> None:
+    """A pytest session that exits 1 because a case failed, then skipped the rest at the deadline: the failed case
+    keeps its verdict, the skipped ones are timeout "run deadline". A bench worker that exits 0 without results
+    stays "exited without a result"."""
+    meta = supervisor._expected(catalog.selection("push"), "fake", 1)
+    failed_id = _id("snb_is2")
+    run = _expired_run(tmp_path, supervisor.PYTEST)
+    run.record(meta[failed_id].entry(failed_id, status="failed", error="boom"))
+    assert not run._settle(supervisor._Attempt(code=supervisor.PYTEST_TESTS_FAILED), meta)
+    assert (run.recorded[failed_id].status, run.recorded[failed_id].error) == ("failed", "boom")
+    for bench_id, entry in run.recorded.items():
+        if bench_id != failed_id and meta[bench_id].supported:
+            assert (entry.status, entry.error) == ("timeout", "run deadline: 1 min"), entry
+    crashed = _expired_run(tmp_path, supervisor.PYTEST)
+    assert not crashed._settle(supervisor._Attempt(code=2), meta)
+    assert all(e.status != "timeout" for e in crashed.recorded.values() if meta[e.id].supported)
+
+    bench = _expired_run(tmp_path)
+    assert not bench._settle(supervisor._Attempt(code=0), meta)
+    errors = {e.error for e in bench.recorded.values() if meta[e.id].supported}
+    assert errors == {"worker exited without a result"}
+
+
+def test_known_load_verdict_survives_the_deadline(tmp_path: Path) -> None:
+    run = _expired_run(tmp_path)
+    run.sel = dataclasses.replace(run.sel, resources=True)
+    load_id = catalog.load_id("snb", "fake", "small", 1)
+    meta = supervisor._expected(run.sel, "fake", 1)
+    run.record(meta[load_id].entry(load_id, status="timeout", error=supervisor.load_over(supervisor.LOAD_CEILING_S)))
+    run._resources("fake", 1, None)
+    records = {r.id: r for r in run.results.resources}
+    snb = records[catalog.resource_id("snb", "fake", "small", 1, "graph")]
+    assert (snb.status, snb.error) == ("timeout", "load over 5 min")
+    rdf = records[catalog.resource_id("snb", "fake", "small", 1, "rdf")]
+    assert (rdf.status, rdf.error) == ("timeout", "run deadline: 1 min")

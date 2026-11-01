@@ -11,6 +11,7 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import Any, ClassVar, Literal
 
+from graph_bench.databases import PACKAGES
 from graph_bench.databases.base import Database, DatabaseInfo
 from graph_bench.datasets.schema import Dataset
 from graph_bench.types import Model
@@ -112,7 +113,7 @@ class TuringDatabase(Database):
         # runs with its own default.
         note = "TuringDB exposes no thread setting"
         # TuringDB has no in-memory mode: `data_dir` holds the graphs (https://docs.turingdb.ai/import_data/parquet).
-        return DatabaseInfo(self.name, version("turingdb"), "in-process", False, note, "on-disk")
+        return DatabaseInfo(self.name, version(PACKAGES[self.name]), "in-process", False, note, "on-disk")
 
     def _write_parquet(self, dataset: Dataset, directory: Any) -> None:
         import pyarrow as pa

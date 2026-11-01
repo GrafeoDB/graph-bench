@@ -167,12 +167,45 @@ From [FAIRNESS.md](FAIRNESS.md#adapter-rules), in short:
 
 `.github/workflows/release.yml` posts the results of each new stable Grafeo release to Discord. It runs daily and
 on demand, finds the newest stable `grafeo` on PyPI and compares it with `grafeo-version.txt` on the branch
-`bot/state`. A new version runs the `full` selection and posts through `graph-bench notify`, which reads the webhook
-URL from the repository secret `DISCORD_BENCH_WEBHOOK` (set under Settings, Secrets and variables, Actions). Only
-after a successful post does the job commit the version to `bot/state`. Without the secret the post and the state
-update are skipped with a log line. Never put the URL in the repository, a log or a test: tests use fake
-placeholders and a fake HTTP layer. To try it, run the workflow by hand with `force` set; to preview the payload,
-run `uv run --no-sync graph-bench report --format discord --in out/results.json`.
+`bot/state`. A new version runs the `full` selection, one job per roster database on the macro runner, each
+installing exactly that grafeo version, merges their results in a job on ubuntu-latest (`graph-bench merge`) and
+posts through `graph-bench notify`, which reads the webhook URL from the repository secret `DISCORD_BENCH_WEBHOOK`
+(set under Settings, Secrets and variables, Actions). Only after a successful post does the job commit the version
+to `bot/state`. Without the secret, or when Grafeo itself has no results, the post and the state update are
+skipped with a log line, so a later run posts the version. Never put the URL in the repository, a log or a test:
+tests use fake placeholders and a fake HTTP layer. To try it, run the workflow by hand with `force` set; to preview
+the payload, run `uv run --no-sync graph-bench report --format discord --in out/results.json`.
+
+## The local snapshot
+
+CI measures Grafeo against a fixed roster (`catalog.CI_DATABASES`). The other four databases of the README come
+from a local snapshot of all ten, `results/local/results.json`, refreshed by hand on the dev box and committed once
+it has been run. The first snapshot is committed after this release's pull request merges; until a snapshot is
+committed, `readme-results` merges no `--local` input and the README shows the CI roster only. One command
+produces it, with Docker running:
+
+```bash
+bash .github/scripts/local-bench.sh
+# Docker Desktop through another context:
+DOCKER="docker --context desktop-linux" bash .github/scripts/local-bench.sh
+```
+
+It runs `graph-bench bench --selection full` over every built-in database in one Linux (x86-64) container
+(`ubuntu:24.04`, with uv), at the newest stable release of each database (set `GRAFEO_VERSION` to pin grafeo). The
+repository is mounted read-only and copied in, and the run's output stays in the container until it ends, since
+appending to a Windows bind mount fails with ENODATA; only results.json is copied out. The dataset cache is kept
+in the Docker volume `graph-bench-local-cache`. Commit the new results.json; the next `readme-results` job of
+bench.yml merges its non-roster databases into the README section and `docs/results.md`
+(`graph-bench merge --local`), marked `†` and never budgeted or ranked against the CI columns.
+
+That job also runs `graph-bench local-check --local results/local/results.json`, which lists the snapshot's
+databases outside the roster whose newest stable release on PyPI (Neo4j: its pinned release in pins.py) differs
+from the version the snapshot measured, and raises a notice; refresh the snapshot when it does. It installs
+nothing; a failed lookup shows that database as unknown. To check by hand:
+
+```bash
+uv run --no-sync graph-bench local-check --local results/local/results.json
+```
 
 ## Style
 

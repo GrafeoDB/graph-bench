@@ -17,12 +17,12 @@ from typing import Any, ClassVar, Literal
 
 import arcadedb_embedded as adb
 
-from graph_bench.databases import jvm
+from graph_bench.databases import PACKAGES, jvm
 from graph_bench.databases.base import Database, DatabaseInfo, NotSupported
 from graph_bench.datasets.schema import Column, Dataset, EdgeTable
 from graph_bench.types import Model
 
-PACKAGE = "arcadedb-embedded"
+PACKAGE = PACKAGES["arcadedb"]
 # The single-thread settings, as JVM options. ArcadeDB documents them as engine settings
 # (https://docs.arcadedb.com/arcadedb/reference/settings), read from `-D` system properties at JVM start:
 # - queryParallelismPoolThreads: the JVM-wide pool behind query-time parallelism (graph algorithms, parallel index

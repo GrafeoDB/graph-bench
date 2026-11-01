@@ -82,12 +82,15 @@ CodSpeed records a benchmark as measured or skipped, so each marker maps to a fi
 | ⊘ | not available: the database lacks the capability or the data model | `not_supported` | skipped, `not available: ...` | absent |
 | ✗ | failing: an error or a crash | `failed` | failed, `error: ...` | Skipped if measured before, else absent |
 | ≠ | wrong answer: fails the answer check | `ok` / `disagree` | failed, `wrong answer: ...` | Skipped if measured before, else absent |
-| ⏱ | too slow: beyond 10x the average of the 3 fastest other databases | `timeout` | failed, `too slow: ...` | Skipped if measured before, else absent |
+| ⏱ | too slow: beyond 10x the average of the 3 fastest other databases; `over 60 s`: a case still running 60 s after it started (the case ceiling); `load over 5 min`: a load still running 5 minutes after it started, per Load row (one dataset in one store), which takes the cases that read that Load row's data with it (the load ceiling) | `timeout` | failed, `too slow: ...` | Skipped if measured before, else absent |
+| ⏱ `run deadline: 48 min` | not started: CI's run deadline had passed before the case, load or startup row could start (a run without `--deadline-s` has none) | `timeout` | skipped, `run deadline` | absent |
 
 Every benchmark first runs once, untimed: the preflight. The answer check and the time budget apply there, so a
 wrong or too slow result never reaches CodSpeed as a speed. One exception: a ⏱ assigned only by the final budget
 rule, applied after every database has run, comes after CodSpeed has measured the case. CodSpeed then shows that
-case as measured, while results.json and the matrix show ⏱. A ⏱ from the in-run cutoff is never measured. The
+case as measured, while results.json and the matrix show ⏱. A ⏱ from the in-run cutoff or a ceiling is never
+measured. The ceilings and the 5 s time box on timed runs are the same for every database
+([FAIRNESS.md](FAIRNESS.md), rule 9). The
 same holds for a load: its node and edge count check runs after CodSpeed timed it, so a load with ≠ shows as
 measured in CodSpeed.
 
@@ -126,19 +129,32 @@ uv run --no-sync graph-bench report --format summary --in out/results.json
 Selections:
 
 - `push`: small scale, the property graph core categories, single-threaded. Runs on every push to `main`.
-- `full`: every category and scale, single-threaded. Feeds the [Results](#results) section.
+- `full`: every category at medium scale, single-threaded. Feeds the [Results](#results) section. Small is
+  covered by `push`, which CodSpeed runs on every push; `full` runs medium only so it fits the CodSpeed runner's
+  hour.
 - `release` (planned): `full` plus LDBC Graphalytics' wiki-Talk graph, checked against LDBC's published
   validation outputs, for Grafeo release runs.
 
 `graph-bench codspeed --selection S --out DIR` is the CI entry point: one `pytest benches --codspeed` process
 per database, under the CodSpeed runner. `graph-bench data key --selection S` prints the dataset cache key.
+`--yardstick FILE` (on `bench` and `codspeed`, repeatable) takes the results.json of earlier databases on the same
+hardware: their correct results set the in-run budgets as earlier databases of the same run would. `graph-bench
+merge --out DIR IN...` merges results.json files of runs over different databases (same selection, mode,
+graph-bench commit and Grafeo) into one, as a single run over all of them would write it, and applies the final
+budget rule once; with `--db`, a listed database without an input shows as "no results". `--local FILE` adds the
+local snapshot's databases that are not in the inputs, tagged `local` (see [Results](#results)).
+`graph-bench report --format overview --in FILE --write docs/results.md` writes the full overview page, and
+`graph-bench local-check --local results/local/results.json` lists the snapshot's databases outside the roster
+whose newest stable release (Neo4j: its pinned release) differs from the version the snapshot measured.
 `GRAPH_BENCH_GRAFEO=<path>` installs that Grafeo at the start of `bench` and `codspeed`, like `--grafeo`.
 
 ### Grafeo's README summary
 
 grafeo's README carries a summary block (between `<!-- graph-bench:start -->` and `<!-- graph-bench:end -->`)
 with counts per category: how many databases took part, on how many benchmarks Grafeo was fastest, and its
-median rank. It names no other database; this README names them all. At each Grafeo release the pre-release
+median rank. It names no other database; this README names them all. Grafeo is ranked only against the databases
+of its own run: with the local snapshot merged in, the header counts its databases, marked `†`, and a footer line
+names its date and machine. The block links to `docs/results.md`. At each Grafeo release the pre-release
 checklist runs, locally:
 
 ```bash
@@ -159,20 +175,37 @@ one version string.
   which it does not replace. It measures the newest stable release of every database from PyPI, grafeo
   included (grafeo's own CodSpeed suite covers `main`): after the locked `uv sync` it upgrades the database
   packages (`graph-bench packages`) without touching `uv.lock`, and the job log lists the installed versions.
-  It runs the `push` selection on CodSpeed's
-  Graviton macro runner (`codspeed-macro-arm64-graviton-ubuntu-22-04`, arm64) in wall-time mode on every push to `main`, daily and on demand. The daily run also runs `full`
-  with `graph-bench bench` and opens a pull request on `bot/results` that updates the section below. The databases install one at a time
-  (`.github/scripts/install-databases.sh`), so a package without a build for the runner does not stop the job: FalkorDB
-  has no arm64 build for glibc 2.35 (falkordblite ships `manylinux_2_38` wheels only), so its cases show ✗ (not
-  installed). Needs the
-  CodSpeed app on graph-bench and codspeed-macro runners enabled for the org; authentication uses GitHub OIDC
-  (no token secret).
+  It runs the `push` selection on CodSpeed's Graviton macro runner (`codspeed-macro-arm64-graviton-ubuntu-22-04`,
+  arm64) in wall-time mode on every push to `main`, daily and on demand. The daily run also runs `full` with
+  `graph-bench bench` and opens a pull request on `bot/results` that updates the section below. The databases
+  install one at a time (`.github/scripts/install-databases.sh`), so a package without a build for the runner
+  does not stop the job. Needs the CodSpeed app on graph-bench and codspeed-macro runners enabled for the org;
+  authentication uses GitHub OIDC (no token secret).
+- **How the results are produced.** CI runs a fixed roster, `catalog.CI_DATABASES`: NeuG, LadybugDB, TuringDB,
+  Oxigraph, DuckDB + DuckPGQ and Grafeo, in that order. The macro runner dies about an hour after boot, so each
+  selection is a matrix with one job per database, each on a fresh box, one at a time: Grafeo runs last, so its
+  in-run budgets come from the others' results on the same hardware (each job passes the results of the jobs
+  before it in the roster as `--yardstick`, never a later one's, even on a re-run). The grafeo version is resolved
+  once per run and every job installs exactly it. Every job stops starting cases at the run deadline
+  (`--deadline-s`: what is left of 48 minutes counted from the job's start, so setup counts too, under the job's
+  55-minute timeout), so it always leaves its results.json; the cases it did not reach are ⏱ `run deadline: 48 min`
+  (`--deadline-total-s` names the whole deadline, not what was left). A final job on `ubuntu-latest` merges the jobs' results (`graph-bench merge`), which
+  applies the 10x budget rule once over all databases, so the markers are those of one run over the whole roster;
+  a job that left no results shows its database as ✗ "no results". The README job then mixes in the committed
+  local snapshot of all ten (`graph-bench merge --local`; its non-roster databases only, marked `†`), writes the
+  section and `docs/results.md`, and raises a notice listing the snapshot's databases whose newest stable release
+  differs from the version it measured (`graph-bench local-check`). A cancelled run merges nothing. A release run
+  whose merged results hold no Grafeo posts and records nothing, so the next daily run tries again. CodSpeed merges
+  the push jobs of one run itself. One concurrency group,
+  `macro-runner`, on both bench.yml and release.yml keeps their macro-runner jobs from ever running at once; a
+  newer queued run replaces an older pending one.
 - `.github/workflows/pins.yml`: weekly (and on demand), checks for a newer stable Neo4j Community release and a
   newer Temurin JRE of the Java major Neo4j requires, and opens a pull request on `bot/pins` that updates
   `graph_bench/databases/pins.py` (URLs and SHA-256 from the vendors' published checksums).
 - `.github/workflows/release.yml`: the release post. Daily (and on demand) it reads the newest stable `grafeo`
-  version on PyPI and compares it with the last one posted. When it is new, the job runs the `full` selection on the
-  same Graviton runner as above (through the shared `.github/actions/prepare` action) and posts the trigger line,
+  version on PyPI and compares it with the last one posted. When it is new, it runs the `full` selection on the
+  same Graviton runner as above, one job per roster database (through the shared `.github/actions/prepare` action),
+  merges their results on `ubuntu-latest` and posts the trigger line,
   the overview per category, Grafeo's fastest counts and links to the run and to the results section on Discord
   (`graph-bench report --format discord`, `graph-bench notify`). The last posted version lives in the file
   `grafeo-version.txt` on the branch `bot/state`, written with the job's `GITHUB_TOKEN` only after a successful
@@ -181,6 +214,13 @@ one version string.
   already posted.
 
 ## Results
+
+The table mixes two sources, never compared with each other. The CI columns come first: Grafeo and the fixed
+roster, measured by the scheduled `full` run on the Graviton runner. The other databases follow, each marked `†`:
+they come from the local snapshot of all ten (`results/local/results.json`, refreshed by hand, see
+CONTRIBUTING.md), and the footnote names its date and machine. Budgets and bold (the fastest) apply within each
+source only. [docs/results.md](docs/results.md) lists every database's version, source, machine and run date, with
+the complete per-case tables.
 
 <!-- results:start -->
 No results yet: this section is written by the scheduled `full` run (`graph-bench report --format readme`).

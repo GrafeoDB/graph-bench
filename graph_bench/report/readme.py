@@ -1,29 +1,34 @@
 """The results section of graph-bench's README: an overview, one detail table per category, the Memory and Disk
 tables and a footer.
 
-Every database is named here. Columns are Grafeo first, then the others alphabetically by display name. There
-is never a combined score across categories. Memory and Disk (results.json `resources`) are not categories: they
-appear in neither the overview nor the summary block.
+Every database is named here. Columns are Grafeo first, then the others alphabetically by display name; with a
+local snapshot merged in (`graph-bench merge --local`), its databases follow the CI ones, each marked `†`, with a
+footnote naming the snapshot's date and machine. Bold marks the fastest (or lowest) of each source, never across
+sources. There is never a combined score across categories. Memory and Disk (results.json `resources`) are not
+categories: they appear in neither the overview nor the summary block.
 """
 
 from collections import Counter
 from pathlib import Path
 
+from graph_bench.databases.base import DatabaseInfo
 from graph_bench.report.ranking import (
+    LOCAL_MARK,
     Ranked,
     all_databases,
     benchmark_key,
+    column_name,
     format_sig3,
     is_load,
     is_ranked,
+    local_databases,
     rank,
-    safe_display_name,
     scale_key,
     speed,
     title,
 )
-from graph_bench.report.summary import LEGEND, grafeo_label, machine_label
-from graph_bench.results import Entry, Resource, Results
+from graph_bench.report.summary import LEGEND, grafeo_text, local_run_label, machine_text
+from graph_bench.results import Entry, Resource, Results, Run
 from graph_bench.suites.catalog import answer_only, load_benchmark
 from graph_bench.types import CATEGORY_NAMES, LOAD_CATEGORIES, Category, marker
 
@@ -39,6 +44,20 @@ MEMORY_NOTE = (
 )
 
 Section = tuple[Category, str, int | None]  # category, scale, threads
+
+# Where the README links the overview page (`graph-bench report --format overview --write docs/results.md`).
+OVERVIEW_PATH = "docs/results.md"
+
+
+def local_footnote(results: Results) -> str | None:
+    """The footnote of the local columns, or None without a local snapshot."""
+    if not local_databases(results):
+        return None
+    return (
+        f"{LOCAL_MARK} From the local snapshot of {local_run_label(results)}, not from CI: these columns are"
+        " budgeted and ranked only among themselves, never against the CI columns, and bold marks the fastest of"
+        " each group."
+    )
 
 
 def _table(header: list[str], rows: list[list[str]]) -> list[str]:
@@ -121,10 +140,11 @@ def overview(results: Results) -> tuple[list[str], list[tuple[str, list[str]]]]:
     return dbs, _overview_rows(sections, by_key, dbs, with_scale=len(scales) > 1)
 
 
-def render_readme(results: Results) -> str:
-    """The text that goes between the README's results markers."""
+def render_readme(results: Results, *, overview_link: str | None = OVERVIEW_PATH) -> str:
+    """The text that goes between the README's results markers; `overview_link` is where the footer links the
+    overview page (None: no link, for the overview page itself)."""
     dbs = all_databases(results)
-    names = [safe_display_name(db) for db in dbs]
+    names = [column_name(results, db) for db in dbs]
     ranked = rank(results)
     sections = _sections(ranked)
     by_key: dict[tuple[str, str, int | None, str], Entry] = {
@@ -144,6 +164,9 @@ def render_readme(results: Results) -> str:
         " each marker.",
         "",
     ]
+    footnote = local_footnote(results)
+    if footnote is not None:
+        lines += [footnote, ""]
     overview_rows = [[label, *cells] for label, cells in _overview_rows(sections, by_key, dbs, with_scale=with_scale)]
     lines += _table(["Category", *names], overview_rows)
 
@@ -165,12 +188,16 @@ def render_readme(results: Results) -> str:
     if any(answer_only(e.benchmark) for e in results.entries):
         lines += ["", ANSWER_ONLY_NOTE]
     lines += ["", _run_line(results)]
+    if local_databases(results):
+        lines += ["", _local_run_line(results)]
     if results.mode == "codspeed":
         note = "Times are single preflight runs; CodSpeed holds the measured timings."
         if results.resources:
             note += " Memory and disk are graph-bench's own readings: CodSpeed holds no memory or disk data."
         lines += ["", note]
     lines += ["", *_table(["Database", "Version", "Process", "Storage", "Threads"], _database_rows(results, dbs))]
+    if overview_link is not None:
+        lines += ["", f"Every database's version, source, machine and run date: [{overview_link}]({overview_link})"]
     return "\n".join(lines) + "\n"
 
 
@@ -180,14 +207,15 @@ def _resource_ranked(r: Resource) -> bool:
 
 
 def _resource_row(label: str, records: dict[str, Resource], dbs: list[str], value: str) -> list[str]:
-    """One row: `value` (a `Resource` field, bytes) in MiB per database, the lowest bold; markers for records that
-    did not measure, and "in memory" for a missing disk size of an in-memory store."""
+    """One row: `value` (a `Resource` field, bytes) in MiB per database, the lowest of each source bold; markers
+    for records that did not measure, and "in memory" for a missing disk size of an in-memory store."""
     numbers: dict[str, int] = {}
+    lowest: dict[str, int] = {}
     for db, r in records.items():
         number = getattr(r, value)
         if _resource_ranked(r) and number is not None:
             numbers[db] = number
-    lowest = min(numbers.values(), default=None)
+            lowest[r.source] = min(number, lowest.get(r.source, number))
     cells = []
     for db in dbs:
         r = records.get(db)
@@ -197,7 +225,7 @@ def _resource_row(label: str, records: dict[str, Resource], dbs: list[str], valu
             cells.append(mark)
         elif db in numbers:
             text = format_sig3(numbers[db] / MIB)
-            cells.append(f"**{text}**" if numbers[db] == lowest else text)
+            cells.append(f"**{text}**" if numbers[db] == lowest[r.source] else text)
         else:
             cells.append(IN_MEMORY if value == "disk_bytes" and r.storage == "in-memory" else "")
     return [label, *cells]
@@ -224,17 +252,30 @@ def _resource_tables(results: Results, dbs: list[str], names: list[str]) -> list
     return lines
 
 
-def _run_line(results: Results) -> str:
+def run_text(run: Run) -> str:
+    """One run on one line: harness commit, Grafeo, machine, date, selection and mode."""
     return " · ".join(
         [
-            f"graph-bench {results.graph_bench_commit[:7]}",
-            grafeo_label(results),
-            machine_label(results),
-            results.started_at[:10],
-            f"selection {results.selection}",
-            f"{results.mode} mode",
+            f"graph-bench {run['graph_bench_commit'][:7]}",
+            grafeo_text(run["grafeo"]),
+            machine_text(run["machine"]),
+            run["started_at"][:10],
+            f"selection {run['selection']}",
+            f"{run['mode']} mode",
         ]
     )
+
+
+def _run_line(results: Results) -> str:
+    return run_text(results.run("ci"))
+
+
+def _local_run_line(results: Results) -> str:
+    return f"Local snapshot{LOCAL_MARK}: " + run_text(results.run("local"))
+
+
+def version_text(info: DatabaseInfo) -> str:
+    return info.version + (f" (Java {info.java})" if info.java else "")
 
 
 def _database_rows(results: Results, dbs: list[str]) -> list[list[str]]:
@@ -242,10 +283,9 @@ def _database_rows(results: Results, dbs: list[str]) -> list[list[str]]:
     for db in dbs:
         info = results.databases.get(db)
         if info is None:
-            rows.append([safe_display_name(db), "", "", "", ""])
+            rows.append([column_name(results, db), "", "", "", ""])
             continue
-        version = info.version + (f" (Java {info.java})" if info.java else "")
-        rows.append([safe_display_name(db), version, info.process, info.storage, info.threads_note])
+        rows.append([column_name(results, db), version_text(info), info.process, info.storage, info.threads_note])
     return rows
 
 

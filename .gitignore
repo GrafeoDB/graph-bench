@@ -46,6 +46,10 @@ log/
 
 # ── Results ───────────────────────────────────────────────────────────
 results/*
+# The local snapshot of all ten databases (.github/scripts/local-bench.sh) is committed; nothing else there.
+!results/local/
+results/local/*
+!results/local/results.json
 legacy/results/
 
 # ── graph-bench run state ─────────────────────────────────────────────

@@ -59,19 +59,71 @@ benchmark, servers included, is kept in [legacy/](legacy/README.md).
      that budget, and the case becomes ⏱ ("too slow: cut off at ..."). Only the database call is timed against
      the cutoff; graph-bench's own work around it (loading the reference, checking the answer) is not. The
      cutoff only stops runaway cases early; because it measures cold first runs, it is set well above the final
-     rule. It depends on which databases ran earlier, so a ⏱ from the cutoff can depend on the run order. Before 3 earlier results exist, only a hard
-     cap applies (`--case-timeout`, default 600 s, measured as silence: the worker reports progress after every
-     run).
+     rule. It depends on which databases ran earlier, so a ⏱ from the cutoff can depend on the run order. Before 3 earlier results exist, only the case
+     ceiling of rule 9 and the silence limit apply (`--case-timeout`, default 120 s, measured as silence: the
+     worker reports progress after every run). Whichever of the cutoff and the ceiling comes first stops the case.
    - **After the run:** the 10x rule is applied over all results, each entry against the other databases. Any
      benchmark beyond its budget becomes ⏱. The run order never decides a ⏱ from this final rule (unlike the
      in-run cutoff above).
+9. **Run-time limits are the same for every database, at any position in the run order** (the CodSpeed runner
+   lives about an hour, so a run must fit in it; `graph_bench/runner/__init__.py`):
+   - **Case ceiling, 60 s.** Every query, algorithm and write case stops 60 s of wall time after it starts,
+     warm-ups, timed runs and answer checks included. No warm-up or timed run starts once 60 s have passed (nor
+     one that, as long as the previous run, would end after the supervisor's kill below). A case stopped there
+     with at least 3 timed runs keeps its timing, the median over the runs it did; with fewer it is ⏱ ("too
+     slow: over 60 s"). A single call still running 5 s past the ceiling cannot be interrupted in the process: the
+     supervisor stops the worker and the case is ⏱ the same way.
+   - **Load ceiling, 5 min, per Load row.** Each Load row (one dataset in one store, such as snb in the graph
+     store or snb in the RDF store) has its own ceiling. A load of it (the Load row's own, the Memory and Disk
+     record's, or the one the queries run on) not finished 5 minutes after it started is stopped: it is ⏱ ("load
+     over 5 min"), and so is every case that reads that Load row's data for that database and its Memory and Disk
+     record, and for a graph-store load the dataset's Load (query language) row (that row exists only for the
+     graph store), none of them run. The other Load rows of the same dataset (another store) are not affected.
+   - **Time box, 5 s.** In `graph-bench bench` a case or load does its warm-ups, then timed runs up to the
+     selection's count, but starts no further timed run once its timed runs total 5 s and at least 3 ran (loads:
+     at least 1). Fast cases keep all their runs; the recorded number of runs is what ran, and the median is over
+     those. In `graph-bench codspeed` the same 5 s box goes to pytest-codspeed (`--codspeed-max-time`, with
+     `--codspeed-max-rounds` at the selection's iteration count, so fast cases stop there too) for the queries
+     and algorithms, and a write gets as many rounds as 5 s hold at its preflight's duration (at least 3).
+     CodSpeed loads have no box: they run the selection's fixed number of load rounds.
+   - **Run deadline (CI only).** `--deadline-s`, counted from the start of the run (CI: 48 min), is the same for
+     every database: once it has passed nothing new starts, a case or load already running keeps its own ceiling,
+     and every supported case not yet run is ⏱ ("run deadline: 48 min"; an unsupported one stays ⊘), so a run
+     that would not fit leaves results. The Startup row is atomic and runs first, so a deadline that passes during
+     it waits for the row to end.
+   - **Only these rules stop a case.** Database-side query and socket timeouts are disabled or raised wherever the
+     setting is public (FalkorDB's client socket timeout, Grafeo's 30 s query timeout from 0.6.1 on), so no client
+     or engine default fails a case with its own ✗; the other databases have no default timeout below the ceiling.
+
+## The CI roster and the local snapshot
+
+- **CI compares Grafeo with a fixed roster** chosen by the user: NeuG, LadybugDB, TuringDB, Oxigraph and
+  DuckDB + DuckPGQ (`catalog.CI_DATABASES`), the fastest in the local run of all ten. The CI runner lives about an
+  hour, which does not fit all ten. The 10x budget of rule 8 is therefore relative to that roster: a ⏱ in a CI
+  column means beyond 10x the top-3 average of the roster databases with correct answers, on the same hardware.
+- **The other databases come from a local snapshot**, `results/local/results.json`: all ten databases on the dev
+  box, in one Linux container, with the full selection (CONTRIBUTING.md). That run applies the same rules to all
+  ten: the same ceilings, the same budget rule over all ten, the same answer checks.
+- **Two sources are never compared.** Every result carries its source (`ci` or `local`, with the run's date and
+  machine). The budget rule runs within each source (the merge applies it to the CI entries only; the snapshot keeps
+  the verdicts of its own run over all ten), and every rank (bold in the README, Grafeo's counts in the summary block)
+  is within one source: a timing from the dev box is never set against one from the CI runner. The README puts the CI
+  columns first and the local ones after, each marked `†` with a footnote naming the snapshot's date and machine, and
+  `docs/results.md` lists every database's version, source, machine and run date.
+- **A roster database is never taken from the snapshot.** One whose CI job left no results shows as ✗ "no
+  results", not with its local timing, and `merge --local` takes only databases outside `catalog.CI_DATABASES`.
+- **The snapshot is refreshed when versions change.** CI installs the newest stable release of every database,
+  and `graph-bench local-check` reports the snapshot's databases outside the roster whose newest stable release on
+  PyPI (Neo4j: its pinned release, which pins.yml keeps at the newest stable) differs from the version the
+  snapshot measured.
 
 ## The preflight
 
 Each benchmark first runs once, untimed: the preflight. The answer check and the time budget are applied there,
 and only a benchmark that passes the preflight is timed, so a wrong or too slow result never reaches CodSpeed as
 a speed. The preflight also counts as the first warm-up run. Warm-up runs, timed runs and load repetitions are
-set per selection (`graph_bench/suites/catalog.py`) and are the same for every database.
+set per selection (`graph_bench/suites/catalog.py`) and are the same for every database; the time box of rule 9
+can stop the timed runs earlier.
 
 A ⏱ assigned only by the final budget rule comes after CodSpeed has measured the case: CodSpeed then shows it as
 measured, while results.json and the matrix show ⏱. A ⏱ from the in-run cutoff is never measured.
@@ -154,8 +206,9 @@ Memory and Disk are records, not timed benchmarks: they never reach CodSpeed and
   are not followed), measured after `close()`, so each database's own shutdown has flushed and checkpointed. An
   in-memory store has none: "in memory".
 - **Answers and markers:** a record carries its load's count check; a mismatch is ≠ in both tables, a load error
-  ✗, a child silent for longer than the case timeout is killed (⏱), a load the database's models do not reach is
-  ⊘. Lowest is bold.
+  ✗, a child silent for longer than the case timeout is killed (⏱), a load over the load ceiling of rule 9 is ⏱
+  ("load over 5 min"; not run again when its Load row already went over it), a load the database's models do
+  not reach is ⊘. Lowest is bold.
 
 ## Loading
 
@@ -200,7 +253,7 @@ Load uses each database's **fastest documented bulk path, CSV parsing included**
 | ⊘ | not available: the database lacks the capability or the data model |
 | ✗ | failing: an error or a crash |
 | ≠ | wrong answer: fails the answer check, not ranked |
-| ⏱ | too slow: beyond the budget of rule 8 |
+| ⏱ | too slow: beyond the budget of rule 8, or over a limit of rule 9 ("too slow: over 60 s", "load over 5 min", "run deadline: 48 min") |
 
 How each marker shows in CodSpeed is in the [README](README.md#markers).
 

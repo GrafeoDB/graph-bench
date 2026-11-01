@@ -41,6 +41,7 @@ from graph_bench.types import CATEGORY_ORDER, Category, Model, Store
 
 __all__ = [
     "ANSWER_ONLY_DATASETS",
+    "CI_DATABASES",
     "EXTRA_SUITES",
     "EXTRA_SUITES_ENV",
     "ITEMS",
@@ -80,6 +81,11 @@ __all__ = [
 ]
 
 EXTRA_SUITES_ENV = "GRAPH_BENCH_EXTRA_SUITES"
+
+# The databases CI runs, in the order it passes them to `--db` (user decision 2026-11-01): the competitors first and
+# Grafeo last, so Grafeo's cases get their in-run budget from same-hardware results of the others. `--db` itself
+# still defaults to all built-in databases.
+CI_DATABASES: tuple[str, ...] = ("neug", "ladybug", "turingdb", "oxigraph", "duckdb", "grafeo")
 
 
 def _module_items(module: ModuleType) -> tuple[Item, ...]:
@@ -178,7 +184,9 @@ SELECTIONS: dict[str, Selection] = {
     "full": Selection(
         "full",
         frozenset(CATEGORY_ORDER),
-        ("small", "medium"),
+        # Medium only (Task T, 2026-10-31): push keeps small, under CodSpeed on every commit, so the full run fits
+        # in the CodSpeed macro runner's hour; the time box (`graph_bench.runner.TIME_BOX_S`) bounds the counts.
+        ("medium",),
         (1,),
         warmup=2,
         iterations=10,

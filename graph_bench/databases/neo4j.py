@@ -54,6 +54,7 @@ from graph_bench.databases.pins import (
     NEO4J_VERSION,
 )
 from graph_bench.datasets.schema import Column, Dataset
+from graph_bench.runner import LOAD_CEILING_S
 from graph_bench.types import Model
 
 # The pinned Neo4j tarball and Temurin JRE (versions, URLs, SHA-256) are in `pins.py`, which `data key` hashes.
@@ -399,10 +400,11 @@ _ADMIN_ENV_KEEP = (
     "LC_ALL",
     "LC_CTYPE",
 )
-# A hung import is killed after this long. A load reports nothing until it is done, so the supervisor's silence
-# cap (`--case-timeout`, default 600 s) would otherwise kill the worker first and leave the importer's JVMs
-# running; 540 s stays inside that default with room for the rest of the load. The push loads take about 5 s.
-IMPORT_TIMEOUT_S = 540.0
+# A hung import is killed after this long: the load ceiling (`graph_bench.runner.LOAD_CEILING_S`, 5 min), which
+# stops any load still running then. The worker records a load whose import timed out past the ceiling as over it
+# (⏱ "load over 5 min"), like one the supervisor stopped; the supervisor kills the worker's whole process tree, so
+# the importer's JVMs never outlive a worker it stopped first. The push loads take about 5 s.
+IMPORT_TIMEOUT_S = LOAD_CEILING_S
 
 
 def admin_env(jre: Path, conf: Path) -> dict[str, str]:
