@@ -13,12 +13,14 @@ from pathlib import Path
 import typer
 
 from graph_bench import __version__
+from graph_bench import local_check as local_check_module
 from graph_bench import merge as merge_module
 from graph_bench import notify as notify_module
 from graph_bench.databases import KNOWN
 from graph_bench.datasets import cache
 from graph_bench.grafeo_setup import install_grafeo
 from graph_bench.report.discord import render_discord
+from graph_bench.report.overview import render_overview
 from graph_bench.report.readme import render_readme, update_readme
 from graph_bench.report.summary import RESULTS_URL, render_summary
 from graph_bench.results import Results
@@ -39,7 +41,12 @@ _GRAFEO_SHA = typer.Option(
 _OUT = typer.Option(..., "--out", help="Output directory for results.json and the raw worker output.")
 _REPORT_IN = typer.Option(..., "--in", help="The results.json to report on.")
 _REPORT_WRITE = typer.Option(
-    None, "--write", help="README to update between its results markers (readme only); default: print."
+    None,
+    "--write",
+    help=(
+        "readme: the README to update between its results markers; overview: the page to write (docs/results.md)."
+        " Default: print."
+    ),
 )
 
 
@@ -279,24 +286,65 @@ _MERGE_DB = typer.Option(
 )
 
 
+_MERGE_LOCAL = typer.Option(
+    None,
+    "--local",
+    help=(
+        "The local snapshot (results/local/results.json): its databases not in the inputs or --db are added,"
+        " tagged local, and never ranked or budgeted against the CI ones."
+    ),
+)
+
+
 @app.command()
-def merge(out: Path = _OUT, inputs: list[Path] = _MERGE_IN, db: str | None = _MERGE_DB) -> None:
+def merge(
+    out: Path = _OUT, inputs: list[Path] = _MERGE_IN, db: str | None = _MERGE_DB, local: Path | None = _MERGE_LOCAL
+) -> None:
     """Merge the results.json files of runs over different databases into DIR/results.json and print its path.
 
     The inputs must agree on selection, mode, graph-bench commit and Grafeo source, and hold different databases.
-    The final 10x budget rule is applied once, over the merged entries.
+    The final 10x budget rule is applied once, over the merged entries, within each source.
     """
     try:
         docs = [(path, Results.read(path)) for path in inputs]
-        merged, missing = merge_module.merge(docs, _dbs(db) if db is not None else ())
+        snapshot = (local, Results.read(local)) if local is not None else None
+        merged, missing = merge_module.merge(docs, _dbs(db) if db is not None else (), local=snapshot)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         typer.echo(f"merge: {exc}", err=True)
         raise typer.Exit(2) from None
     for name in missing:
         typer.echo(f"no results: {name}")
+    for name in merge_module.local_databases(merged):
+        typer.echo(f"local: {name}")
     path = out / supervisor.RESULTS_FILE
     merged.write(path)
     typer.echo(path)
+
+
+_LOCAL_SNAPSHOT = typer.Option(..., "--local", help="The local snapshot, results/local/results.json.")
+
+
+@app.command("local-check")
+def local_check(local: Path = _LOCAL_SNAPSHOT) -> None:
+    """Print, one per line, the databases whose installed version differs from the local snapshot's; exit 0.
+
+    stdout holds only those lines (CI turns them into a notice); a summary goes to stderr. An unreadable snapshot
+    exits 2.
+    """
+    try:
+        snapshot = Results.read(local)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        typer.echo(f"local-check: {exc}", err=True)
+        raise typer.Exit(2) from None
+    changes = local_check_module.version_changes(snapshot)
+    for change in changes:
+        typer.echo(local_check_module.describe(change))
+    date = snapshot.started_at[:10]
+    if changes:
+        summary = f"{len(changes)} of {len(snapshot.databases)} databases differ from the local snapshot of {date}"
+        typer.echo(f"local-check: {summary}; refresh it with .github/scripts/local-bench.sh", err=True)
+    else:
+        typer.echo(f"local-check: every database matches the local snapshot of {date}", err=True)
 
 
 @app.command("ci-settings")
@@ -321,26 +369,37 @@ def _echo_utf8(text: str) -> None:
 @app.command()
 def report(
     fmt: str = typer.Option(
-        ..., "--format", help="summary (grafeo's README block), readme (graph-bench's matrix) or discord (JSON)."
+        ...,
+        "--format",
+        help=(
+            "summary (grafeo's README block), readme (graph-bench's matrix), overview (the full page, every"
+            " version) or discord (JSON)."
+        ),
     ),
     in_path: Path = _REPORT_IN,
     write: Path | None = _REPORT_WRITE,
     run_url: str | None = _RUN_URL,
     readme_url: str = _README_URL,
 ) -> None:
-    """Print the summary block, the README matrix or the Discord payloads of a results.json, or write the matrix."""
-    if fmt not in ("summary", "readme", "discord"):
-        raise typer.BadParameter(f"{fmt!r} is not one of: summary, readme, discord", param_hint="--format")
-    if write is not None and fmt != "readme":
-        raise typer.BadParameter("--write is only valid with --format readme", param_hint="--write")
+    """Print the summary block, the README matrix, the overview page or the Discord payloads of a results.json;
+    or write the matrix into a README, or the overview page to a file."""
+    if fmt not in ("summary", "readme", "overview", "discord"):
+        raise typer.BadParameter(f"{fmt!r} is not one of: summary, readme, overview, discord", param_hint="--format")
+    if write is not None and fmt not in ("readme", "overview"):
+        raise typer.BadParameter("--write is only valid with --format readme or overview", param_hint="--write")
     try:
         results = Results.read(in_path)
         if fmt == "discord":
             payloads = render_discord(results, run_url=run_url, readme_url=readme_url)
             text = json.dumps(payloads, ensure_ascii=False) + "\n"
+        elif fmt == "overview":
+            text = render_overview(results)
         else:
             text = render_summary(results) if fmt == "summary" else render_readme(results)
-        if write is not None:
+        if write is not None and fmt == "overview":
+            write.parent.mkdir(parents=True, exist_ok=True)
+            write.write_text(text, encoding="utf-8", newline="\n")
+        elif write is not None:
             update_readme(write, text)
     except (OSError, ValueError, KeyError) as exc:
         typer.echo(f"report: {exc}", err=True)
