@@ -150,9 +150,12 @@ class Results:
     sources: dict[str, Run] = field(default_factory=dict)
 
     def run(self, source: str) -> Run:
-        """The run behind `source`: from `sources`, else (a plain run, or an older document) the document's own."""
+        """The run behind `source`: from `sources`; for `ci` without a record (a plain run, or an older document),
+        the document's own. Raises ValueError for another source without a record."""
         if source in self.sources:
             return self.sources[source]
+        if source != "ci":
+            raise ValueError(f"the results hold no record of the {source} run (`sources` has no {source!r})")
         return {
             "started_at": self.started_at,
             "machine": self.machine,

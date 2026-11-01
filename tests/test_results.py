@@ -279,3 +279,12 @@ def test_results_round_trip_the_sources(tmp_path: Path) -> None:
     assert back == results
     assert back.run("local") == local
     assert back.run("ci")["started_at"] == "2026-10-30T03:00:00Z"
+
+
+def test_results_run_of_a_source_without_a_record_raises() -> None:
+    """Only `ci` falls back to the document's own run: a `local` run missing from `sources` is an error, never the
+    CI date and machine shown as the snapshot's."""
+    results = Results.from_dict(_v2_doc())
+    assert results.run("ci")["started_at"] == "2026-10-30T03:00:00Z"
+    with pytest.raises(ValueError, match="no record of the local run"):
+        results.run("local")
