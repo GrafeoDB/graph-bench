@@ -83,24 +83,33 @@ def test_grafeo_resources_ok(push: Results) -> None:
 
 
 class _Dist:
-    """A stand-in for an installed distribution: its version and, for a file install, its `direct_url.json`."""
+    """A stand-in for an installed distribution: its version and, for a direct-url install, its `direct_url.json`
+    (an archive by default, or a VCS checkout with `vcs`)."""
 
-    def __init__(self, version: str, url: str | None = None) -> None:
+    def __init__(self, version: str, url: str | None = None, *, vcs: bool = False) -> None:
         self.version = version
         self.url = url
+        self.vcs = vcs
 
     def read_text(self, name: str) -> str | None:
         assert name == "direct_url.json"
-        return None if self.url is None else json.dumps({"url": self.url, "archive_info": {}})
+        if self.url is None:
+            return None
+        info = {"vcs_info": {"vcs": "git", "commit_id": "e8b04ed2"}} if self.vcs else {"archive_info": {}}
+        return json.dumps({"url": self.url, **info})
 
 
 def test_grafeo_is_measured_by_its_distribution() -> None:
-    """A file install is a 0.6.1-branch build (it reports 0.6.0): measured; a registry 0.6.0 is not, 0.6.1 is."""
+    """A file or VCS install is a 0.6.1-branch build (it reports 0.6.0): measured. A registry install or a plain
+    archive url follows the version: 0.6.0 is not measured, 0.6.1 is."""
     branch = _Dist("0.6.0", "file:///D:/gb-wheels-e8b04ed/grafeo-0.6.0-cp312-abi3-win_amd64.whl")
     assert grafeo_is_measured(branch)  # type: ignore[arg-type]
     assert not grafeo_is_measured(_Dist("0.6.0"))  # type: ignore[arg-type]
     assert grafeo_is_measured(_Dist("0.6.1"))  # type: ignore[arg-type]
     assert not grafeo_is_measured(_Dist("0.6.0", "https://example.org/grafeo-0.6.0.whl"))  # type: ignore[arg-type]
+    assert grafeo_is_measured(_Dist("0.6.1", "https://example.org/grafeo-0.6.1.whl"))  # type: ignore[arg-type]
+    vcs = _Dist("0.6.0", "https://github.com/GrafeoDB/grafeo", vcs=True)
+    assert grafeo_is_measured(vcs)  # type: ignore[arg-type]
 
 
 def test_grafeo_single_thread_env() -> None:

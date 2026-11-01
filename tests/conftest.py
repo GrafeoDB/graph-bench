@@ -30,15 +30,18 @@ def grafeo_is_measured(dist: importlib.metadata.Distribution | None = None) -> b
     """Whether the installed grafeo (or `dist`) is one graph-bench 0.3.0 measures, so its agreement tests run.
 
     A grafeo installed from a local file (its dist-info holds a `direct_url.json` whose url starts with `file:`)
-    is a 0.6.1-branch build, which still reports version 0.6.0: measured. A registry install is measured from
+    or from a VCS checkout (a `direct_url.json` with `vcs_info`) is a 0.6.1-branch build, which still reports
+    version 0.6.0: measured. Any other install, from the registry or from a plain archive url, is measured from
     version 0.6.1 on, so PyPI 0.6.0 (which CI installs from uv.lock until 0.6.1 is released) is not, and the skip
     turns itself off once 0.6.1 is on PyPI.
     """
     if dist is None:
         dist = importlib.metadata.distribution("grafeo")
     direct = dist.read_text("direct_url.json")
-    if direct and str(json.loads(direct).get("url", "")).startswith("file:"):
-        return True
+    if direct:
+        doc = json.loads(direct)
+        if str(doc.get("url", "")).startswith("file:") or "vcs_info" in doc:
+            return True
     return Version(dist.version) >= Version("0.6.1")
 
 
