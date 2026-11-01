@@ -283,7 +283,7 @@ def test_release_post_is_conditional_on_the_secret_and_records_after() -> None:
     # A release below graph-bench's floor (grafeo 0.6.1) is never benchmarked or posted, even when it is new.
     check = next(step for step in detect["steps"] if step.get("id") == "check")["run"]
     assert 'graph_bench.release measured "$latest"' in check
-    assert check.index("release measured") < check.index('elif [ "$newer" -eq 1 ]')
+    assert check.index("release measured") < check.index('if [ "$measured" -eq 1 ]') < check.index('elif [ "$FORCE" = "true" ]')
     # ...and before `force`, so a forced run cannot bypass the floor either.
     assert check.index('if [ "$measured" -eq 1 ]') < check.index('elif [ "$FORCE" = "true" ]')
     gate = next(step for step in detect["steps"] if step.get("id") == "webhook")
