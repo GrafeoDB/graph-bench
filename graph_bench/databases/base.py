@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, ClassVar, Literal
 
 from graph_bench.datasets.schema import Dataset
-from graph_bench.types import Model, Store
+from graph_bench.types import Model, Source, Store
 
 
 class NotSupported(Exception):
@@ -41,6 +41,9 @@ class DatabaseInfo:
     threads_note: str
     storage: Literal["in-memory", "on-disk"]
     java: str | None = None
+    # The run this info comes from: always `ci` for a run's own databases; `graph-bench merge --local` sets
+    # `local` on the snapshot's (`types.Source`).
+    source: Source = "ci"
 
 
 class Database(ABC):

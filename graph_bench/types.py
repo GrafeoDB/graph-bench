@@ -82,6 +82,11 @@ BUDGET_EXEMPT: frozenset[Category] = frozenset({"startup", "load", "load_ql"})
 
 Status = Literal["ok", "failed", "timeout", "not_supported"]
 AnswerVerdict = Literal["agree", "disagree", "unchecked"]
+# Where a result was measured: `ci`, the CI roster's run on the reference hardware, or `local`, the snapshot of
+# all ten databases the user runs on the dev box (`graph-bench merge --local`). Timings of two sources are never
+# compared: budgets and ranks stay within one source.
+Source = Literal["ci", "local"]
+SOURCES: tuple[Source, ...] = ("ci", "local")
 Marker = Literal["", "⊘", "✗", "≠", "⏱"]
 
 
