@@ -385,7 +385,6 @@ def time_write(
     on_run: Callable[[], None] | None = None,
     deadline: float | None = None,
     ceiling_s: float = CASE_CEILING_S,
-    preflight_ns: int | None = None,
 ) -> dict[str, Any]:
     """Time a write case's runs after its preflight: setup (and its `ready` check) before each, read-back and
     teardown after each, all untimed.
@@ -394,7 +393,8 @@ def time_write(
     ...", k counting every run after the preflight, warm-ups included) at the first read-back that differs, or
     (status `failed`, error) when a phase raised or a setup missed its state, or (status `timeout`, "too slow:
     over ...") when the case reached its ceiling (`deadline`, `ceiling_s` after its start) with too few timed runs.
-    The runs are time-boxed like a query's (`_limits`), the first predicted from `preflight_ns`.
+    The runs are time-boxed like a query's (`_limits`), but the first is not predicted from the preflight: a full
+    run adds the setup, read-back and teardown to the call the preflight timed.
     """
     runs = [0]
 
@@ -412,7 +412,7 @@ def time_write(
             on_run=on_run,
             before=write.prepare,
             after=after,
-            **_limits(deadline, preflight_ns),
+            **_limits(deadline),
         )
     except OverCeiling:
         return {"status": "timeout", "error": over_ceiling(ceiling_s)}
@@ -430,7 +430,8 @@ def time_write(
 
 def _limits(deadline: float | None, preflight_ns: int | None = None) -> dict[str, Any]:
     """`measure`'s limits for a case: the time box, at least `MIN_ITERATIONS`, the ceiling's deadline (if any), the
-    supervisor's kill `CEILING_GRACE_S` after it, and the preflight's duration as the first run's prediction."""
+    supervisor's kill `CEILING_GRACE_S` after it, and the preflight's duration (a query's or algorithm's, never a
+    write's) as the first run's prediction."""
     kill_at = None if deadline is None else deadline + CEILING_GRACE_S
     first_s = None if preflight_ns is None else preflight_ns / 1e9
     limits = {"time_box_s": TIME_BOX_S, "min_iterations": MIN_ITERATIONS, "deadline": deadline, "kill_at": kill_at}
@@ -876,7 +877,6 @@ def _run_case(case: Case, db: Database, base: Path, settings: _Settings, emit: E
                     on_run=lambda: emit(progress),
                     deadline=deadline,
                     ceiling_s=settings.case_ceiling_s,
-                    preflight_ns=pf.preflight_ns,
                 )
             )
         else:

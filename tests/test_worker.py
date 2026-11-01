@@ -555,6 +555,41 @@ def test_write_case_run_error_fails(writes_dir: Path, tmp_path: Path) -> None:
     assert (entry["status"], entry["error"]) == ("failed", "RuntimeError: soft crash")
 
 
+def test_only_queries_and_algorithms_seed_the_first_run_with_the_preflight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The preflight's duration predicts a query's or algorithm's first timed run. A write's full run adds its
+    setup, read-back and teardown to what the preflight timed, so it is not seeded: its first run is predicted
+    from nothing and later runs from the full run before them."""
+    from types import SimpleNamespace
+
+    from graph_bench.types import Timing
+    from tests.fake_writes import WRITES as FAKE_WRITES
+
+    seeds: dict[str, Any] = {}
+    query = next(i for i in catalog.ITEMS if i.id == "snb_is2")
+
+    def fake_measure(fn: Any, **kwargs: Any) -> tuple[Timing, None]:
+        seeds[current[0]] = kwargs["first_s"]
+        return Timing(1.0, 1.0, 1, 3), None
+
+    def fake_start(case: Case, *args: Any) -> tuple[worker.Preflight, dict[str, Any]]:
+        write = SimpleNamespace(run=list, prepare=lambda: None, readback=lambda: None, baseline=None)
+        pf = worker.Preflight(run=list, bindings=[], preflight_ns=2_000_000_000, answer="agree")
+        if case.item is not query:
+            pf.write = write  # type: ignore[assignment]
+        return pf, {"kind": "entry", "id": case.bench_id}
+
+    monkeypatch.setattr(worker, "measure", fake_measure)
+    monkeypatch.setattr(worker, "start_case", fake_start)
+    settings = worker._Settings(catalog.selection("push"), tmp_path / "w.jsonl", {}, 60.0)
+    current = ["query"]
+    worker._run_case(Case(query, "fake", "small", 1), None, tmp_path, settings, lambda line: None)  # type: ignore[arg-type]
+    current[0] = "write"
+    worker._run_case(Case(FAKE_WRITES[0], "fake", "small", 1), None, tmp_path, settings, lambda line: None)  # type: ignore[arg-type]
+    assert seeds == {"query": 2.0, "write": None}
+
+
 # Load (query language) ------------------------------------------------------------------------------------------
 
 
