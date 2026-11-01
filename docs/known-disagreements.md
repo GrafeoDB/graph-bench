@@ -108,8 +108,8 @@ the plans or the per-row costs leave room to improve. They carry no `- id:` line
   `pattern_square_sql` 17.0 s for 10 bindings; neither has room for 3 timed runs before 60 s (⏱ "too slow: over
   60 s"). `pattern_square_sql` is at the edge: at about 15 s per run its third run ends at 60 s and it keeps a
   timing (an allowlisted id may agree).
-- Cause: the same as below (every path materialized to be counted, A1 and A2; the 4-cycle closing on a bound node,
-  T-hub and T-all). Not rewritten.
+- Cause: for `pm_two_hop_top10`, every path materialized to be counted (A1 and A2, in the section below); for
+  `pattern_square_sql`, the 4-cycle closing on a bound node (T-hub and T-all, in the section above). Not rewritten.
 
 ## Grafeo: pattern matching cases are slow under the 10x budget rule (not allowlisted)
 
@@ -758,7 +758,7 @@ The Hops it runs agree and are ⏱ by the same rule in `bench --selection push` 
 51x), over two runs. The builders follow the
 shared texts: every walk is expanded (`both("KNOWS")` per step, `repeat` three times for `hop_var`) and deduplicated
 once at the end, as `count(DISTINCT f.id)`; no step deduplicates the intermediate persons, which the texts do not
-ask for either. Since the 60 s case ceiling (Task T) `hop_var` is ⏱ in the adapter test as well (below).
+ask for either. Since the 60 s case ceiling (Task T) `hop_var` is ⏱ in the adapter test as well (above).
 
 Pattern matching: `pattern_common` agrees within the rule (16.8 ms); `pm_two_hop_count` agrees but is ⏱ (1.27 s,
 17.9x; LadybugDB 1.6 ms, NeuG 2.9 ms): the builder streams every one of the 4,367,196 walks to count them.
