@@ -10,6 +10,7 @@ which an install of the newest stable picks).
 import json
 import re
 import sys
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -72,7 +73,7 @@ def is_newer(latest: str, posted: str) -> bool:
 def fetch_latest(package: str = "grafeo", *, post: bool = False) -> str:
     """The newest stable release of `package` on PyPI (`newest_stable`); raises OSError on a network error and
     ValueError when there is none."""
-    with urllib.request.urlopen(PYPI_URL.format(package=package), timeout=30) as response:
+    with urllib.request.urlopen(PYPI_URL.format(package=urllib.parse.quote(package, safe="")), timeout=30) as response:
         releases = json.load(response)["releases"]
     version = newest_stable(releases, post=post)
     if version is None:
