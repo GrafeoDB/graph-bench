@@ -263,6 +263,18 @@ def test_macro_runner_jobs_never_run_at_once() -> None:
     assert len(found) == 3
 
 
+def test_macro_runner_jobs_end_before_the_runner_does() -> None:
+    """The Graviton macro runner dies about 60 minutes after boot (Task T): every job on it has a 55-minute
+    timeout, so GitHub cancels an overlong run with its log kept instead of the runner vanishing with it."""
+    found = []
+    for name in ("bench.yml", "release.yml"):
+        for job_name, job in _load(name)["jobs"].items():
+            if str(job.get("runs-on", "")).startswith("codspeed-macro"):
+                assert job.get("timeout-minutes") == 55, (name, job_name)
+                found.append((name, job_name))
+    assert sorted(found) == [("bench.yml", "codspeed"), ("bench.yml", "readme"), ("release.yml", "post")]
+
+
 def test_full_runs_start_the_heartbeat() -> None:
     """Both full-selection jobs run the bench next to heartbeat.sh, keep the bench's exit status through `tee`
     and can push (the heartbeat writes bot/heartbeat with the job token)."""

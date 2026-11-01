@@ -108,6 +108,9 @@ jobs:
     if: needs.detect.outputs.run == 'true'
     # Same runner as bench.yml's README job.
     runs-on: codspeed-macro-arm64-graviton-ubuntu-22-04
+    # The macro runner dies about 60 minutes after boot, with no log (Task T, 2026-10-31): GitHub cancels the job
+    # at 55 minutes instead, so the log of an overlong run is kept.
+    timeout-minutes: 55
     # One macro-runner job at a time across workflows: two at once lost their runners (2026-10-31).
     concurrency:
       group: macro-runner
