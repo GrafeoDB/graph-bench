@@ -168,6 +168,17 @@ def test_merge_rejects_a_duplicate_database(tmp_path: Path) -> None:
     assert result.exit_code == 2
 
 
+def test_merge_write_failure_exits_2(tmp_path: Path) -> None:
+    """An output that cannot be written fails like an unreadable input: exit 2 and a message, no traceback."""
+    first = _write(tmp_path, "a", _doc(_entry("neug", 1)))
+    blocker = tmp_path / "out"
+    blocker.write_text("a file, not a directory", encoding="utf-8")
+    result = CliRunner().invoke(app, ["merge", "--out", str(blocker), str(first)])
+    assert result.exit_code == 2, result.output
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    assert "merge: " in result.output and "results.json" in result.output
+
+
 def test_budget_rule_applies_once_at_merge(tmp_path: Path) -> None:
     """A single-database input has no other database to compare with, so its own run marked nothing; the merge
     applies the 10x rule over all entries, which marks the slow one (not twice: a marked entry is no longer ok)."""

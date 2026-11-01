@@ -106,7 +106,10 @@ def test_cli_prints_the_changes_and_exits_0(tmp_path: Path, monkeypatch: pytest.
     # stdout holds only the changes, one per line, for the workflow's notice; the rest goes to stderr.
     assert result.stdout.splitlines() == ["FalkorDB: 0.11.0 in the local snapshot, 0.12.0 is the newest stable release"]
     assert "HelixDB: 0.3.3 in the local snapshot, newest stable release unknown (network down)" in result.stderr
-    assert "1 of 3 databases outside the CI roster differ from the local snapshot of 2026-10-20" in result.stderr
+    assert (
+        "1 of 2 checked databases outside the CI roster differ from the local snapshot of 2026-10-20, 1 unknown;"
+        in result.stderr
+    )
 
 
 def test_cli_prints_nothing_on_stdout_when_every_version_matches(
@@ -119,6 +122,23 @@ def test_cli_prints_nothing_on_stdout_when_every_version_matches(
     assert result.exit_code == 0, result.output
     assert result.stdout == ""
     assert "every database outside the CI roster matches the local snapshot of 2026-10-20" in result.stderr
+
+
+def test_cli_never_claims_every_version_matches_when_one_is_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lookup that failed is no match: the summary counts the checked databases and the unknown ones."""
+    monkeypatch.setattr(local_check, "newest_release", _lookup)
+    path = tmp_path / "results.json"
+    _snapshot(falkordb="0.12.0", arcadedb="26.10.2.post1", helixdb="0.3.3").write(path)
+    result = CliRunner().invoke(app, ["local-check", "--local", str(path)])
+    assert result.exit_code == 0, result.output
+    assert result.stdout == ""
+    assert "every database" not in result.stderr
+    assert (
+        "2 of 3 databases outside the CI roster checked, all match the local snapshot of 2026-10-20; 1 unknown"
+        in result.stderr
+    )
 
 
 def test_cli_without_a_snapshot_exits_2(tmp_path: Path) -> None:

@@ -317,7 +317,11 @@ def merge(
     for name in merge_module.local_databases(merged):
         typer.echo(f"local: {name}")
     path = out / supervisor.RESULTS_FILE
-    merged.write(path)
+    try:
+        merged.write(path)
+    except OSError as exc:
+        typer.echo(f"merge: cannot write {path}: {exc}", err=True)
+        raise typer.Exit(2) from None
     typer.echo(path)
 
 
@@ -345,9 +349,15 @@ def local_check(local: Path = _LOCAL_SNAPSHOT) -> None:
         if check.latest is None:
             typer.echo(f"local-check: {local_check_module.describe(check)}", err=True)
     date = snapshot.started_at[:10]
+    checked = sum(check.latest is not None for check in checks)
+    unknown = len(checks) - checked
     if changes:
-        summary = f"{len(changes)} of {len(checks)} databases outside the CI roster differ from the local snapshot"
-        typer.echo(f"local-check: {summary} of {date}; refresh it with .github/scripts/local-bench.sh", err=True)
+        summary = f"{len(changes)} of {checked} checked databases outside the CI roster differ from the local snapshot"
+        summary += f" of {date}" + (f", {unknown} unknown" if unknown else "")
+        typer.echo(f"local-check: {summary}; refresh it with .github/scripts/local-bench.sh", err=True)
+    elif unknown:
+        summary = f"{checked} of {len(checks)} databases outside the CI roster checked, all match the local snapshot"
+        typer.echo(f"local-check: {summary} of {date}; {unknown} unknown", err=True)
     else:
         typer.echo(f"local-check: every database outside the CI roster matches the local snapshot of {date}", err=True)
 
