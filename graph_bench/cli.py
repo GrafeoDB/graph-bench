@@ -236,6 +236,9 @@ def _run(
     DIR/results.json."""
     if deadline_total_s is not None and deadline_s is None:
         raise typer.BadParameter("needs --deadline-s", param_hint="--deadline-total-s")
+    if deadline_total_s is not None and deadline_s is not None and deadline_total_s < deadline_s:
+        # The message would name a deadline earlier than the real cutoff.
+        raise typer.BadParameter("must be at least --deadline-s", param_hint="--deadline-total-s")
     name = _check_selection(selection)
     dbs = _dbs(db)
     try:
