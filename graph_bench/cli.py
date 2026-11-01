@@ -13,6 +13,7 @@ from pathlib import Path
 import typer
 
 from graph_bench import __version__
+from graph_bench import merge as merge_module
 from graph_bench import notify as notify_module
 from graph_bench.databases import KNOWN
 from graph_bench.datasets import cache
@@ -21,7 +22,7 @@ from graph_bench.report.discord import render_discord
 from graph_bench.report.readme import render_readme, update_readme
 from graph_bench.report.summary import RESULTS_URL, render_summary
 from graph_bench.results import Results
-from graph_bench.runner import supervisor
+from graph_bench.runner import RUN_DEADLINE_S, supervisor
 from graph_bench.runner.worker import DEFAULT_CASE_TIMEOUT_S
 from graph_bench.suites import catalog
 
@@ -265,6 +266,45 @@ def codspeed(
     Exits 0 once results.json is written, whatever pytest's exit codes.
     """
     _run(supervisor.run_codspeed, "codspeed", selection, db, grafeo, case_timeout, workdir, out, deadline_s, yardstick)
+
+
+_MERGE_IN = typer.Argument(..., help="The results.json files to merge, one per CI job.")
+_MERGE_DB = typer.Option(
+    None,
+    "--db",
+    help=(
+        "Comma-separated databases the merged results cover; one without an input is listed as 'no results' and"
+        " recorded failed. Default: the inputs' databases."
+    ),
+)
+
+
+@app.command()
+def merge(out: Path = _OUT, inputs: list[Path] = _MERGE_IN, db: str | None = _MERGE_DB) -> None:
+    """Merge the results.json files of runs over different databases into DIR/results.json and print its path.
+
+    The inputs must agree on selection, mode, graph-bench commit and Grafeo source, and hold different databases.
+    The final 10x budget rule is applied once, over the merged entries.
+    """
+    try:
+        docs = [(path, Results.read(path)) for path in inputs]
+        merged, missing = merge_module.merge(docs, _dbs(db) if db is not None else ())
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        typer.echo(f"merge: {exc}", err=True)
+        raise typer.Exit(2) from None
+    for name in missing:
+        typer.echo(f"no results: {name}")
+    path = out / supervisor.RESULTS_FILE
+    merged.write(path)
+    typer.echo(path)
+
+
+@app.command("ci-settings")
+def ci_settings() -> None:
+    """Print the CI run settings as NAME=VALUE lines (for $GITHUB_OUTPUT): `deadline_s`, the `--deadline-s` of
+    every macro-runner job, and `databases`, the roster `catalog.CI_DATABASES` in run order."""
+    typer.echo(f"deadline_s={RUN_DEADLINE_S}")
+    typer.echo("databases=" + ",".join(catalog.CI_DATABASES))
 
 
 def _echo_utf8(text: str) -> None:
