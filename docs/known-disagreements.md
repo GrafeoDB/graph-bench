@@ -72,14 +72,18 @@ the plans or the per-row costs leave room to improve. They carry no `- id:` line
   `-[:KNOWS]-(d)-[:KNOWS]-(a)` over Persons, `WHERE b.id < d.id AND c.id <> $personId RETURN count(*) AS cycles`.
 - Dataset: `snb-small`. Bindings: 10 persons of KNOWS degree 20 to 36 (at most the median), answers 3,359 to 9,942.
 - Grafeo 0.6.0 outcome: the answers agree, but a preflight of the 10 bindings takes about 106 s (7 to 13 s per
-  binding) on an idle machine. In `bench --selection push` (Windows, eight databases, with a Docker run beside it)
-  one binding passed Grafeo's own default query timeout: ✗ `GRAFEO-Q003: timeout error: Query exceeded the 30s
-  timeout` (the adapter keeps Grafeo's default configuration). In the adapter test, whose silence limit is 60 s,
-  the preflight is either cut off (⏱) or ends the same way. The others' medians for the same 10 bindings: NeuG
-  83 ms, Neo4j 664 ms, TuringDB 4.3 s (Docker), ArcadeDB 4.6 s (⏱), FalkorDB 14 s (Docker); LadybugDB is ≠ (below).
-- `pattern_triangle_all` (every triangle of `snb-small`, one call) takes 29 s alone, just under that 30 s query
-  timeout, and failed the same way (✗ `GRAFEO-Q003`) in the same push run, against LadybugDB's 60 ms and NeuG's
-  78 ms.
+  binding) on an idle machine. With Grafeo's default 30 s query timeout one binding of a push run failed as ✗
+  `GRAFEO-Q003: timeout error: Query exceeded the 30s timeout`.
+- Since Task T (2026-10-31) the adapter opens Grafeo without a query timeout (`query_timeout=None`, grafeo 0.6.1
+  and later), so only the harness's rules stop the case. On the grafeo 0.6.1 branch build e8b04ed2 (Windows) the
+  first binding alone takes 14.5 s, so the 10 bindings run past the 60 s case ceiling: ⏱ ("too slow: over
+  60 s"; in the adapter test, whose silence limit is 60 s, "no output for 60 s"). The others' medians for the same
+  10 bindings: NeuG 83 ms, Neo4j 664 ms, TuringDB 4.3 s (Docker), ArcadeDB 4.6 s (⏱), FalkorDB 14 s (Docker);
+  LadybugDB is ≠ (below).
+- `pattern_triangle_all` (every triangle of `snb-small`, one call) took 29 s alone on 0.6.0, just under the 30 s
+  query timeout, and failed the same way (✗ `GRAFEO-Q003`) in a push run, against LadybugDB's 60 ms and NeuG's
+  78 ms. On e8b04ed2 without the query timeout it takes 40 s alone and more than 65 s in the adapter test, a single
+  call past the case ceiling: ⏱ ("too slow: over 60 s").
 - Reduced (outside the benchmark, binding `person_10`): the open path without the closing edge,
   `...-[:KNOWS]-(d:Person) WHERE b.id < d.id AND c.id <> $personId RETURN count(*)`, counts 97,292 paths in 98 ms;
   adding `-[:KNOWS]-(a)` takes 9 s (19 s without the WHERE). The time is in closing the cycle on the already bound
@@ -90,6 +94,20 @@ the plans or the per-row costs leave room to improve. They carry no `- id:` line
 - Reference answer: matched.
 - Cause: Grafeo engine (cyclic pattern planning: the closing edge to a bound node). The analytics brief tracks the
   worst-case-optimal join for grafeo 0.6.3 (T-hub, T-all); this case is its median-degree guard. Not rewritten.
+
+## Grafeo: pattern matching cases past the 60 s case ceiling (Task T)
+
+- id: grafeo/pm_two_hop_top10
+- id: grafeo/pattern_square_sql
+- These agree with the reference, but since the case ceiling of FAIRNESS.md rule 9 (2026-10-31) a case stops 60 s
+  after it starts and needs at least 3 timed runs by then; the adapter test runs Grafeo alone, so the ceiling, not
+  the budget rule, marks them there.
+- grafeo 0.6.1 branch build e8b04ed2, Windows, adapter test: `pm_two_hop_top10` preflight 31.3 s for its 10 cuts,
+  `pattern_square_sql` 17.0 s for 10 bindings; neither has room for 3 timed runs before 60 s (⏱ "too slow: over
+  60 s"). `pattern_square_sql` is at the edge: at about 15 s per run its third run ends at 60 s and it keeps a
+  timing (an allowlisted id may agree).
+- Cause: the same as below (every path materialized to be counted, A1 and A2; the 4-cycle closing on a bound node,
+  T-hub and T-all). Not rewritten.
 
 ## Grafeo: pattern matching cases are slow under the 10x budget rule (not allowlisted)
 
@@ -485,29 +503,6 @@ and falkordblite starts the module with none, so the server uses the core count,
 single-threaded where it can. The results record `threads_configurable=False`. The server is also a separate
 process (`local process`), so its memory is not under the harness's per-process caps.
 
-## FalkorDB: a call longer than about 50 s fails on the client's socket timeout (known limitation)
-
-- The adapter keeps falkordblite's client settings. falkordblite 0.11.0's `FalkorDB(dbfilename, serverconfig,
-  **kwargs)` builds a `redislite.Redis` client (redis-py 8.1.0) whose connection has, read from the code and the
-  live connection pool, `socket_timeout` 5 s and a `Retry` of 10 attempts with exponential backoff on
-  `TimeoutError` and `ConnectionError`.
-- Effect: a single FalkorDB call that runs longer than about 50 s (5 s times 10 retries; 58 s measured) fails as
-  ✗ `TimeoutError: Timeout reading from socket` on that binding, instead of reaching the harness's case timeout
-  (which kills the process tree) or the 10x budget rule (⏱). The server goes on running the query, so the next case
-  may start behind it. Seen with the 3-hop pattern this category had before its removal (45 s for one person); in
-  the push selection the longest FalkorDB calls are a `hop_var` binding from a hub, about 3.5 s, and the whole-graph
-  triangle count `pattern_triangle_all`, one call of 3.3 s alone; in a Docker push run that shared the host with
-  the Windows run, that call passed the limit and was ✗ (`TimeoutError: Timeout reading from socket`), while the
-  adapter test, alone, agreed. So it is not allowlisted, but a busy machine can mark it.
-- Why it is not changed: falkordblite documents only `FalkorDB(path)`
-  (https://docs.falkordb.com/operations/falkordblite/falkordblite-py.html, https://github.com/FalkorDB/falkordblite).
-  redislite documents that `redislite.Redis` takes every `redis.Redis()` keyword argument
-  (https://redislite.readthedocs.io/en/latest/topic/redislite_module.html) and redis-py documents `socket_timeout`
-  (https://redis.readthedocs.io/en/stable/connections.html), but falkordblite does not document passing it through
-  `FalkorDB(...)`; that hand-off is visible only in its code, and the adapter uses documented paths only.
-- It can change once falkordblite documents client options: then `socket_timeout=None` would leave the limit to
-  the harness, as for every other database.
-
 ## FalkorDB: Startup starts a redis-server per child (note)
 
 The Startup time covers falkordblite starting its `redis-server` (with `save ""`, as in a load) and selecting the
@@ -521,6 +516,20 @@ The Memory record needs the same tree: the redis-server is a child of the measur
 child subreaper, and holds the whole graph, so without it the load would read as a few MB.
 `test_falkordb_redis_server_in_tree` checks that the after-load tree holds it. The store is in memory (`save ""`),
 so there is no Disk size.
+
+## FalkorDB: Variable length 1 to 3 is at the 60 s case ceiling (Task T)
+
+- id: falkordb/hop_var
+- Query: `hop_var` (Variable length 1 to 3), the shared openCypher text in `graph_bench/suites/hops.py`.
+- Before Task T a FalkorDB call over about 50 s failed on the client's 5 s socket timeout with 10 retries (✗
+  `TimeoutError: Timeout reading from socket`, seen in CI on `hop_var` and `scan_aggregate`). The adapter now
+  passes `socket_timeout=None`, so only the harness's rules stop the case (FAIRNESS.md rule 9).
+- The answers agree, but the 10 bindings take 6.6 to 11.1 s per run in the Docker push runs and 17.9 s in the
+  adapter test of 2026-10-31 (Docker, on a host shared with the Windows test suite). The preflight, the warm-up and
+  3 timed runs then take 33 to 90 s, so the case is ⏱ ("too slow: over 60 s") when the host is busy and keeps a
+  timing when it is not; allowlisted for that reason (an allowlisted id may agree).
+- Cause: FalkorDB engine (variable-length expand from a hub, about 3.5 s for that one binding) and the per-call
+  overhead of the out-of-process server. Not rewritten.
 
 ## FalkorDB: slow point lookups and IC6 under the 10x budget rule (not allowlisted)
 
@@ -718,6 +727,16 @@ alone, where no budget applies and they must agree.
   path; HelixDB computes the path, the adapter counts it. IS2's reply chain is capped at 50 steps and IS4 to IS6 run
   one source entry per label (Post, Comment) because a source predicate has no label disjunction.
 
+## HelixDB: Variable length 1 to 3 is past the 60 s case ceiling (Task T)
+
+- id: helixdb/hop_var
+- Query: `hop_var` (Variable length 1 to 3), the shared text built as a DSL walk (`both("KNOWS")` repeated three
+  times, deduplicated once at the end; see the budget section below).
+- The 10 bindings take 67 to 70 s per run on Windows, so the preflight alone runs past the 60 s case ceiling
+  (FAIRNESS.md rule 9): ⏱ ("too slow: over 60 s", answer unchecked), in the adapter test too, where HelixDB runs
+  alone. Seen in the test suite of 2026-10-31.
+- Cause: HelixDB DSL (every walk expanded, no intermediate deduplication). Not rewritten.
+
 ## HelixDB: slow under the 10x budget rule (not allowlisted)
 
 The answers agree with the references. In `bench --selection push --db grafeo,helixdb` (Windows) every query HelixDB runs is
@@ -737,10 +756,21 @@ The Hops it runs agree and are ⏱ by the same rule in `bench --selection push` 
 51x), over two runs. The builders follow the
 shared texts: every walk is expanded (`both("KNOWS")` per step, `repeat` three times for `hop_var`) and deduplicated
 once at the end, as `count(DISTINCT f.id)`; no step deduplicates the intermediate persons, which the texts do not
-ask for either. `hop_var` makes the HelixDB adapter test take about 6 minutes longer (warm-up plus 5 runs).
+ask for either. Since the 60 s case ceiling (Task T) `hop_var` is ⏱ in the adapter test as well (below).
 
 Pattern matching: `pattern_common` agrees within the rule (16.8 ms); `pm_two_hop_count` agrees but is ⏱ (1.27 s,
 17.9x; LadybugDB 1.6 ms, NeuG 2.9 ms): the builder streams every one of the 4,367,196 walks to count them.
+
+## Oxigraph: 4-cycles through a person (SPARQL) is past the 60 s case ceiling (Task T)
+
+- id: oxigraph/pattern_square_rdf
+- Query: `pattern_square_rdf`, the SPARQL twin of `pattern_square` in `graph_bench/suites/patterns.py` (the
+  4-cycle `?a (v:KNOWS|^v:KNOWS) ?b ...` closing on the bound person, with the same filters).
+- The answers agree. The preflight of the 10 bindings took 27.0 s in a test suite run on a busy Windows host
+  (2026-10-31), so the warm-up and 3 timed runs could not end before the 60 s case ceiling (FAIRNESS.md rule 9): ⏱
+  ("too slow: over 60 s"), in the adapter test too, where Oxigraph runs alone. In the next suite run, on a quieter
+  host, it agreed with a timing inside the ceiling. It is at the edge, so allowlisted (an allowlisted id may agree).
+- Cause: Oxigraph engine (the cyclic join over the property-path alternative). Not rewritten.
 
 ## HelixDB: intermittent planner error during loads on a busy machine (✗ when it happens, not allowlisted)
 
