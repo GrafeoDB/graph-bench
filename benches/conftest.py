@@ -15,6 +15,7 @@ the database's `process_env` (e.g. `RAYON_NUM_THREADS=1` for Grafeo) yourself, e
 `RAYON_NUM_THREADS=1 python -m pytest benches --codspeed -o addopts= --db grafeo`.
 """
 
+import time
 from pathlib import Path
 from typing import Any
 
@@ -74,6 +75,20 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         metavar="SECONDS",
         help="How long a startup child may take to answer before it is killed.",
     )
+    group.addoption(
+        "--gb-deadline-at",
+        type=float,
+        default=None,
+        metavar="EPOCH",
+        help="Wall-clock time (time.time()) after which no case, load or startup row starts; the rest is skipped.",
+    )
+
+
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    """Past the run deadline start nothing: skip the test (the supervisor marks its id timeout "run deadline")."""
+    deadline = item.config.getoption("--gb-deadline-at")
+    if deadline is not None and time.time() >= deadline:
+        pytest.skip("run deadline")
 
 
 def pytest_configure(config: pytest.Config) -> None:

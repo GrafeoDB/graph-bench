@@ -774,3 +774,89 @@ def test_load_over_the_ceiling_marks_the_dataset(bench_env: pytest.MonkeyPatch, 
     assert (snb.status, snb.error, snb.peak_bytes) == ("timeout", "load over 1 s", None)
     assert records[catalog.resource_id("snb", "fake", "small", 1, "rdf")].status == "ok"
     assert len(launches) == 2
+
+
+# A stand-in worker for the deadline tests: argv is out file, bench id, seconds the case runs. It writes the `start`
+# and, after that time, the `entry` line of one case, then stays silent for 30 s (as a worker between cases would).
+_ONE_CASE_WORKER = """\
+import json, sys, time
+out, bench_id, seconds = sys.argv[1], sys.argv[2], float(sys.argv[3])
+def emit(**line):
+    with open(out, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(line) + "\\n")
+emit(kind="database", name="fake", version="1", process="in-process", threads_configurable=False,
+     threads_note="", storage="in-memory")
+emit(kind="start", id=bench_id)
+time.sleep(seconds)
+emit(kind="entry", id=bench_id, status="ok", answer="agree", preflight_ns=1000)
+time.sleep(30)
+"""
+
+
+def _deadline_run(tmp_path: Path, deadline_s: float) -> supervisor._Run:
+    run = supervisor._Run(catalog.selection("push"), tmp_path, tmp_path, 30.0, _results([]))
+    run.deadline_s = deadline_s
+    run.deadline_at = time.monotonic() + deadline_s
+    return run
+
+
+def test_deadline_marks_the_remaining_cases(bench_env: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A deadline that has passed before a database starts: no worker is launched, every id of the database is
+    ⏱ "run deadline: ..."; a database whose worker is between cases at the deadline is stopped there and its
+    unrecorded ids are marked the same way, the recorded one keeps its verdict."""
+    launches = _recording_launches(bench_env)
+    results = run_bench("push", ["fake"], tmp_path / "out", workdir=tmp_path / "work", deadline_s=0)
+    assert launches == []
+    assert set(_by_id(results)) == _expected_ids("fake")
+    for entry in results.entries:
+        assert (entry.status, entry.error) == ("timeout", "run deadline: 0 s"), entry
+
+    sel = catalog.selection("push")
+    run = _deadline_run(tmp_path, 1.0)
+    meta = supervisor._expected(sel, "fake", 1)
+    bench_id = _id("snb_is2")
+    out = tmp_path / "worker.jsonl"
+    argv = [sys.executable, "-c", _ONE_CASE_WORKER, str(out), bench_id, "0.1"]
+    started = time.monotonic()
+    attempt = run._attempt(argv, dict(os.environ), out, tmp_path / "worker.log", "fake", meta, {})
+    assert time.monotonic() - started < 10
+    assert attempt.deadline and not attempt.hung
+    assert not run._settle(attempt, meta)  # nothing is relaunched
+    assert run.recorded[bench_id].status == "ok"
+    assert set(run.recorded) == set(meta)
+    for other, entry in run.recorded.items():
+        if other != bench_id:
+            assert (entry.status, entry.error) == ("timeout", "run deadline: 1 s"), entry
+
+
+def test_deadline_writes_results(bench_env: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """results.json is written as usual when the deadline has passed, with every entry and Memory and Disk record
+    of the database marked, and the CLI takes `--deadline-s`."""
+    bench_env.setitem(catalog.SELECTIONS, "push", dataclasses.replace(catalog.SELECTIONS["push"], resources=True))
+    out = tmp_path / "out"
+    result = CliRunner().invoke(
+        app, ["bench", "--selection", "push", "--db", "fake", "--out", str(out), "--deadline-s", "0.001"]
+    )
+    assert result.exit_code == 0, result.output
+    results = Results.read(out / "results.json")
+    assert {e.id for e in results.entries} == _expected_ids("fake")
+    assert {(e.status, e.error) for e in results.entries} == {("timeout", "run deadline: 0.001 s")}
+    assert results.resources and {(r.status, r.error) for r in results.resources} == {
+        ("timeout", "run deadline: 0.001 s")
+    }
+
+
+def test_running_case_keeps_its_ceiling_past_the_deadline(tmp_path: Path) -> None:
+    """A case that started before the deadline is not cut at it: it records its own entry, and only then does the
+    run stop."""
+    sel = catalog.selection("push")
+    run = _deadline_run(tmp_path, 1.0)
+    meta = supervisor._expected(sel, "fake", 1)
+    bench_id = _id("snb_is2")
+    out = tmp_path / "worker.jsonl"
+    argv = [sys.executable, "-c", _ONE_CASE_WORKER, str(out), bench_id, "2.5"]
+    started = time.monotonic()
+    attempt = run._attempt(argv, dict(os.environ), out, tmp_path / "worker.log", "fake", meta, {})
+    assert time.monotonic() - started > 2.4  # waited for the case, well past the 1 s deadline
+    assert attempt.deadline
+    assert (run.recorded[bench_id].status, run.recorded[bench_id].error) == ("ok", None)

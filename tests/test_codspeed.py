@@ -1,5 +1,6 @@
 """The pytest-codspeed entry point (`benches/`) and the `codspeed` command."""
 
+import dataclasses
 import json
 import os
 import subprocess
@@ -717,3 +718,19 @@ def test_codspeed_case_and_load_ceilings(push_data_dir: Path, tmp_path: Path) ->
             line = entries[_id(item.id)]
             assert (line["status"], line["error"]) == ("timeout", "load over 0.1 s"), item.id
             assert _id(item.id) not in spied
+
+
+def test_pytest_argv_passes_the_deadline() -> None:
+    request = supervisor.LaunchRequest("fake", "push", 1, Path("w"), Path("o.jsonl"), 5.0, [], {}, deadline_at=123.5)
+    argv = supervisor.pytest_argv(request)
+    assert argv[argv.index("--gb-deadline-at") + 1] == "123.5"
+    assert "--gb-deadline-at" not in supervisor.pytest_argv(dataclasses.replace(request, deadline_at=None))
+
+
+def test_codspeed_session_past_the_deadline_skips_every_test(push_data_dir: Path, tmp_path: Path) -> None:
+    out = tmp_path / "gb.jsonl"
+    args = ["--db", "fake", "--selection", "push", "--gb-out", str(out), "--gb-deadline-at", "1.0"]
+    args += ["-k", "test_snb_is2 or test_snb_is3"]
+    proc = _pytest(args, _env(push_data_dir))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "entry" not in out.read_text(encoding="utf-8")  # no case, load or startup row started
