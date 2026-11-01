@@ -126,6 +126,29 @@ def test_cli_without_a_snapshot_exits_2(tmp_path: Path) -> None:
     assert result.exit_code == 2
 
 
+def test_newest_release_asks_for_post_releases(monkeypatch: pytest.MonkeyPatch) -> None:
+    """local-check compares with what an install picks, so its lookup counts post releases."""
+    calls: list[tuple[str, bool]] = []
+
+    def fetch_latest(package: str = "grafeo", *, post: bool = False) -> str:
+        calls.append((package, post))
+        return "26.10.2.post1"
+
+    monkeypatch.setattr(release, "fetch_latest", fetch_latest)
+    assert local_check.newest_release("arcadedb-embedded") == "26.10.2.post1"
+    assert calls == [("arcadedb-embedded", True)]
+
+
+def test_a_post_release_ranks_above_its_base_whatever_the_trailing_zeros() -> None:
+    """`1.0.post1` is `1.0.0.post1`: newer than `1.0.0`, older than `1.0.1`."""
+    live = [{"yanked": False}]
+    assert release.newest_stable({"1.0.0": live, "1.0.post1": live}, post=True) == "1.0.post1"
+    assert release.newest_stable({"1.0.post1": live, "1.0.0": live}, post=True) == "1.0.post1"
+    assert release.newest_stable({"1.0": live, "1.0.0.post2": live}, post=True) == "1.0.0.post2"
+    assert release.newest_stable({"1.0.post1": live, "1.0.1": live}, post=True) == "1.0.1"
+    assert release.newest_stable({"1.0.0": live, "1.0.post1": live}) == "1.0.0"
+
+
 def test_fetch_latest_takes_the_package(monkeypatch: pytest.MonkeyPatch) -> None:
     """One PyPI lookup for every package: the url and the error name it; post releases count only when asked."""
     urls: list[str] = []

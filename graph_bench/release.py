@@ -20,10 +20,11 @@ _POST = re.compile(r"(\d+(?:\.\d+)*)(?:\.post(\d+))?")
 
 
 def _order(version: str) -> tuple[tuple[int, ...], int]:
-    """Numeric order of a stable or post version: release numbers, then the post number (-1 for none)."""
+    """Numeric order of a stable or post version: release numbers with trailing zeros dropped (1.0.post1 is
+    1.0.0.post1), then the post number (-1 for none)."""
     match = _POST.fullmatch(version)
     assert match is not None
-    return tuple(int(p) for p in match.group(1).split(".")), int(match.group(2)) if match.group(2) else -1
+    return _trim(tuple(int(p) for p in match.group(1).split("."))), int(match.group(2)) if match.group(2) else -1
 
 
 def newest_stable(releases: dict[str, list[dict[str, Any]]], *, post: bool = False) -> str | None:
