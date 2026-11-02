@@ -151,6 +151,10 @@ benchmark moves to `legacy/` untouched and is deleted once the new comparison re
   database's fastest documented bulk load, its vendor-recommended API, checked answers and the budget rule.
 - **README and CONTRIBUTING**: rewritten for the new comparison and for adding a database adapter.
 - **Dependencies**: the extras are `grafeo`, `ladybug`, `embedded` (both), `bench` (pytest-codspeed) and `dev`.
+- **SQL/PGQ IC13**: binds both endpoints in their element patterns. The graph pattern WHERE applies after path
+  selection, so the old text asked for the shortest path of every pair of persons and no engine finished it on medium.
+- **SPARQL multi-pattern join**: runs on small in every selection, because no database finishes it 3 times within the
+  case ceiling on medium (FAIRNESS.md rule 9). A query can now pin itself to one scale (`Query.fixed_scale`).
 - **Release post floor**: the Discord release post skips grafeo releases below 0.6.1, the first one graph-bench
   0.3.0 measures (`graph_bench.release.MEASURED_FROM`); `force` does not override it.
 

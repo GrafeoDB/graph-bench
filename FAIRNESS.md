@@ -91,6 +91,11 @@ benchmark, servers included, is kept in [legacy/](legacy/README.md).
      and every supported case not yet run is ⏱ ("run deadline: 48 min"; an unsupported one stays ⊘), so a run
      that would not fit leaves results. The Startup row is atomic and runs first, so a deadline that passes during
      it waits for the row to end.
+   - **A row no database can measure runs on a smaller scale.** Where no database finishes the 3 timed runs within
+     the case ceiling at the selection's scale, the row runs on the next smaller scale for every database
+     (`Query.fixed_scale`), under a heading naming that scale. Its load there is not a Load row. Today this is
+     `pattern_join_rdf`, on small. A row that at least one database can measure stays at the selection's scale,
+     however slow the others are: the markers report that gap.
    - **Only these rules stop a case.** Database-side query and socket timeouts are disabled or raised wherever the
      setting is public (FalkorDB's client socket timeout, Grafeo's 30 s query timeout from 0.6.1 on), so no client
      or engine default fails a case with its own ✗; the other databases have no default timeout below the ceiling.

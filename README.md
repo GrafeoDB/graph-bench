@@ -131,7 +131,8 @@ Selections:
 - `push`: small scale, the property graph core categories, single-threaded. Runs on every push to `main`.
 - `full`: every category at medium scale, single-threaded. Feeds the [Results](#results) section. Small is
   covered by `push`, which CodSpeed runs on every push; `full` runs medium only so it fits the CodSpeed runner's
-  hour.
+  hour. A row no database can measure on medium runs on small, under its own heading
+  ([rule 9](FAIRNESS.md)): today the SPARQL multi-pattern join.
 - `release` (planned): `full` plus LDBC Graphalytics' wiki-Talk graph, checked against LDBC's published
   validation outputs, for Grafeo release runs.
 
