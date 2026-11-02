@@ -134,10 +134,12 @@ other databases:
   in the push run against NeuG's 0.70 ms, LadybugDB's 2.3 ms and Neo4j's 7.4 ms, within the rule.
 - `pattern_join_sql` 1.5 s for the join the openCypher `pattern_join` answers in 74 ms on the same Grafeo (DuckDB
   cannot run it, so no budget applies there). `pattern_square_sql` is past the case ceiling (section above).
-- `pattern_join_rdf` 3.0 s against Oxigraph's 0.36 s (8.2x; at the edge of the rule). On `snb-medium` Oxigraph takes
+- `pattern_join_rdf` 3.0 s against Oxigraph's 0.36 s (8.2x; at the edge of the rule) in this list, whose build for
+  that row is not on record: the PyPI 0.6.0 wheel takes 1.1 s alone, the figure below. On `snb-medium` Oxigraph takes
   40.6 s per run and Grafeo 0.6.1 is past 60 s, so no database gets 3 timed runs within the case ceiling and the row
   runs on small (FAIRNESS.md rule 9). There, 0.6.1 regressed from 0.6.0 on every platform measured: Windows x86-64
-  1.1 s to 3.9 s, Linux x86-64 about 1.5 s to about 4 s, Graviton 2.4 s to 8.1 s (one run each). Bisected to grafeo
+  1.1 s to 3.9 s (PyPI wheels, a standalone timing), Linux x86-64 about 1.5 s to about 4 s, Graviton 2.4 s to 8.1 s
+  (one run each). Bisected to grafeo
   331a6dc0 (SPARQL per-row triple lookups): 600 ms before it, 3.1 s after, with the same plan and the time all in the
   join. Tracked in grafeo's roadmap for 0.6.2.
 
