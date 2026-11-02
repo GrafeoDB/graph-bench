@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import os
 import subprocess
@@ -628,6 +629,29 @@ def _deadline_worker(
     )
     assert lines == [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
     return lines, clock
+
+
+def test_worker_runs_a_pinned_row_on_its_own_scale(
+    push_data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A row pinned to small in a medium selection loads small without a Load entry and checks small's reference."""
+    monkeypatch.setenv("GRAPH_BENCH_DATA_DIR", str(push_data_dir))
+    monkeypatch.setenv("GRAPH_BENCH_FAKE", "")
+    data = cache.prepare("push")
+    key = cache.dataset_key("push")
+    monkeypatch.setattr(cache, "prepare", lambda _: data)
+    monkeypatch.setattr(cache, "dataset_key", lambda _: key)
+    medium = dataclasses.replace(catalog.SELECTIONS["push"], scales=("medium",))
+    monkeypatch.setitem(catalog.SELECTIONS, "push", medium)
+    ids = catalog.all_ids("push", ["fake"])
+    pinned = next(i for i in ids if "pattern_join_rdf" in i)
+    assert "fake-small" in pinned
+    out = tmp_path / "w.jsonl"
+    worker.run("fake", "push", 1, workdir=tmp_path / "work", out=out, skip=frozenset(set(ids) - {pinned}))
+    lines = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
+    entries = [line for line in lines if line["kind"] == "entry"]
+    assert [e["id"] for e in entries] == [pinned]
+    assert entries[0]["status"] == "ok" and entries[0]["answer"] == "agree", entries[0]
 
 
 def test_worker_starts_nothing_past_the_deadline(
