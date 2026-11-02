@@ -41,7 +41,7 @@ graph_bench/
   report/         ranking, the README matrix, the summary block for grafeo's README
 benches/          the pytest-codspeed entry point (graph-bench codspeed)
 tests/            the test suite
-docs/             known disagreements, workload profiles, design notes
+docs/             known disagreements
 legacy/           the pre-0.3.0 benchmark, not installed or tested
 ```
 

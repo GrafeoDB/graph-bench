@@ -24,7 +24,7 @@ benchmark moves to `legacy/` untouched and is deleted once the new comparison re
   `direct_url.json`, when present, names the recorded wheel); a wheel installed over it is reported by its local
   path or URL.
 - **One process per database**: `graph-bench bench` runs one worker process per database, one after another, and
-  writes `results.json` (schema in the design spec) with the machine, the Grafeo build and each database's
+  writes `results.json` with the machine, the Grafeo build and each database's
   version, process kind, storage and thread setting.
 - **Answer check and preflight**: every query's answer is compared with a Python reference computed from the
   generated data (NetworkX for algorithms, the LDBC epsilon for PageRank). Each benchmark first runs once,
