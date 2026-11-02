@@ -256,6 +256,8 @@ QUERIES: tuple[Query, ...] = (
             _BASE[qid][1],
             _EXACT,
             qid,
+            # No database finishes it 3 times within the case ceiling on medium (FAIRNESS.md rule 9).
+            "small" if qid == "pattern_join" else "",
         )
         for qid, _, sparql in _TWINS
     ),
