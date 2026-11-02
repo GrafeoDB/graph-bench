@@ -136,8 +136,10 @@ other databases:
   cannot run it, so no budget applies there). `pattern_square_sql` is past the case ceiling (section above).
 - `pattern_join_rdf` 3.0 s against Oxigraph's 0.36 s (8.2x; at the edge of the rule). On `snb-medium` Oxigraph takes
   40.6 s per run and Grafeo 0.6.1 is past 60 s, so no database gets 3 timed runs within the case ceiling and the row
-  runs on small (FAIRNESS.md rule 9). On Graviton (aarch64, small) it went from 2.4 s on 0.6.0 to 8.1 s on 0.6.1, one
-  run each, while x86-64 stayed near 3 s; reported to the grafeo session, cause unknown.
+  runs on small (FAIRNESS.md rule 9). There, 0.6.1 regressed from 0.6.0 on every platform measured: Windows x86-64
+  1.1 s to 3.9 s, Linux x86-64 about 1.5 s to about 4 s, Graviton 2.4 s to 8.1 s (one run each). Bisected to grafeo
+  331a6dc0 (SPARQL per-row triple lookups): 600 ms before it, 3.1 s after, with the same plan and the time all in the
+  join. Tracked in grafeo's roadmap for 0.6.2.
 
 ## Grafeo: medium-scale RDF and IC13 (not allowlisted)
 
