@@ -186,7 +186,7 @@ queries agree afterwards), but slower than the batch API. It is not a disagreeme
   (about 2 us per index probe), compared with `batch_create_edges` on internal ids. Grafeo has no documented
   bulk path for edges keyed by an external id that avoids the per-row probe.
 
-## Grafeo: SQL/PGQ ANY SHORTEST does not parse yet (IS6, IC13; IS4's label disjunction fixed on the 0.6.1 branch)
+## Grafeo: SQL/PGQ ANY SHORTEST: IS6 is refused, IC13 is past the case ceiling (IS4 fixed in 0.6.1)
 
 - id: grafeo/snb_sql_is6
 - id: grafeo/snb_sql_ic13
@@ -195,6 +195,11 @@ queries agree afterwards), but slower than the batch API. It is not a disagreeme
   after the pattern (ruling R6), which Grafeo accepts: `snb_sql_is1` agrees (median 0.226 ms for 10 bindings).
 - Dataset: `snb-small`, loaded as the property graph `snb` (Grafeo: a named graph, `create_graph("snb")` and
   `set_graph("snb")`, so `GRAPH_TABLE (snb MATCH ...)` resolves it).
+- Grafeo 0.6.1 outcome (PyPI on `snb-medium`, release candidate 9ec62ced on `snb-small`): `ANY SHORTEST` parses.
+  - `snb_sql_is4` agrees.
+  - `snb_sql_is6`: ✗, `GRAFEO-Q004: unsupported: a shortest path search over more than one edge pattern is not
+    supported`.
+  - `snb_sql_ic13`: ⏱ ("too slow: over 60 s"); what was checked on `snb-small` agrees.
 - Grafeo 0.6.0 (local build of release/0.6.1, `D:\gb-grafeo-0.6.1` at 5048055b) outcome: these three fail at parse
   time (✗), on the first binding:
   - `snb_sql_is4`: `GRAFEO-Q001: syntax error: [SQL/PGQ] Expected RParen, found Pipe` at `MATCH (m:Post|Comment)`.
