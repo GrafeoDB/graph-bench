@@ -180,9 +180,8 @@ the payload, run `uv run --no-sync graph-bench report --format discord --in out/
 
 CI measures Grafeo against a fixed roster (`catalog.CI_DATABASES`). The other four databases of the README come
 from a local snapshot of all ten, `results/local/results.json`, refreshed by hand on the dev box and committed once
-it has been run. The first snapshot is committed after this release's pull request merges; until a snapshot is
-committed, `readme-results` merges no `--local` input and the README shows the CI roster only. One command
-produces it, with Docker running:
+it has been run. Without a committed snapshot, `readme-results` merges no `--local` input and the README shows the
+CI roster only. One command produces it, with Docker running:
 
 ```bash
 bash .github/scripts/local-bench.sh
