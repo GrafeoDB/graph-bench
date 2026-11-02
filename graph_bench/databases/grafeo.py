@@ -1,7 +1,7 @@
-"""Grafeo, embedded and in memory: batch loading, Cypher, SQL/PGQ and SPARQL queries and the native algorithms."""
+"""Grafeo, embedded and in memory: native CSV loading, Cypher, SQL/PGQ and SPARQL queries and the native algorithms."""
 
 import inspect
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from itertools import islice
 from pathlib import Path
 from typing import Any, ClassVar
@@ -11,10 +11,12 @@ from grafeo.terms import Literal
 
 from graph_bench.databases.base import Database, DatabaseInfo, NotSupported
 from graph_bench.datasets import rdf
-from graph_bench.datasets.schema import Dataset, EdgeTable, NodeTable
+from graph_bench.datasets.schema import Column, Dataset
 from graph_bench.types import Model, Store
 
-CHUNK = 10_000
+# The dataset's column types in `load_nodes_csv` and `load_edges_csv`. An empty field sets no property, the dataset
+# contract.
+CSV_TYPES = {"INT64": "int64", "DOUBLE": "float64", "STRING": "string"}
 
 # Triples per `INSERT DATA` statement of the transitional RDF load (`_insert_data`). Grafeo's loading guide calls
 # 10,000 triples per batch "a good default" for its streaming loaders (docs/user-guide/sparql/loading.md, "Turtle
@@ -31,9 +33,8 @@ def _chunks[T](items: Iterator[T], size: int) -> Iterator[list[T]]:
         yield chunk
 
 
-def _rows(dataset: Dataset, table: NodeTable | EdgeTable) -> Iterator[dict[str, Any]]:
-    # Dataset contract: an empty CSV field means "no property" (LadybugDB's COPY and Grafeo's LOAD CSV give null).
-    return ({k: v for k, v in row.items() if v != ""} for row in dataset.rows(table))
+def _csv_types(columns: Iterable[Column]) -> dict[str, str]:
+    return {column.name: CSV_TYPES[column.type] for column in columns}
 
 
 def _term(value: Any) -> Any:
@@ -60,13 +61,14 @@ def _insert_data(db: Any, path: Path) -> None:
 class GrafeoDatabase(Database):
     """An in-memory `grafeo.GrafeoDB` in one of two stores, queried in three models.
 
-    Graph store (property graph and SQL/PGQ): loaded with the batch APIs, Grafeo's fastest documented bulk path
-    (CSV parsing included, in Python), into a named graph called after the dataset (`snb`, `graphalytics`), which
+    Graph store (property graph and SQL/PGQ): loaded with `load_nodes_csv` and `load_edges_csv`, Grafeo's fastest
+    documented bulk path (new in 0.6.1, parsed and typed in Rust, docs/user-guide/python/database.md, experimental per
+    docs/stability.md), into a named graph called after the dataset (`snb`, `graphalytics`), which
     `set_graph` selects for every later call (docs/user-guide/named-graphs.md; docs/user-guide/python/database.md:
     "the direct API, `db.algorithms`, CALL procedures ... follow it"). SQL/PGQ's `GRAPH_TABLE (snb MATCH ...)`
     names that graph, as the standard requires. Node ids from the dataset are kept as the `id` property (with a
     property index). WCC and PageRank key their results by it (`key="id"`); BFS takes and returns internal node
-    ids, mapped through the ids the batch call returns. Property graph queries run with `execute_cypher`, SQL/PGQ
+    ids, mapped through a query inside the load clock. Property graph queries run with `execute_cypher`, SQL/PGQ
     with `execute_sql` (docs/user-guide/sql-pgq/index.md).
 
     RDF store: the dataset's N-Triples file (`rdf.ntriples_path`, written untimed at prepare time by the shared
@@ -120,24 +122,25 @@ class GrafeoDatabase(Database):
         db = self.db
         db.create_graph(dataset.name)
         db.set_graph(dataset.name)
-        # label -> dataset id -> internal node id, for the edge endpoints.
-        ids: dict[str, dict[Any, int]] = {}
+        key_types: dict[str, str] = {}
         for table in dataset.nodes:
-            label_ids = ids.setdefault(table.label, {})
-            for rows in _chunks(_rows(dataset, table), CHUNK):
-                created = db.batch_create_nodes_with_props(table.label, rows)
-                label_ids.update(zip((row["id"] for row in rows), created, strict=True))
+            key_types[table.label] = CSV_TYPES[table.columns[0].type]
+            db.load_nodes_csv(dataset.root / table.file, table.label, key="id", types=_csv_types(table.columns))
         for table in dataset.edges:
-            src, dst = ids[table.src], ids[table.dst]
-            edges = ((src[row.pop("src")], dst[row.pop("dst")], table.type, row) for row in _rows(dataset, table))
-            for chunk in _chunks(edges, CHUNK):
-                db.batch_create_edges(chunk)
+            types = {"src": key_types[table.src], "dst": key_types[table.dst], **_csv_types(table.columns)}
+            db.load_edges_csv(
+                dataset.root / table.file,
+                table.type,
+                source=(table.src, "id", "src"),
+                target=(table.dst, "id", "dst"),
+                types=types,
+            )
         db.create_property_index("id")
         # bfs_layers has no `key=`: the graphalytics vertices keep their internal ids, and the way back.
         self.ids: dict[Any, int] = {}
         self.keys: dict[int, Any] = {}
         if dataset.name == "graphalytics":
-            self.ids = ids["V"]
+            self.ids = dict(self.query("MATCH (n:V) RETURN n.id AS key, id(n) AS nid", {}))
             self.keys = {nid: key for key, nid in self.ids.items()}
 
     def load_store(self, store: Store, dataset: Dataset) -> None:

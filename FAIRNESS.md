@@ -219,7 +219,7 @@ Memory and Disk are records, not timed benchmarks: they never reach CodSpeed and
 
 Load uses each database's **fastest documented bulk path, CSV parsing included**:
 
-- Grafeo: the batch API (`batch_create_nodes_with_props`, `batch_create_edges`), with the CSVs parsed in Python.
+- Grafeo: `load_nodes_csv` and `load_edges_csv`, parsed and typed in Rust.
   Grafeo's query-language `LOAD CSV` is 2x to 3x slower today; it will be tracked as its own category, Load
   (query language), so engine-side load fixes show up there. When Grafeo's native typed loader lands, it
   replaces the batch API for Load.

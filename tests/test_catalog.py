@@ -57,6 +57,9 @@ def test_the_sparql_join_is_the_only_row_pinned_to_a_scale(monkeypatch: pytest.M
     assert scales["pattern_square_rdf"] == "medium"
     assert catalog.data_scales("full") == ("medium", "small")
     assert catalog.data_scales("push") == ("small",)
+    # On small, `full` needs only the pinned row's reference, the one it shares with its openCypher twin.
+    assert [i.id for i in catalog.reference_items("full", "small")] == ["pattern_join"]
+    assert len(catalog.reference_items("full", "medium")) == len(catalog.reference_items("full"))
     assert {c.scale for c in cases("push", ["oxigraph"])} == {"small"}
     assert not [lid for lid in catalog.load_ids("full", ["oxigraph"]) if "-small" in lid]
     # A selection of both scales runs the pinned row once.
@@ -166,15 +169,15 @@ def test_model_queries_share_the_snb_references() -> None:
 def test_sql_pgq_texts_name_the_graph_and_filter_in_the_graph_pattern_where() -> None:
     """The filter is the graph pattern WHERE after the pattern, never inside an element pattern, but for IC13."""
     for q in snb_sql.QUERIES:
-        if q.id == "snb_sql_ic13":
-            continue
         text = q.text["sql_pgq"]
         assert "GRAPH_TABLE (snb\n" in text, q.id
+        assert "{id:" not in text, q.id
+        if q.id == "snb_sql_ic13":
+            continue
         pattern, rest = text.split("MATCH", 1)[1].split("COLUMNS", 1)[0].split("WHERE", 1)
         assert re.match(r"\s+\w+\.id = \$\w+", rest), q.id  # one graph pattern WHERE, right after the pattern
         assert not re.search(r"\([^()]*\bWHERE\b[^()]*\)", text.split("COLUMNS", 1)[0]), q.id
         assert pattern.rstrip().endswith(")"), q.id  # the WHERE follows the last element pattern
-        assert "{id:" not in text, q.id
 
 
 def test_sparql_texts_take_parameters_as_values() -> None:

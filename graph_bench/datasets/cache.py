@@ -66,7 +66,7 @@ def _write_references(selection: str, snb_ds: Dataset, ga_ds: Dataset, mg_ds: Da
     """
     sel = catalog.selection(selection)
     graphs: dict[str, Any] = {"snb": snb.SnbGraph.from_dataset(snb_ds), "graphalytics": ga_ds, multigraph.NAME: mg_ds}
-    for item in catalog.reference_items(selection):
+    for item in catalog.reference_items(selection, snb_ds.scale):
         source = catalog.reference_source(item.id)
         graph = graphs[item.dataset]
         bindings = source.bindings(item.id, graph, sel.bindings)
