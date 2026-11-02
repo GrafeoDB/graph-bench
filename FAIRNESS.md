@@ -91,6 +91,11 @@ benchmark, servers included, is kept in [legacy/](legacy/README.md).
      and every supported case not yet run is ⏱ ("run deadline: 48 min"; an unsupported one stays ⊘), so a run
      that would not fit leaves results. The Startup row is atomic and runs first, so a deadline that passes during
      it waits for the row to end.
+   - **A row no database can measure runs on a smaller scale.** Where no database finishes the 3 timed runs within
+     the case ceiling at the selection's scale, the row runs on the next smaller scale for every database
+     (`Query.fixed_scale`), under a heading naming that scale. Its load there is not a Load row. Today this is
+     `pattern_join_rdf`, on small. A row that at least one database can measure stays at the selection's scale,
+     however slow the others are: the markers report that gap.
    - **Only these rules stop a case.** Database-side query and socket timeouts are disabled or raised wherever the
      setting is public (FalkorDB's client socket timeout, Grafeo's 30 s query timeout from 0.6.1 on), so no client
      or engine default fails a case with its own ✗; the other databases have no default timeout below the ceiling.
@@ -214,10 +219,9 @@ Memory and Disk are records, not timed benchmarks: they never reach CodSpeed and
 
 Load uses each database's **fastest documented bulk path, CSV parsing included**:
 
-- Grafeo: the batch API (`batch_create_nodes_with_props`, `batch_create_edges`), with the CSVs parsed in Python.
+- Grafeo: `load_nodes_csv` and `load_edges_csv`, parsed and typed in Rust.
   Grafeo's query-language `LOAD CSV` is 2x to 3x slower today; it will be tracked as its own category, Load
-  (query language), so engine-side load fixes show up there. When Grafeo's native typed loader lands, it
-  replaces the batch API for Load.
+  (query language), so engine-side load fixes show up there.
 - LadybugDB: `COPY ... FROM` the CSV files.
 - ArcadeDB: GraphBatch (`create_vertices`, then `new_edges` from an id to RID map), with the CSVs parsed in
   Python. Its faster Graph Importer does not honour CSV quotes, which the SNB text columns need (see

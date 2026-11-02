@@ -984,7 +984,7 @@ def _run_all(
             continue
         item = case.item
         if item.supported_by(db_cls.models):
-            groups[(item.dataset, item.store, case.scale)].append(case)
+            groups.setdefault((item.dataset, item.store, case.scale), []).append(case)
         else:
             emit(case_entry(case, status="not_supported", error=f"model {item.model} not supported"))
 

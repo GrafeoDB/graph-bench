@@ -134,7 +134,14 @@ other databases:
   in the push run against NeuG's 0.70 ms, LadybugDB's 2.3 ms and Neo4j's 7.4 ms, within the rule.
 - `pattern_join_sql` 1.5 s for the join the openCypher `pattern_join` answers in 74 ms on the same Grafeo (DuckDB
   cannot run it, so no budget applies there). `pattern_square_sql` is past the case ceiling (section above).
-- `pattern_join_rdf` 3.0 s against Oxigraph's 0.36 s (8.2x; at the edge of the rule).
+- `pattern_join_rdf` 3.0 s against Oxigraph's 0.36 s (8.2x; at the edge of the rule) in this list, whose build for
+  that row is not on record: the PyPI 0.6.0 wheel takes 1.1 s alone, the figure below. On `snb-medium` Oxigraph takes
+  40.6 s per run and Grafeo 0.6.1 is past 60 s, so no database gets 3 timed runs within the case ceiling and the row
+  runs on small (FAIRNESS.md rule 9). There, 0.6.1 regressed from 0.6.0 on every platform measured: Windows x86-64
+  1.1 s to 3.9 s (PyPI wheels, a standalone timing), Linux x86-64 about 1.5 s to about 4 s, Graviton 2.4 s to 8.1 s
+  (one run each). Bisected to grafeo
+  331a6dc0 (SPARQL per-row triple lookups): 600 ms before it, 3.1 s after, with the same plan and the time all in the
+  join. Tracked in grafeo's roadmap for 0.6.2.
 
 ## Grafeo: medium-scale RDF and IC13 (not allowlisted)
 
@@ -151,7 +158,8 @@ From the `full` selection on Grafeo release/0.6.1 builds (64a679ed and 9164e307)
 
 ## Grafeo: LOAD CSV is 2x to 3x slower than its batch API (not allowlisted)
 
-Load uses the batch API, Grafeo's fastest documented bulk path; LOAD CSV will be tracked as its own benchmark,
+Load uses `load_nodes_csv` and `load_edges_csv` since 0.6.1, its fastest documented bulk path (the batch API before
+that, the comparison below); LOAD CSV will be tracked as its own benchmark,
 Load (query language). The LOAD CSV load is correct (every node and edge count matches the CSVs, and all checked
 queries agree afterwards), but slower than the batch API. It is not a disagreement, so there is no `- id:` line.
 
@@ -186,15 +194,22 @@ queries agree afterwards), but slower than the batch API. It is not a disagreeme
   (about 2 us per index probe), compared with `batch_create_edges` on internal ids. Grafeo has no documented
   bulk path for edges keyed by an external id that avoids the per-row probe.
 
-## Grafeo: SQL/PGQ ANY SHORTEST does not parse yet (IS6, IC13; IS4's label disjunction fixed on the 0.6.1 branch)
+## Grafeo: SQL/PGQ ANY SHORTEST over several edge patterns is refused (IS6; IS4 and IC13 agree in 0.6.1)
 
 - id: grafeo/snb_sql_is6
-- id: grafeo/snb_sql_ic13
 - Queries: the SQL/PGQ texts in `graph_bench/suites/snb_sql.py`, standard SQL/PGQ (ISO/IEC 9075-16), one text for
   every engine, no Grafeo override (a weaker Grafeo-only text is not allowed). Filters are the graph pattern WHERE
-  after the pattern (ruling R6), which Grafeo accepts: `snb_sql_is1` agrees (median 0.226 ms for 10 bindings).
-- Dataset: `snb-small`, loaded as the property graph `snb` (Grafeo: a named graph, `create_graph("snb")` and
-  `set_graph("snb")`, so `GRAPH_TABLE (snb MATCH ...)` resolves it).
+  after the pattern, but for IC13's two endpoints (`suites/snb_sql.py`), which Grafeo accepts: `snb_sql_is1` agrees (median 0.226 ms for 10 bindings).
+- Dataset: `snb-small` for the 0.6.0 outcome and `snb-medium` for 0.6.1, loaded as the property graph `snb` (Grafeo:
+  a named graph, `create_graph("snb")` and `set_graph("snb")`, so `GRAPH_TABLE (snb MATCH ...)` resolves it).
+- Grafeo 0.6.1 outcome (`snb-medium`): `ANY SHORTEST` parses.
+  - `snb_sql_is4` agrees.
+  - `snb_sql_is6`: ✗, `GRAFEO-Q004: unsupported: a shortest path search over more than one edge pattern is not
+    supported`.
+  - `snb_sql_ic13` agrees, 4.0 ms for 20 bindings. The text used to filter both endpoints in the graph pattern WHERE,
+    which applies after path selection: it asked for the shortest path of every pair of persons, and neither Grafeo
+    nor DuckPGQ finished it within 60 s on `snb-medium`. That was graph-bench's text, not an engine fault: both
+    endpoints are now bound in their element patterns.
 - Grafeo 0.6.0 (local build of release/0.6.1, `D:\gb-grafeo-0.6.1` at 5048055b) outcome: these three fail at parse
   time (✗), on the first binding:
   - `snb_sql_is4`: `GRAFEO-Q001: syntax error: [SQL/PGQ] Expected RParen, found Pipe` at `MATCH (m:Post|Comment)`.
@@ -202,15 +217,11 @@ queries agree afterwards), but slower than the batch API. It is not a disagreeme
   - `snb_sql_is6`: `Expected LParen, found Identifier` at `MATCH ANY SHORTEST (m:Post|Comment)-[r:REPLY_OF]->*(p:Post)`.
   - `snb_sql_ic13`: `Expected LParen, found Identifier` at `MATCH path = ANY SHORTEST (p1:Person)-[k:KNOWS]-+(p2:Person)`.
 - Reference answers: the openCypher SNB references (`snb_is4`, `snb_is6`, `snb_ic13`), the same bindings and rows.
-- Cause: Grafeo engine (SQL/PGQ parser), confirmed by grafeo-31 on release/0.6.1. IS4: the label disjunction
-  `Post|Comment` (grafeo-31: "SQL/PGQ node pattern reads only :A:B"). IS6 and IC13: the `ANY SHORTEST` path
-  search prefix (with it, quantified edges inside `GRAPH_TABLE`). For IS6 this is the first failure: the label
-  disjunction `Post|Comment` in the same text could fail next. The decision on the target release is the
-  user's (decisions.md, 6).
+- Cause in 0.6.1: Grafeo engine, IS6 only. A selective path pattern over more than one edge pattern is refused;
+  its text has REPLY_OF, CONTAINER_OF and HAS_MODERATOR in one pattern. Tracked in grafeo's roadmap for 0.6.3.
 
-## Grafeo: an SQL/PGQ parameter named `$from` does not parse (Property filter)
+## Grafeo: an SQL/PGQ parameter named `$from` does not parse (Property filter; fixed in 0.6.1)
 
-- id: grafeo/scan_filter_sql
 - Query: `scan_filter_sql` (Property filter (SQL/PGQ)), the shared SQL/PGQ text in `graph_bench/suites/scans.py`,
   no Grafeo override: `MATCH (m:Comment) WHERE m.creationDate >= $from AND m.creationDate < $to`, the same
   parameter names as the openCypher `scan_filter`, whose bindings and references it shares.
@@ -223,13 +234,14 @@ queries agree afterwards), but slower than the batch API. It is not a disagreeme
   binding convention both engines' Python APIs take (see `snb_sql.py`), and a name after `$` is a parameter name,
   not a keyword.
 - Reference answer: the openCypher `scan_filter` references (10 windows of about 200 comments each).
+- Grafeo 0.6.1 outcome: agrees, so its `- id:` line is removed.
 - Cause: Grafeo engine (SQL/PGQ parser: the parameter name after `$` is lexed as a keyword). Confirmed by the
   grafeo side for every reserved word (`from`, `select`, `where`, `match`, `order`, `limit`, `as`); queued for
   grafeo 0.6.1. Not renamed in the shared text, which would hide it.
 
-## Grafeo: variable length `*1..3` from a hub exceeds the path search memory limit (Variable length 1 to 3)
+## Grafeo: variable length `*1..3` from a hub exceeds the path search memory limit (fixed in 0.6.1)
 
-- id: grafeo/hop_var
+- Grafeo 0.6.1 outcome: `hop_var` agrees, so its `- id:` line is removed.
 - Query: `hop_var` (Variable length 1 to 3), the shared openCypher text in `graph_bench/suites/hops.py`, no Grafeo
   override: `MATCH (s:Person {id: $personId})-[:KNOWS*1..3]-(f:Person) WHERE f.id <> $personId RETURN
   count(DISTINCT f.id) AS persons`.
@@ -251,13 +263,9 @@ queries agree afterwards), but slower than the batch API. It is not a disagreeme
   enumerates every trail (directed takes 1.4 ms); queued for grafeo 0.6.1. Not rewritten in the shared text.
 
 ## Grafeo: SPARQL alternative of a path and its inverse is not supported (1-hop, 2-hop, triangles, 4-cycles and
-common friends (SPARQL))
+common friends (SPARQL); fixed in 0.6.1)
 
-- id: grafeo/hop_1_rdf
-- id: grafeo/hop_2_rdf
-- id: grafeo/pattern_triangle_rdf
-- id: grafeo/pattern_square_rdf
-- id: grafeo/pattern_common_rdf
+- Grafeo 0.6.1 outcome: all five agree, so their `- id:` lines are removed.
 - Queries: `hop_1_rdf`, `hop_2_rdf`, the shared SPARQL texts in `graph_bench/suites/hops.py`, and
   `pattern_triangle_rdf`, `pattern_square_rdf`, `pattern_common_rdf` in `graph_bench/suites/patterns.py`; every
   KNOWS step is `?x (v:KNOWS|^v:KNOWS) ?y`, KNOWS in either direction (each pair is stored once, as one triple).
@@ -1111,14 +1119,14 @@ database) `hop_1_sql` 25 to 26 ms for 10 bindings (67x to 73x Grafeo's 0.36 to 0
 start person) and `hop_var_sql` 163 to 164 ms (16x to 17x Grafeo's 10 ms) are ⏱, over two runs; `hop_2_sql` (58 to 65 ms) is
 within the budget.
 
-## DuckDB + DuckPGQ: SQL/PGQ IC13 does not finish on `snb-medium` (⏱, not allowlisted)
+## DuckDB + DuckPGQ: SQL/PGQ IC13 is past the case ceiling on `snb-medium` (⏱, not allowlisted)
 
-In the `full` selection (`bench --selection full`, Windows and Linux, DuckDB 2.0.0 with duckpgq), `snb_sql_ic13`
-on `snb-medium` (about 10x `snb-small`: 41,078 nodes, 376,477 edges) prints no output for the 600 s case timeout,
-so the entry is ⏱ with "no output for 600 s". On `snb-small` it agrees (3.5 s for 10 bindings). The text is the
-shared standard SQL/PGQ `ANY SHORTEST` over undirected `KNOWS` (`suites/snb_sql.py`), not rewritten. The push
-selection has no medium scale, so there is no `- id:` line. Cause: DuckPGQ engine (shortest path search cost grows
-much faster than the graph).
+In a `bench` run on Windows (DuckDB 2.0.0 with duckpgq), `snb_sql_ic13` on `snb-medium` (about 10x `snb-small`:
+41,078 nodes, 376,477 edges) agrees, but one run over the 20 bindings takes 19.3 s, so 3 timed runs do not fit in the
+60 s: ⏱. With the endpoints bound in the element patterns, `snb-small` takes 0.7 s for 10 bindings (3.4 s with the
+earlier text). Grafeo answers the same text on `snb-medium` in 4.0 ms. The push selection has no medium scale, so
+there is no `- id:` line. Cause: DuckPGQ engine (about 1 s per binding on `snb-medium`, a search that grows with the
+graph although both endpoints are bound).
 
 ## DuckDB + DuckPGQ: threads, storage and the extension (notes)
 

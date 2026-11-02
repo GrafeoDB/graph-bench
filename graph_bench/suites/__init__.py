@@ -45,7 +45,8 @@ class Query(_Eligibility):
     """A query benchmark. `text` maps a dialect to its query text; the model's standard dialect is always present.
 
     `same_as` names the item whose parameter bindings and reference answers this query shares: the same question
-    asked through another model (e.g. SNB IS1 in SQL/PGQ shares `snb_is1`'s references). Empty: its own.
+    asked through another model (e.g. SNB IS1 in SQL/PGQ shares `snb_is1`'s references). `fixed_scale` runs it on
+    that scale in every selection (FAIRNESS.md rule 9), without a Load row of its own. Empty `same_as`: its own.
     """
 
     id: str
@@ -57,6 +58,7 @@ class Query(_Eligibility):
     ordered: bool
     rel_eps: float
     same_as: str = ""
+    fixed_scale: str = ""
 
     @property
     def reference_id(self) -> str:

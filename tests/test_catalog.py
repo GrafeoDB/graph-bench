@@ -1,7 +1,9 @@
+import dataclasses
 import json
 import re
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from graph_bench import databases
@@ -41,9 +43,37 @@ def test_full_selection_is_medium_only() -> None:
     assert (full.warmup, full.iterations, full.load_iterations, full.bindings) == (2, 10, 3, 20)
     result = cases("full", ["grafeo"])
     assert result
-    assert {c.scale for c in result} == {"medium"}
+    assert {c.scale for c in result if c.item.id != "pattern_join_rdf"} == {"medium"}
     assert {lid.rsplit("[", 1)[1] for lid in catalog.load_ids("full", ["grafeo"])} == {"grafeo-medium]"}
     assert catalog.selection("push").scales == ("small",)
+
+
+def test_the_sparql_join_is_the_only_row_pinned_to_a_scale(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAIRNESS.md rule 9: no database finishes `pattern_join_rdf` 3 times within the ceiling on medium, so it runs
+    on small in every selection. Its load is not a Load row, and the data of its scale is prepared."""
+    assert [i.id for i in catalog.ITEMS if getattr(i, "fixed_scale", "")] == ["pattern_join_rdf"]
+    scales = {c.item.id: c.scale for c in cases("full", ["oxigraph"])}
+    assert scales["pattern_join_rdf"] == "small"
+    assert scales["pattern_square_rdf"] == "medium"
+    assert catalog.data_scales("full") == ("medium", "small")
+    assert catalog.data_scales("push") == ("small",)
+    # On small, `full` needs only the pinned row's reference, the one it shares with its openCypher twin.
+    assert [i.id for i in catalog.reference_items("full", "small")] == ["pattern_join"]
+    assert len(catalog.reference_items("full", "medium")) == len(catalog.reference_items("full"))
+    assert {c.scale for c in cases("push", ["oxigraph"])} == {"small"}
+    assert not [lid for lid in catalog.load_ids("full", ["oxigraph"]) if "-small" in lid]
+    # A selection of both scales runs the pinned row once.
+    both = dataclasses.replace(catalog.SELECTIONS["full"], scales=("small", "medium"))
+    monkeypatch.setitem(catalog.SELECTIONS, "full", both)
+    assert [c.scale for c in cases("full", ["oxigraph"]) if c.item.id == "pattern_join_rdf"] == ["small"]
+    assert catalog.data_scales("full") == ("small", "medium")
+
+
+def test_sql_pgq_ic13_anchors_its_endpoints_before_path_selection() -> None:
+    """The graph pattern WHERE applies after path selection: it would ask for the shortest path of every pair."""
+    text = next(q for q in snb_sql.QUERIES if q.id == "snb_sql_ic13").text["sql_pgq"]
+    assert "ANY SHORTEST (p1:Person WHERE p1.id = $person1Id)-[k:KNOWS]-+(p2:Person WHERE p2.id = $person2Id)" in text
+    assert text.count("WHERE") == 2
 
 
 def test_bench_id_format() -> None:
@@ -137,15 +167,17 @@ def test_model_queries_share_the_snb_references() -> None:
 
 
 def test_sql_pgq_texts_name_the_graph_and_filter_in_the_graph_pattern_where() -> None:
-    """Ruling R6: the filter is the graph pattern WHERE after the pattern, never inside an element pattern."""
+    """The filter is the graph pattern WHERE after the pattern, never inside an element pattern, but for IC13."""
     for q in snb_sql.QUERIES:
         text = q.text["sql_pgq"]
         assert "GRAPH_TABLE (snb\n" in text, q.id
+        assert "{id:" not in text, q.id
+        if q.id == "snb_sql_ic13":
+            continue
         pattern, rest = text.split("MATCH", 1)[1].split("COLUMNS", 1)[0].split("WHERE", 1)
         assert re.match(r"\s+\w+\.id = \$\w+", rest), q.id  # one graph pattern WHERE, right after the pattern
         assert not re.search(r"\([^()]*\bWHERE\b[^()]*\)", text.split("COLUMNS", 1)[0]), q.id
         assert pattern.rstrip().endswith(")"), q.id  # the WHERE follows the last element pattern
-        assert "{id:" not in text, q.id
 
 
 def test_sparql_texts_take_parameters_as_values() -> None:

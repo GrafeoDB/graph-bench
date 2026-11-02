@@ -59,6 +59,7 @@ __all__ = [
     "all_load_keys",
     "answer_only",
     "cases",
+    "data_scales",
     "load_benchmark",
     "load_id",
     "load_ids",
@@ -237,7 +238,8 @@ def items(selection_name: str) -> list[Item]:
 
 
 def cases(selection_name: str, dbs: Sequence[str]) -> list[Case]:
-    """Every item of the selection for every database, scale and thread setting, sorted by `bench_id`.
+    """Every item of the selection for every database, scale and thread setting, sorted by `bench_id`; an item with
+    a `fixed_scale` runs on that scale only.
 
     Items a database's models do not support (`item.supported_by`) are included; they become not-available
     entries.
@@ -245,14 +247,21 @@ def cases(selection_name: str, dbs: Sequence[str]) -> list[Case]:
     sel = selection(selection_name)
     for db in dbs:
         model_support(db)  # unknown names fail here, with a clear message
-    result = [
-        Case(item, db, scale, threads)
+    result = {
+        Case(item, db, getattr(item, "fixed_scale", "") or scale, threads)
         for item in items(selection_name)
         for db in dbs
         for scale in sel.scales
         for threads in sel.threads
-    ]
+    }
     return sorted(result, key=lambda c: c.bench_id)
+
+
+def data_scales(selection_name: str) -> tuple[str, ...]:
+    """The scales whose data a selection reads: its own, then those of the items pinned to another (`fixed_scale`)."""
+    pinned = {getattr(item, "fixed_scale", "") for item in items(selection_name)} - {""}
+    sel = selection(selection_name)
+    return (*sel.scales, *sorted(pinned - set(sel.scales)))
 
 
 def all_load_keys(selection_name: str) -> dict[tuple[str, Store], Model]:
@@ -380,9 +389,15 @@ def reference_path(item: Item, scale: str, *, base: Path) -> Path:
     return base / f"{item.dataset}-{scale}" / "references" / f"{item.reference_id}-{scale}.json"
 
 
-def reference_items(selection_name: str) -> list[Item]:
-    """The items whose reference files a selection needs: each item's `reference_id` item, once, in catalog order."""
-    wanted = {item.reference_id for item in items(selection_name)}
+def reference_items(selection_name: str, scale: str | None = None) -> list[Item]:
+    """The items whose reference files a selection needs: each item's `reference_id` item, once, in catalog order.
+
+    With `scale`, only those of the items that run on it (a scale only a pinned item brings has only its references).
+    """
+    selected = items(selection_name)
+    if scale is not None and scale not in selection(selection_name).scales:
+        selected = [item for item in selected if getattr(item, "fixed_scale", "") == scale]
+    wanted = {item.reference_id for item in selected}
     return [item for item in ITEMS if item.id in wanted]
 
 
