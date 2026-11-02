@@ -221,8 +221,7 @@ Load uses each database's **fastest documented bulk path, CSV parsing included**
 
 - Grafeo: `load_nodes_csv` and `load_edges_csv`, parsed and typed in Rust.
   Grafeo's query-language `LOAD CSV` is 2x to 3x slower today; it will be tracked as its own category, Load
-  (query language), so engine-side load fixes show up there. When Grafeo's native typed loader lands, it
-  replaces the batch API for Load.
+  (query language), so engine-side load fixes show up there.
 - LadybugDB: `COPY ... FROM` the CSV files.
 - ArcadeDB: GraphBatch (`create_vertices`, then `new_edges` from an id to RID map), with the CSVs parsed in
   Python. Its faster Graph Importer does not honour CSV quotes, which the SNB text columns need (see

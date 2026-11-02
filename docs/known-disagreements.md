@@ -196,8 +196,8 @@ queries agree afterwards), but slower than the batch API. It is not a disagreeme
 - Queries: the SQL/PGQ texts in `graph_bench/suites/snb_sql.py`, standard SQL/PGQ (ISO/IEC 9075-16), one text for
   every engine, no Grafeo override (a weaker Grafeo-only text is not allowed). Filters are the graph pattern WHERE
   after the pattern, but for IC13's two endpoints (`suites/snb_sql.py`), which Grafeo accepts: `snb_sql_is1` agrees (median 0.226 ms for 10 bindings).
-- Dataset: `snb-small`, loaded as the property graph `snb` (Grafeo: a named graph, `create_graph("snb")` and
-  `set_graph("snb")`, so `GRAPH_TABLE (snb MATCH ...)` resolves it).
+- Dataset: `snb-small` for the 0.6.0 outcome and `snb-medium` for 0.6.1, loaded as the property graph `snb` (Grafeo:
+  a named graph, `create_graph("snb")` and `set_graph("snb")`, so `GRAPH_TABLE (snb MATCH ...)` resolves it).
 - Grafeo 0.6.1 outcome (`snb-medium`): `ANY SHORTEST` parses.
   - `snb_sql_is4` agrees.
   - `snb_sql_is6`: ✗, `GRAFEO-Q004: unsupported: a shortest path search over more than one edge pattern is not
@@ -1121,7 +1121,7 @@ In a `bench` run on Windows (DuckDB 2.0.0 with duckpgq), `snb_sql_ic13` on `snb-
 41,078 nodes, 376,477 edges) agrees, but one run over the 20 bindings takes 19.3 s, so 3 timed runs do not fit in the
 60 s: ⏱. With the endpoints bound in the element patterns, `snb-small` takes 0.7 s for 10 bindings (3.4 s with the
 earlier text). Grafeo answers the same text on `snb-medium` in 4.0 ms. The push selection has no medium scale, so
-there is no `- id:` line. Cause: DuckPGQ engine (about 0.8 s per binding on `snb-medium`, a search that grows with the
+there is no `- id:` line. Cause: DuckPGQ engine (about 1 s per binding on `snb-medium`, a search that grows with the
 graph although both endpoints are bound).
 
 ## DuckDB + DuckPGQ: threads, storage and the extension (notes)
