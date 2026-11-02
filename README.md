@@ -224,7 +224,187 @@ source only. [docs/results.md](docs/results.md) lists every database's version, 
 the complete per-case tables.
 
 <!-- results:start -->
-No results yet: this section is written by the scheduled `full` run (`graph-bench report --format readme`).
+### Overview
+
+Single-threaded, medium scale.
+
+✓ k/n: correct answers within the time budget, out of the category's n benchmarks; then the count of each marker.
+
+† From the local snapshot of 2026-11-02 on AMD Ryzen 7 7800X3D 8-Core Processor, 16 cores, Linux-6.18.54.1-microsoft-standard-WSL2-x86_64-with-glibc2.39, not from CI: these columns are budgeted and ranked only among themselves, never against the CI columns, and bold marks the fastest of each group.
+
+| Category | Grafeo† | ArcadeDB† | DuckDB + DuckPGQ† | FalkorDB† | HelixDB† | LadybugDB† | Neo4j† | NeuG† | Oxigraph† | TuringDB† |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Startup | ✓ 1/1 | ✓ 1/1 | ✓ 1/1 | ✓ 1/1 | ✓ 1/1 | ✓ 1/1 | ✓ 1/1 | ✓ 0/1 ≠1 | ✓ 1/1 | ✓ 1/1 |
+| Load | ✓ 3/3 | ✓ 2/3 ⊘1 | ✓ 2/3 ⊘1 | ✓ 2/3 ⊘1 | ✓ 2/3 ⊘1 | ✓ 2/3 ⊘1 | ✓ 2/3 ⊘1 | ✓ 2/3 ⊘1 | ✓ 1/3 ⊘2 | ✓ 2/3 ⊘1 |
+| Load (query language) | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| Scans | ✓ 15/15 | ✓ 5/15 ⊘10 | ✓ 5/15 ⊘10 | ✓ 5/15 ⊘10 | ✓ 0/15 ⊘11 ⏱4 | ✓ 5/15 ⊘10 | ✓ 3/15 ⊘10 ⏱2 | ✓ 5/15 ⊘10 | ✓ 5/15 ⊘10 | ✓ 5/15 ⊘10 |
+| Hops | ✓ 9/9 | ✓ 4/9 ⊘5 | ✓ 1/9 ⊘6 ⏱2 | ✓ 2/9 ⊘5 ✗1 ⏱1 | ✓ 0/9 ⊘5 ⏱4 | ✓ 2/9 ⊘5 ≠1 ⏱1 | ✓ 4/9 ⊘5 | ✓ 3/9 ⊘5 ⏱1 | ✓ 2/9 ⊘7 | ✓ 2/9 ⊘5 ✗1 ⏱1 |
+| Pattern matching | ✓ 9/18 ⏱9 | ✓ 4/18 ⊘8 ⏱6 | ✓ 3/18 ⊘14 ✗1 | ✓ 3/18 ⊘8 ≠1 ⏱6 | ✓ 1/18 ⊘15 ≠1 ⏱1 | ✓ 9/18 ⊘8 ≠1 | ✓ 6/18 ⊘8 ⏱4 | ✓ 9/18 ⊘8 ≠1 | ✓ 1/18 ⊘14 ⏱3 | ✓ 4/18 ⊘8 ≠1 ⏱5 |
+| Complex queries | ✓ 9/9 | ✓ 7/9 ⏱2 | ⊘ | ✓ 5/9 ⏱4 | ✓ 2/9 ⊘3 ⏱4 | ✓ 7/9 ⏱2 | ✓ 5/9 ⏱4 | ✓ 9/9 | ⊘ | ✓ 4/9 ⏱5 |
+| Algorithms | ✓ 3/3 | ✓ 1/3 ⏱2 | ✓ 1/3 ⏱2 | ✓ 2/3 ⏱1 | ⊘ | ✓ 1/3 ✗2 | ✓ 1/3 ⏱2 | ✓ 2/3 ⏱1 | ⊘ | ⊘ |
+| RDF/SPARQL | ✓ 3/3 | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ✓ 3/3 | ⊘ |
+| SQL/PGQ | ✓ 2/4 ✗1 ⏱1 | ⊘ | ✓ 0/4 ✗2 ⏱2 | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+
+### Startup (empty database, ms)
+
+| Benchmark | Grafeo† | ArcadeDB† | DuckDB + DuckPGQ† | FalkorDB† | HelixDB† | LadybugDB† | Neo4j† | NeuG† | Oxigraph† | TuringDB† |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Empty database | **2.69** | 689 | 64.8 | 146 | 153 | 38.7 | 6055 | ≠ | 3.17 | 296 |
+
+### Load (medium scale, s)
+
+| Benchmark | Grafeo† | ArcadeDB† | DuckDB + DuckPGQ† | FalkorDB† | HelixDB† | LadybugDB† | Neo4j† | NeuG† | Oxigraph† | TuringDB† |
+|---|---|---|---|---|---|---|---|---|---|---|
+| LDBC SNB | 1.07 | 3.82 | **0.284** | 3.12 | 70.0 | 0.361 | 10.4 | 3.42 | ⊘ | 1.17 |
+| Graphalytics | 0.632 | 1.05 | **0.0922** | 12.1 | 53.8 | 0.211 | 10.2 | 0.554 | ⊘ | 0.610 |
+| LDBC SNB (RDF) | 0.972 | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | **0.509** | ⊘ |
+
+### Load (query language) (medium scale, s)
+
+| Benchmark | Grafeo† | ArcadeDB† | DuckDB + DuckPGQ† | FalkorDB† | HelixDB† | LadybugDB† | Neo4j† | NeuG† | Oxigraph† | TuringDB† |
+|---|---|---|---|---|---|---|---|---|---|---|
+| LDBC SNB | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| Graphalytics | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+
+### Scans (medium scale, ms)
+
+| Benchmark | Grafeo† | ArcadeDB† | DuckDB + DuckPGQ† | FalkorDB† | HelixDB† | LadybugDB† | Neo4j† | NeuG† | Oxigraph† | TuringDB† |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Label scan | **7.09** | 12.2 | ⊘ | 9.12 | ⏱ | 10.8 | ⏱ | 7.21 | ⊘ | 18.9 |
+| Property filter | 33.4 | 94.5 | ⊘ | 57.1 | ⏱ | 28.2 | ⏱ | **16.3** | ⊘ | 64.2 |
+| Aggregation | 2.63 | 5.59 | ⊘ | 2.69 | ⊘ | **1.19** | 11.1 | 1.53 | ⊘ | 2.22 |
+| Order plus limit | 16.2 | 55.2 | ⊘ | 19.8 | ⏱ | 9.89 | 42.7 | **0.784** | ⊘ | 21.2 |
+| Property filter with average | 18.3 | 50.9 | ⊘ | 30.6 | ⏱ | **1.62** | 47.1 | 2.09 | ⊘ | 20.0 |
+| Label scan (SQL/PGQ) | 6.97 | ⊘ | **2.55** | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| Property filter (SQL/PGQ) | 33.7 | ⊘ | **14.6** | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| Aggregation (SQL/PGQ) | 2.57 | ⊘ | **1.23** | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| Order plus limit (SQL/PGQ) | 42.4 | ⊘ | **8.66** | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| Property filter with average (SQL/PGQ) | 16.9 | ⊘ | **7.93** | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| Label scan (SPARQL) | **26.8** | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | 45.5 | ⊘ |
+| Property filter (SPARQL) | 596 | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | **518** | ⊘ |
+| Aggregation (SPARQL) | **25.6** | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | 42.5 | ⊘ |
+| Order plus limit (SPARQL) | 344 | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | **323** | ⊘ |
+| Property filter with average (SPARQL) | **181** | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | 223 | ⊘ |
+
+### Hops (medium scale, ms)
+
+| Benchmark | Grafeo† | ArcadeDB† | DuckDB + DuckPGQ† | FalkorDB† | HelixDB† | LadybugDB† | Neo4j† | NeuG† | Oxigraph† | TuringDB† |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1-hop | 0.569 | 2.04 | ⊘ | 7.02 | ⏱ | 1.52 | 4.34 | **0.289** | ⊘ | ⏱ |
+| 2-hop | 53.4 | 102 | ⊘ | 43.2 | ⏱ | 38.3 | 73.6 | **20.3** | ⊘ | 46.2 |
+| Variable length 1 to 3 | 170 | 470 | ⊘ | ⏱ | ⏱ | ⏱ | 342 | ⏱ | ⊘ | **140** |
+| 1-hop (SQL/PGQ) | **0.509** | ⊘ | ⏱ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| 2-hop (SQL/PGQ) | **38.9** | ⊘ | 362 | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| Variable length 1 to 3 (SQL/PGQ) | **145** | ⊘ | ⏱ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| 1-hop (SPARQL) | **3.90** | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | 8.21 | ⊘ |
+| 2-hop (SPARQL) | **261** | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | 610 | ⊘ |
+| IC13 shortest path | 3.74 | **3.32** | ⊘ | ✗ | ⏱ | ≠ | 6.48 | 15.3 | ⊘ | ✗ |
+
+### Pattern matching (medium scale, ms)
+
+| Benchmark | Grafeo† | ArcadeDB† | DuckDB + DuckPGQ† | FalkorDB† | HelixDB† | LadybugDB† | Neo4j† | NeuG† | Oxigraph† | TuringDB† |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Triangles through a person | ⏱ | ⏱ | ⊘ | 59.3 | ⊘ | 11.3 | 28.3 | **2.43** | ⊘ | ⏱ |
+| 4-cycles through a person | ⏱ | ⏱ | ⊘ | ⏱ | ⊘ | 305 | **129** | 185 | ⊘ | ⏱ |
+| Common friends | 26.0 | ⏱ | ⊘ | 28.1 | 39.2 | 4.57 | **4.05** | 10.4 | ⊘ | 32.5 |
+| Multi-pattern join | ⏱ | 49.7 | ⊘ | ⏱ | ⊘ | 17.1 | 60.4 | **1.38** | ⊘ | 6.98 |
+| Triangles through a hub person | ⏱ | 1976 | ⊘ | ⏱ | ⊘ | 432 | ⏱ | **78.5** | ⊘ | ⏱ |
+| Triangles, whole graph | ⏱ | ⏱ | ⊘ | ⏱ | ⊘ | 901 | ⏱ | **807** | ⊘ | ⏱ |
+| 2-hop paths, whole graph | ⏱ | ⏱ | ⊘ | ⏱ | ⏱ | **3.74** | ⏱ | 46.4 | ⊘ | 336 |
+| 2-hop paths per source, top 10 | ⏱ | ⏱ | ⊘ | ⏱ | ⊘ | **2141** | ⏱ | 9870 | ⊘ | ⏱ |
+| Out-degree, top 10 | 8.06 | 32.5 | ⊘ | 52.3 | ⊘ | **3.29** | 54.1 | 4.98 | ⊘ | 14.7 |
+| Trail semantics with self-loops | ✓ | ✓ | ⊘ | ≠ | ≠ | ≠ | ✓ | ≠ | ⊘ | ≠ |
+| Triangles through a person (SQL/PGQ) | **362** | ⊘ | 459 | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| 4-cycles through a person (SQL/PGQ) | ⏱ | ⊘ | **899** | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| Common friends (SQL/PGQ) | **19.5** | ⊘ | 162 | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| Multi-pattern join (SQL/PGQ) | **6412** | ⊘ | ✗ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| Triangles through a person (SPARQL) | 3352 | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | **448** | ⊘ |
+| 4-cycles through a person (SPARQL) | **10087** | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⏱ | ⊘ |
+| Common friends (SPARQL) | **6.26** | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⏱ | ⊘ |
+| Multi-pattern join (SPARQL) | ⏱ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⏱ | ⊘ |
+
+### Complex queries (medium scale, ms)
+
+| Benchmark | Grafeo† | ArcadeDB† | DuckDB + DuckPGQ† | FalkorDB† | HelixDB† | LadybugDB† | Neo4j† | NeuG† | Oxigraph† | TuringDB† |
+|---|---|---|---|---|---|---|---|---|---|---|
+| IS1 person profile | 0.393 | 1.14 | ⊘ | ⏱ | ⏱ | 0.714 | ⏱ | **0.277** | ⊘ | ⏱ |
+| IS2 recent messages of a person | 0.914 | 2.84 | ⊘ | 7.19 | ⏱ | ⏱ | 8.72 | **0.657** | ⊘ | ⏱ |
+| IS3 friends of a person | **1.81** | 8.61 | ⊘ | 9.41 | ⊘ | 3.10 | ⏱ | 1.92 | ⊘ | ⏱ |
+| IS4 message content | 0.307 | ⏱ | ⊘ | ⏱ | ⏱ | ⏱ | 4.17 | **0.198** | ⊘ | ⏱ |
+| IS5 message creator | 0.283 | ⏱ | ⊘ | ⏱ | 32.3 | 10.0 | ⏱ | **0.187** | ⊘ | 18.7 |
+| IS6 forum of a message | 0.499 | 109 | ⊘ | ⏱ | 46.2 | 41.0 | ⏱ | **0.279** | ⊘ | 33.2 |
+| IS7 replies of a message | 1.12 | 2.37 | ⊘ | 9.30 | ⊘ | 8.89 | 5.50 | **0.527** | ⊘ | ⏱ |
+| IC2 recent messages by friends | 3.05 | 21.1 | ⊘ | 10.2 | ⏱ | 25.1 | 29.0 | **1.20** | ⊘ | 31.7 |
+| IC6 tag co-occurrence | 100 | 431 | ⊘ | 548 | ⊘ | 147 | 318 | **29.1** | ⊘ | 161 |
+
+### Algorithms (medium scale, ms)
+
+| Benchmark | Grafeo† | ArcadeDB† | DuckDB + DuckPGQ† | FalkorDB† | HelixDB† | LadybugDB† | Neo4j† | NeuG† | Oxigraph† | TuringDB† |
+|---|---|---|---|---|---|---|---|---|---|---|
+| BFS | **6.48** | ⏱ | ⏱ | ⏱ | ⊘ | 24.1 | ⏱ | 8.29 | ⊘ | ⊘ |
+| WCC | 17.4 | ⏱ | ⏱ | 14.9 | ⊘ | ✗ | 107 | **3.69** | ⊘ | ⊘ |
+| PageRank | **13.7** | 121 | 21.0 | 15.6 | ⊘ | ✗ | ⏱ | ⏱ | ⊘ | ⊘ |
+
+### RDF/SPARQL (medium scale, ms)
+
+| Benchmark | Grafeo† | ArcadeDB† | DuckDB + DuckPGQ† | FalkorDB† | HelixDB† | LadybugDB† | Neo4j† | NeuG† | Oxigraph† | TuringDB† |
+|---|---|---|---|---|---|---|---|---|---|---|
+| IS1 person profile | 2.59 | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | **2.57** | ⊘ |
+| IS4 message content | 1.46 | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | **1.33** | ⊘ |
+| IS6 forum of a message | 2.33 | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | **1.94** | ⊘ |
+
+### SQL/PGQ (medium scale, ms)
+
+| Benchmark | Grafeo† | ArcadeDB† | DuckDB + DuckPGQ† | FalkorDB† | HelixDB† | LadybugDB† | Neo4j† | NeuG† | Oxigraph† | TuringDB† |
+|---|---|---|---|---|---|---|---|---|---|---|
+| IS1 person profile | **0.348** | ⊘ | ⏱ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| IS4 message content | **0.301** | ⊘ | ✗ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| IS6 forum of a message | ✗ | ⊘ | ✗ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| IC13 shortest path | ⏱ | ⊘ | ⏱ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+
+### Memory (medium scale, MiB)
+
+| Dataset | Grafeo† | ArcadeDB† | DuckDB + DuckPGQ† | FalkorDB† | HelixDB† | LadybugDB† | Neo4j† | NeuG† | Oxigraph† | TuringDB† |
+|---|---|---|---|---|---|---|---|---|---|---|
+| LDBC SNB, loaded | 72.4 | 851 | 57.1 | 434 | 684 | 123 | 83.6 | **29.2** | ⊘ | 220 |
+| LDBC SNB, peak during load | **122** | 1007 | 159 | 488 | 740 | 193 | 5021 | 147 | ⊘ | 429 |
+| Graphalytics, loaded | 41.7 | 308 | 39.7 | 353 | 575 | 97.0 | 112 | **19.6** | ⊘ | 104 |
+| Graphalytics, peak during load | **91.7** | 543 | 144 | 407 | 630 | 168 | 5022 | 144 | ⊘ | 313 |
+| LDBC SNB (RDF), loaded | 464 | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | **278** | ⊘ |
+| LDBC SNB (RDF), peak during load | 595 | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | **376** | ⊘ |
+
+"Loaded" is the memory the load added (after minus before); "peak" is the process tree's absolute peak during the load, interpreter and started engine included.
+
+### Disk (medium scale, MiB)
+
+| Dataset | Grafeo† | ArcadeDB† | DuckDB + DuckPGQ† | FalkorDB† | HelixDB† | LadybugDB† | Neo4j† | NeuG† | Oxigraph† | TuringDB† |
+|---|---|---|---|---|---|---|---|---|---|---|
+| LDBC SNB | in memory | **27.3** | in memory | in memory | in memory | in memory | 545 | in memory | ⊘ | 128 |
+| Graphalytics | in memory | **17.9** | in memory | in memory | in memory | in memory | 529 | in memory | ⊘ | 60.0 |
+| LDBC SNB (RDF) | in memory | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | in memory | ⊘ |
+
+⊘ not available · ✗ failing · ≠ wrong answer · ⏱ beyond 10x the top-3 average, over 60 s, load over 5 min or not started by the run deadline: 48 min
+
+✓: an answer-check-only case agrees; it has no time budget and is not ranked.
+
+graph-bench ebfbf59 · Grafeo 0.6.1 (pypi) · AMD Ryzen 7 7800X3D 8-Core Processor, 16 cores, Linux-6.18.54.1-microsoft-standard-WSL2-x86_64-with-glibc2.39 · 2026-11-02 · selection full · bench mode
+
+Local snapshot†: graph-bench ebfbf59 · Grafeo 0.6.1 (pypi) · AMD Ryzen 7 7800X3D 8-Core Processor, 16 cores, Linux-6.18.54.1-microsoft-standard-WSL2-x86_64-with-glibc2.39 · 2026-11-02 · selection full · bench mode
+
+| Database | Version | Process | Storage | Threads |
+|---|---|---|---|---|
+| Grafeo† | 0.6.1 | in-process | in-memory | single-threaded executor |
+| ArcadeDB† | 26.10.2.post1 (Java 25.0.4.1) | in-process | on-disk | configured to 1 thread: arcadedb.queryParallelismPoolThreads=1, arcadedb.parallelScanProducerPoolThreads=1, arcadedb.queryParallelScan=false, arcadedb.asyncWorkerThreads=1, java.util.concurrent.ForkJoinPool.common.parallelism=1, GraphBatch parallel_flush=False; JVM: -XX:ParallelGCThreads=1, -XX:ConcGCThreads=1, -XX:CICompilerCount=2 (default collector and tiered compilation kept; 2 is HotSpot's minimum compiler count with tiered compilation, one C1 and one C2 thread); not capped: the JVM's other service threads (signal dispatcher, reference handler, finalizer) and ArcadeDB's housekeeping threads |
+| DuckDB + DuckPGQ† | 2.0.0 | in-process | in-memory | SET threads=1 |
+| FalkorDB† | 0.11.0 | local process | in-memory | THREAD_COUNT and OMP_THREAD_COUNT are module load arguments that falkordblite does not expose |
+| HelixDB† | 0.3.4 | in-process | in-memory | HelixDB exposes no thread setting |
+| LadybugDB† | 0.22.1 | in-process | in-memory | max_num_threads=1 |
+| Neo4j† | 2026.10.1 (Java Temurin 21.0.13) | in-process | on-disk | configured to 1 thread: Cypher runs each query on the calling thread (Community has no parallel runtime); GDS concurrency=1 and readConcurrency=1; neo4j-admin import --threads=1; JVM (embedded and importer): -XX:ParallelGCThreads=1, -XX:ConcGCThreads=1, -XX:CICompilerCount=2; not capped: Neo4j's background threads (page cache flushing, checkpointing, index population) and the JVM's other service threads, which have no documented setting |
+| NeuG† | 0.3.0 | in-process | in-memory | max_thread_num=1; embedded queries are single-threaded |
+| Oxigraph† | 0.5.13 | in-process | in-memory | bulk_load uses several threads internally, not configurable; queries run on the calling thread |
+| TuringDB† | 3.0.2 | in-process | on-disk | TuringDB exposes no thread setting |
+
+Every database's version, source, machine and run date: [docs/results.md](docs/results.md)
 <!-- results:end -->
 
 ## Documentation
