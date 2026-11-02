@@ -94,7 +94,7 @@ def prepare(selection: str) -> dict[tuple[str, str], Dataset]:
     """Generate (or reuse) the datasets and reference answers for a selection, keyed by (dataset name, scale)."""
     base = data_dir() / dataset_key(selection)
     result: dict[tuple[str, str], Dataset] = {}
-    for scale in catalog.selection(selection).scales:
+    for scale in catalog.data_scales(selection):
         snb_root = base / f"snb-{scale}"
         ga_root = base / f"graphalytics-{scale}"
         mg_root = base / f"{multigraph.NAME}-{scale}"

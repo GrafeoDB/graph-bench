@@ -59,6 +59,7 @@ __all__ = [
     "all_load_keys",
     "answer_only",
     "cases",
+    "data_scales",
     "load_benchmark",
     "load_id",
     "load_ids",
@@ -245,14 +246,21 @@ def cases(selection_name: str, dbs: Sequence[str]) -> list[Case]:
     sel = selection(selection_name)
     for db in dbs:
         model_support(db)  # unknown names fail here, with a clear message
-    result = [
-        Case(item, db, scale, threads)
+    result = {
+        Case(item, db, getattr(item, "fixed_scale", "") or scale, threads)
         for item in items(selection_name)
         for db in dbs
         for scale in sel.scales
         for threads in sel.threads
-    ]
+    }
     return sorted(result, key=lambda c: c.bench_id)
+
+
+def data_scales(selection_name: str) -> tuple[str, ...]:
+    """The scales whose data a selection reads: its own, then those of the items pinned to another (`fixed_scale`)."""
+    pinned = {getattr(item, "fixed_scale", "") for item in items(selection_name)} - {""}
+    sel = selection(selection_name)
+    return (*sel.scales, *sorted(pinned - set(sel.scales)))
 
 
 def all_load_keys(selection_name: str) -> dict[tuple[str, Store], Model]:
