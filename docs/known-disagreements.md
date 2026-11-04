@@ -1138,3 +1138,22 @@ graph although both endpoints are bound).
   `CREATE TABLE` plus `COPY` per CSV and one `CREATE PROPERTY GRAPH` over all node and edge tables, all in the load
   clock. A type spread over several node pairs is labelled by its table name (`HAS_TAG__Comment__Tag`), because
   DuckPGQ labels must be unique.
+
+## Traverse: IC13 fails, `shortestPath` is refused under `OPTIONAL MATCH`
+
+- id: traverse/snb_ic13
+- Query: `snb_ic13` (IC13 shortest path), the shared openCypher text, no Traverse override:
+
+  ```cypher
+  MATCH (p1:Person {id: $person1Id}), (p2:Person {id: $person2Id})
+  OPTIONAL MATCH path = shortestPath((p1)-[:KNOWS*]-(p2))
+  RETURN CASE WHEN p1.id = p2.id THEN 0 WHEN path IS NULL THEN -1 ELSE length(path) END AS shortestPathLength
+  ```
+
+- Dataset: `snb-small`, every binding.
+- Traverse 0.9.0 answer: `TraverseError: runtime error: subquery body contains an operation not yet supported inside
+  CALL/EXISTS/COUNT subqueries: shortest path`.
+- Reference answer: the shortest path length, 0 for a person with itself and -1 for a pair without a path.
+- Cause: Traverse engine. The same `shortestPath` under a plain `MATCH` runs, and so does a plain pattern under
+  `OPTIONAL MATCH`; only the combination is refused. Rewriting the query to avoid it would change the shared text, so
+  the case stays ✗. Draft for upstream: [issues/traverse.md](../issues/traverse.md).

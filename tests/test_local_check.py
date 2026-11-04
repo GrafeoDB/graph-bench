@@ -47,11 +47,12 @@ def test_every_non_roster_database_has_a_package_or_a_pin() -> None:
     from graph_bench.databases import KNOWN
 
     outside = [db for db in KNOWN if db not in catalog.CI_DATABASES]
-    assert sorted(outside) == ["arcadedb", "falkordb", "helixdb", "neo4j"]
+    assert sorted(outside) == ["arcadedb", "falkordb", "helixdb", "neo4j", "traverse"]
     assert {db: PACKAGES[db] for db in outside if db != "neo4j"} == {
         "falkordb": "falkordblite",
         "helixdb": "helix-db",
         "arcadedb": "arcadedb-embedded",
+        "traverse": "traverse-embedded",
     }
     assert "neo4j" not in PACKAGES
 

@@ -552,6 +552,7 @@ embedded = [
     { name = "neug" },
     { name = "pyarrow", marker = "sys_platform == 'linux'" },
     { name = "pyoxigraph" },
+    { name = "traverse-embedded", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
     { name = "turingdb", marker = "sys_platform == 'linux'" },
 ]
 falkordb = [
@@ -576,6 +577,9 @@ neug = [
 oxigraph = [
     { name = "pyoxigraph" },
 ]
+traverse = [
+    { name = "traverse-embedded", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
+]
 turingdb = [
     { name = "pyarrow", marker = "sys_platform == 'linux'" },
     { name = "turingdb", marker = "sys_platform == 'linux'" },
@@ -587,7 +591,7 @@ requires-dist = [
     { name = "duckdb", marker = "extra == 'duckdb'", specifier = ">=2.0.0" },
     { name = "falkordblite", marker = "sys_platform == 'linux' and extra == 'falkordb'", specifier = ">=0.11.0" },
     { name = "grafeo", marker = "extra == 'grafeo'", specifier = ">=0.6.0,<0.7" },
-    { name = "graph-bench", extras = ["grafeo", "ladybug", "neug", "falkordb", "turingdb", "helixdb", "arcadedb", "neo4j-embedded", "oxigraph", "duckdb"], marker = "extra == 'embedded'" },
+    { name = "graph-bench", extras = ["grafeo", "ladybug", "neug", "falkordb", "turingdb", "helixdb", "arcadedb", "neo4j-embedded", "oxigraph", "duckdb", "traverse"], marker = "extra == 'embedded'" },
     { name = "helix-db", marker = "extra == 'helixdb'", specifier = ">=0.3.4" },
     { name = "helix-db-embedded", marker = "extra == 'helixdb'", specifier = ">=0.3.3" },
     { name = "jpype1", marker = "python_full_version < '3.15' and extra == 'neo4j-embedded'", specifier = ">=1.7.1" },
@@ -607,11 +611,12 @@ requires-dist = [
     { name = "pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15.0" },
     { name = "scipy", specifier = ">=1.11" },
+    { name = "traverse-embedded", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'traverse') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'traverse')", specifier = ">=0.9.0" },
     { name = "turingdb", marker = "sys_platform == 'linux' and extra == 'turingdb'", specifier = ">=3.0.2" },
     { name = "ty", marker = "extra == 'dev'", specifier = ">=0.0.15" },
     { name = "typer", specifier = ">=0.15.0" },
 ]
-provides-extras = ["grafeo", "ladybug", "neug", "falkordb", "turingdb", "helixdb", "arcadedb", "neo4j-embedded", "oxigraph", "duckdb", "embedded", "bench", "dev"]
+provides-extras = ["grafeo", "ladybug", "neug", "falkordb", "turingdb", "helixdb", "arcadedb", "neo4j-embedded", "oxigraph", "duckdb", "traverse", "embedded", "bench", "dev"]
 
 [[package]]
 name = "h11"
@@ -1712,6 +1717,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/0d/ea/b2a5bd54b28a324dae8211928b2d730b6547500342c7e6c6dea08bd0a485/tqdm-4.70.1.tar.gz", hash = "sha256:cefd0eca11b2a37a3aee776544d4f4ae913f02688135b5556b8788dfa474afc4", size = 171846, upload-time = "2026-09-11T07:25:16.601Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a7/03/921a3d3c75785aca9ebfbfcabfbc3a1be12e2ab5265deb026d55a5a3f83e/tqdm-4.70.1-py3-none-any.whl", hash = "sha256:c293e525e6fef9c20e8728fd4612df02a0aa31bb5fe91ecd93e123b1b7bffa73", size = 80199, upload-time = "2026-09-11T07:25:14.599Z" },
+]
+
+[[package]]
+name = "traverse-embedded"
+version = "0.9.0"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/56/33/6a82881a652f24792549a2ae2b32448ebcc49248d46240adcad1513f3d9f/traverse_embedded-0.9.0-cp310-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:4692690937bc43088ee7083813571f71dbb9148420e79ced1197f28cecf5e7d2", size = 8089701, upload-time = "2026-11-01T14:40:54.395Z" },
+    { url = "https://files.pythonhosted.org/packages/59/1b/b41b88a0f4fdfb1f7d8a9d81d969679e957a23472bedc750e173a8e8f39a/traverse_embedded-0.9.0-cp310-abi3-win_amd64.whl", hash = "sha256:343cffef9af51c43a067c5cd1de673189bad62a017c6750b8223228d5ba7a297", size = 8224191, upload-time = "2026-11-01T14:40:56.166Z" },
 ]
 
 [[package]]

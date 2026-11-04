@@ -24,6 +24,7 @@ README at each Grafeo release. The rules every database is measured under are in
 | DuckDB + DuckPGQ | `duckdb` (+ the `duckpgq` community extension) | in-process | implemented | MIT (DuckDB and duckpgq) |
 | Oxigraph | `pyoxigraph` | in-process | implemented | MIT OR Apache-2.0 |
 | HelixDB | `helix-db` + `helix-db-embedded` | in-process (embedded mode) | implemented | Apache-2.0 (engine and embedded runtime); Python SDK MIT |
+| Traverse | `traverse-embedded` (Linux x86-64 and Windows x64) | in-process, on disk (queries served from memory) | implemented | MIT OR Apache-2.0 |
 
 graph-bench downloads each database at run time and redistributes none of them.
 

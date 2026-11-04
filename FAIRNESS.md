@@ -35,13 +35,17 @@ benchmark, servers included, is kept in [legacy/](legacy/README.md).
      gets `concurrency: 1` and `readConcurrency: 1`, `neo4j-admin database import` gets `--threads=1` and the
      JVM caps above. Its background threads (page cache flushing, checkpointing, index population) have no
      documented setting and are not capped.
+   - Traverse: `RAYON_NUM_THREADS=1` in its worker. Its parallel query phases run on rayon's global pool, and the
+     embedded SDK builds no pool of its own. Its background save thread has no thread setting of its own and is not
+     capped.
 
    **Planned with grafeo 0.6.4:** the all-cores runs come back to the `full` selection, reported as a separate
    set of tables, and Grafeo's adapter switches from `RAYON_NUM_THREADS` to the real thread setting 0.6.4
    brings. Selections and benchmark ids already carry a threads value (an `-allcores` suffix), so this is a
    data change, not a redesign.
 4. **Storage is in-memory where the database supports it.** A disk-only database runs on disk and is labelled
-   so. Loading is measured separately from queries: each database loads the same CSV files with its own
+   so. Traverse is labelled on-disk: its SDK always keeps a `.tvdb` file and fsyncs a redo log per commit, though
+   it serves queries from memory. Loading is measured separately from queries: each database loads the same CSV files with its own
    documented bulk-load path (see [Loading](#loading)).
 5. **Answers are checked.** Each query's answer is compared with a Python reference computed from the generated
    data (NetworkX for algorithms). A database with a different answer is marked `disagree` (≠) and left out of
@@ -229,6 +233,9 @@ Load uses each database's **fastest documented bulk path, CSV parsing included**
 - Neo4j Community: `neo4j-admin database import full` (the offline bulk importer) on CSV copies with typed header
   lines, then the store opened embedded, a unique `id` constraint per label awaited online and, for
   Graphalytics, the GDS projection; all in the load clock, including the importer's JVM starts.
+- Traverse: the SDK's `bulk_writer`, with the CSVs parsed in Python, since the SDK has no CSV loader; the commit writes
+  the `.tvdb` file, in the load clock. `traverse-admin import` is not in the wheel and infers each value's type from
+  its text, so it cannot keep the dataset's typed columns.
 
 ## Adapter rules
 

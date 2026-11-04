@@ -23,6 +23,7 @@ Versions were the latest stable on PyPI on 2026-10-31.
 | FalkorDB | [shortestPath only in WITH or RETURN and not undirected, so OPTIONAL MATCH shortestPath fails](falkordb.md) | draft, reproduced | no duplicate found |
 | FalkorDB | [falkordblite has no wheel for glibc older than 2.38 (Ubuntu 22.04)](falkordb.md) | draft, packaging request, reproduced on arm64 | no duplicate found |
 | TuringDB | [openCypher shortestPath pattern does not parse](turingdb.md) | draft, reproduced | no duplicate found |
+| Traverse | [`shortestPath` is refused under `OPTIONAL MATCH`](traverse.md) | draft, reproduced on 0.9.0 | no duplicate found (no open issues on 2026-11-04) |
 | Neo4j | nothing to file | none | n/a |
 | NeuG | `MATCH (n) RETURN count(n)` returns no row on a database with no node tables | draft | none |
 | Oxigraph | nothing to file | none | n/a |

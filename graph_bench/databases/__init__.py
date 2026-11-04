@@ -27,6 +27,7 @@ KNOWN: tuple[str, ...] = (
     "neo4j",
     "oxigraph",
     "duckdb",
+    "traverse",
 )
 
 MODELS: dict[str, frozenset[Model]] = {
@@ -40,6 +41,7 @@ MODELS: dict[str, frozenset[Model]] = {
     "neo4j": frozenset({"property_graph"}),
     "oxigraph": frozenset({"rdf"}),
     "duckdb": frozenset({"sql_pgq"}),
+    "traverse": frozenset({"property_graph"}),
 }
 
 DISPLAY: dict[str, str] = {
@@ -53,6 +55,7 @@ DISPLAY: dict[str, str] = {
     "neo4j": "Neo4j",
     "oxigraph": "Oxigraph",
     "duckdb": "DuckDB + DuckPGQ",
+    "traverse": "Traverse",
 }
 
 # The PyPI package whose version a database's `info()` records. The adapters read their version from it, and
@@ -68,6 +71,7 @@ PACKAGES: dict[str, str] = {
     "arcadedb": "arcadedb-embedded",
     "oxigraph": "pyoxigraph",
     "duckdb": "duckdb",
+    "traverse": "traverse-embedded",
 }
 
 EXTRA_ENV = "GRAPH_BENCH_EXTRA_DATABASES"
@@ -83,6 +87,7 @@ REGISTRY: dict[str, str] = {
     "neo4j": "graph_bench.databases.neo4j:Neo4jDatabase",
     "oxigraph": "graph_bench.databases.oxigraph:OxigraphDatabase",
     "duckdb": "graph_bench.databases.duckdb:DuckDatabase",
+    "traverse": "graph_bench.databases.traverse:TraverseDatabase",
 }
 
 
