@@ -34,7 +34,7 @@ class TraverseDatabase(Database):
 
     The SDK has no file-free mode: `open` takes a path and logs each commit to a redo log, fsynced, so this adapter is
     labelled on-disk, although queries are served from memory (the package README, "All data is held in memory").
-    The redo log costs the write rows something the in-memory databases do not pay; the SDK has no setting for it.
+    The redo log costs writes something the in-memory databases do not pay; the SDK has no setting for it.
     """
 
     name: ClassVar[str] = "traverse"
