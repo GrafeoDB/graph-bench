@@ -28,6 +28,7 @@ KNOWN: tuple[str, ...] = (
     "oxigraph",
     "duckdb",
     "traverse",
+    "grafeo_typed",
 )
 
 MODELS: dict[str, frozenset[Model]] = {
@@ -42,6 +43,7 @@ MODELS: dict[str, frozenset[Model]] = {
     "oxigraph": frozenset({"rdf"}),
     "duckdb": frozenset({"sql_pgq"}),
     "traverse": frozenset({"property_graph"}),
+    "grafeo_typed": frozenset({"property_graph"}),
 }
 
 DISPLAY: dict[str, str] = {
@@ -56,6 +58,7 @@ DISPLAY: dict[str, str] = {
     "oxigraph": "Oxigraph",
     "duckdb": "DuckDB + DuckPGQ",
     "traverse": "Traverse",
+    "grafeo_typed": "Grafeo (typed)",
 }
 
 # The PyPI package whose version a database's `info()` records. The adapters read their version from it, and
@@ -72,7 +75,13 @@ PACKAGES: dict[str, str] = {
     "oxigraph": "pyoxigraph",
     "duckdb": "duckdb",
     "traverse": "traverse-embedded",
+    "grafeo_typed": "grafeo",
 }
+
+# A variant is a database under another documented setup, reported as a row beside it (FAIRNESS.md, "Variants"). It has
+# a budget of its own, but sets none for any other database and is never ranked, so the database's own row stays the
+# headline and adding a variant moves no other marker.
+VARIANTS: dict[str, str] = {"grafeo_typed": "grafeo"}
 
 EXTRA_ENV = "GRAPH_BENCH_EXTRA_DATABASES"
 
@@ -88,6 +97,7 @@ REGISTRY: dict[str, str] = {
     "oxigraph": "graph_bench.databases.oxigraph:OxigraphDatabase",
     "duckdb": "graph_bench.databases.duckdb:DuckDatabase",
     "traverse": "graph_bench.databases.traverse:TraverseDatabase",
+    "grafeo_typed": "graph_bench.databases.grafeo_typed:GrafeoTypedDatabase",
 }
 
 

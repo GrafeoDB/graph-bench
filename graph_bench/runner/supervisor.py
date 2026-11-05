@@ -77,7 +77,7 @@ from typing import IO, Any, Literal
 
 import psutil
 
-from graph_bench.databases import model_support
+from graph_bench.databases import VARIANTS, model_support
 from graph_bench.databases.base import DatabaseInfo
 from graph_bench.datasets import cache
 from graph_bench.results import Entry, GrafeoSource, Machine, Reference, Resource, Results
@@ -276,7 +276,8 @@ def _budgets(entries: Sequence[Entry], db: str, meta: dict[str, _Meta]) -> dict[
     """
     found: dict[tuple[str, str, int | None], list[int]] = {}
     for e in entries:
-        if e.database != db and e.status == "ok" and e.answer == "agree" and e.preflight_ns is not None:
+        yardstick = e.database != db and e.database not in VARIANTS
+        if yardstick and e.status == "ok" and e.answer == "agree" and e.preflight_ns is not None:
             found.setdefault((e.benchmark, e.scale, e.threads), []).append(e.preflight_ns)
     budgets = {}
     for bench_id, m in meta.items():
@@ -331,8 +332,8 @@ def apply_budget_rule(results: Results) -> None:
     mean of the 3 fastest other databases' ok/agree values for it (of all others if fewer than 3); with no
     other such database no budget applies. Startup and both load rows (`BUDGET_EXEMPT`) and answer-only items
     (`catalog.answer_only`) are exempt, as entries and as yardsticks. The entry itself never counts, so the outcome
-    does not depend on order. Speed is `timing.median_ns` in bench mode and `preflight_ns` in codspeed mode. The
-    timing of a marked entry is kept.
+    does not depend on order. A variant (`databases.VARIANTS`) has a budget but is no yardstick. Speed is
+    `timing.median_ns` in bench mode and `preflight_ns` in codspeed mode. The timing of a marked entry is kept.
 
     Entries of different sources (`Entry.source`: the CI run and the local snapshot `graph-bench merge --local`
     adds) are never compared: each source is its own benchmark, so a timing on one machine sets no budget for one
@@ -348,7 +349,7 @@ def apply_budget_rule(results: Results) -> None:
     marked: list[tuple[Entry, float]] = []
     for members in groups.values():
         for i, (e, speed) in enumerate(members):
-            others = [other for j, (_, other) in enumerate(members) if j != i]
+            others = [other for j, (peer, other) in enumerate(members) if j != i and peer.database not in VARIANTS]
             if not others:
                 continue
             average = _top3_mean(others)

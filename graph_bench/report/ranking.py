@@ -17,7 +17,7 @@ import math
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 
-from graph_bench.databases import display_name
+from graph_bench.databases import VARIANTS, display_name
 from graph_bench.results import Entry, Results
 from graph_bench.suites.catalog import ITEMS, answer_only, load_benchmark, load_ql_benchmark
 from graph_bench.types import CATEGORY_ORDER, LOAD_CATEGORIES, SOURCES, Category
@@ -173,7 +173,7 @@ def rank(results: Results) -> list[Ranked]:
         order = []
         for e in members:
             value = speed(e, results.mode)
-            if is_ranked(e) and value is not None and not answer_only(e.benchmark):
+            if is_ranked(e) and value is not None and not answer_only(e.benchmark) and e.database not in VARIANTS:
                 order.append((e.database, value))
         order.sort(key=lambda pair: (pair[1], pair[0]))
         sources = {e.database: e.source for e in members if e.source != "ci"}
@@ -190,10 +190,13 @@ def safe_display_name(name: str) -> str:
 
 
 def ordered_databases(names: Iterable[str]) -> list[str]:
-    """Grafeo first, then the others alphabetically by display name."""
+    """Grafeo first, then the others alphabetically by display name, each variant right after its database."""
     unique = list(dict.fromkeys(names))
-    others = sorted((n for n in unique if n != "grafeo"), key=lambda n: (safe_display_name(n).casefold(), n))
-    return (["grafeo"] if "grafeo" in unique else []) + others
+    base = [n for n in unique if n != "grafeo" and n not in VARIANTS]
+    others = sorted(base, key=lambda n: (safe_display_name(n).casefold(), n))
+    ordered = (["grafeo"] if "grafeo" in unique else []) + others
+    result = [v for db in ordered for v in (db, *(n for n in unique if VARIANTS.get(n) == db))]
+    return result + [n for n in unique if n not in result]
 
 
 def format_sig3(value: float) -> str:
