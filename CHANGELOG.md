@@ -14,6 +14,9 @@ benchmark moves to `legacy/` untouched and is deleted once the new comparison re
   databases share one heap cap and start their JVM outside every clock (`graph_bench/databases/jvm.py`).
 - **Traverse**: an eleventh embedded database, `traverse-embedded` (Linux x86-64 and Windows x64), outside the CI
   roster. It has no results yet: it joins the matrix with the next local snapshot.
+- **Variants**: a database under another documented setup, as a row beside it that is never ranked and sets no budget
+  (`databases.VARIANTS`, FAIRNESS.md). The first is Grafeo (typed), on a closed graph type with an index per label. It
+  has no results yet.
 - **Data models**: a database declares one dialect per model it serves, and the harness routes each query by
   its model (`Database.dialects`, `query_model`). SQL/PGQ (SNB IS1, IS4, IS6, IC13 in standard SQL/PGQ) and
   RDF/SPARQL (SNB IS1, IS4, IS6 in SPARQL over a shared RDF mapping of the CSVs) reuse the SNB references.
