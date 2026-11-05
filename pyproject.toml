@@ -118,6 +118,7 @@ omit = [
     "graph_bench/databases/arcadedb.py",
     "graph_bench/databases/neo4j.py",
     "graph_bench/databases/traverse.py",
+    "graph_bench/databases/grafeo_typed.py",
 ]
 
 [tool.coverage.report]
@@ -136,6 +137,7 @@ omit = [
     "graph_bench/databases/arcadedb.py",
     "graph_bench/databases/neo4j.py",
     "graph_bench/databases/traverse.py",
+    "graph_bench/databases/grafeo_typed.py",
 ]
 exclude_lines = [
     "pragma: no cover",

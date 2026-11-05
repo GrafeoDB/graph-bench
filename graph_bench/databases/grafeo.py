@@ -117,10 +117,18 @@ class GrafeoDatabase(Database):
         else:
             self.db = grafeo.GrafeoDB()
 
+    def _create_graph(self, dataset: Dataset) -> None:
+        """The named graph the dataset loads into; `grafeo_typed` binds it to a graph type."""
+        self.db.create_graph(dataset.name)
+
+    def _index_keys(self, dataset: Dataset) -> None:
+        """The index of the `id` lookups, on every label; `grafeo_typed` makes one per label."""
+        self.db.create_property_index("id")
+
     def load(self, dataset: Dataset) -> None:
         self.open_empty()
         db = self.db
-        db.create_graph(dataset.name)
+        self._create_graph(dataset)
         db.set_graph(dataset.name)
         key_types: dict[str, str] = {}
         for table in dataset.nodes:
@@ -135,7 +143,7 @@ class GrafeoDatabase(Database):
                 target=(table.dst, "id", "dst"),
                 types=types,
             )
-        db.create_property_index("id")
+        self._index_keys(dataset)
         # bfs_layers has no `key=`: the graphalytics vertices keep their internal ids, and the way back.
         self.ids: dict[Any, int] = {}
         self.keys: dict[int, Any] = {}
