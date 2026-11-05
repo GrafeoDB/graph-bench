@@ -69,6 +69,10 @@ the plans or the per-row costs leave room to improve. They carry no `- id:` line
 
 - id: grafeo/pattern_square
 - id: grafeo/pattern_triangle_all
+- id: grafeo_typed/pattern_square
+- Grafeo (typed) is the same engine, so it has the same limit: on PyPI 0.6.1 `pattern_square` runs past the 60 s ceiling
+  on it too (⏱, answers agree), while `pattern_triangle_all` stayed under it in the one run so far. On a later build
+  (wheel 261d34ad, after the closing hop work) `pattern_square` takes about 0.13 s on either row.
 - Query: `pattern_square` (4-cycles through a person), the shared openCypher text in
   `graph_bench/suites/patterns.py`, no Grafeo override: the cycle `(a:Person {id: $personId})-[:KNOWS]-(b)-[:KNOWS]-(c)`
   `-[:KNOWS]-(d)-[:KNOWS]-(a)` over Persons, `WHERE b.id < d.id AND c.id <> $personId RETURN count(*) AS cycles`.

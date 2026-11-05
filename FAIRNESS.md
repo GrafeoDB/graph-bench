@@ -237,6 +237,23 @@ Load uses each database's **fastest documented bulk path, CSV parsing included**
   the `.tvdb` file, in the load clock. `traverse-admin import` is not in the wheel and infers each value's type from
   its text, so it cannot keep the dataset's typed columns.
 
+## Variants
+
+A variant is a database under another documented setup, reported as a row right after it (`databases.VARIANTS`). It
+exists to show what a documented choice costs or gains, so it follows three rules:
+
+- **It is never ranked.** The database's own row stays the headline, with its rank and its counts in the summary block.
+- **It is no yardstick.** It sets no budget for another database, so adding a variant moves no other marker. It has a
+  budget of its own, against the other databases.
+- **It is the same engine at the same version**, with the same loader, and it differs only by settings the database
+  documents. The same answer check applies.
+
+The one variant today is **Grafeo (typed)**: a closed graph type (`CREATE GRAPH g TYPED my_type`) with a `CREATE INDEX`
+per declared label, on the property graph model only. The schemaless row keeps its key-wide `create_property_index`.
+A query with no label scans on the typed row, by the documented meaning of a per-label index, and is measured as it is.
+Edge types are declared without their end labels, because Grafeo does not yet accept patterns of one edge type that
+differ on both sides, and SNB's `IS_LOCATED_IN` does.
+
 ## Adapter rules
 
 - **Documented paths only.** An adapter uses the database's documented, publicly shipped API and query language,
