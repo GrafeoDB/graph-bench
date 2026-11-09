@@ -6,10 +6,10 @@
 
 # The latest stable Neo4j release (Maven Central `org.neo4j:neo4j`, `<release>` in maven-metadata.xml), its
 # Community tarball and the checksum Neo4j publishes at `<url>.sha256`.
-NEO4J_VERSION = "2026.10.1"
+NEO4J_VERSION = "2026.10.2"
 NEO4J_HOME_NAME = f"neo4j-community-{NEO4J_VERSION}"
 NEO4J_URL = f"https://dist.neo4j.org/{NEO4J_HOME_NAME}-unix.tar.gz"
-NEO4J_SHA256 = "afcf4986d47d13dd908427d301d5a9278b2ec7d615a12bb40e22087c7e133e78"
+NEO4J_SHA256 = "fcbccee832175fd8b873ca7d8228dbde4cb5cce43f9053833cc7517dc4dd6f31"
 GDS_JAR = f"neo4j-graph-data-science-{NEO4J_VERSION}.jar"
 # Neo4j 2026.10 runs on Java 21 or 25 ("Java SE 21 and Java SE 25 Platform Specification",
 # https://neo4j.com/docs/operations-manual/current/installation/requirements/); its class files are Java 21 (major
