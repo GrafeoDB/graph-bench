@@ -1,0 +1,83 @@
+=== 2026-11-14T10:36:21Z run 43582385221 attempt 1 job readme
+load: 0.62 0.16 0.05
+               total        used        free      shared  buff/cache   available
+Mem:           32022         512       28483          54        3027       31139
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   42G  46% /
+largest processes (RSS MB, elapsed, command):
+  130 00:35 /actions-runner/bin/Runner.Worker spawnclient 149 152
+  111 45:03 /actions-runner/bin/Runner.Listener run --jitconfig [redacted]
+  108 45:15 [redacted] -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 45:31 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+  42 45:34 php-fpm: master process (/etc/php/8.1/fpm/php-fpm.conf)
+bench output:
+=== 2026-11-14T10:37:22Z run 43582385221 attempt 1 job readme
+load: 0.94 0.35 0.13
+               total        used        free      shared  buff/cache   available
+Mem:           32022         699       28293          55        3029       30952
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   42G  46% /
+largest processes (RSS MB, elapsed, command):
+  181 01:01 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  131 01:37 /actions-runner/bin/Runner.Worker spawnclient 149 152
+  111 46:05 /actions-runner/bin/Runner.Listener run --jitconfig [redacted]
+  111 46:17 [redacted] -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 46:33 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "progress", "id": "benches/test_hops.py::test_hop_2[grafeo-medium]"}
+bench output:
+=== 2026-11-14T10:38:24Z run 43582385221 attempt 1 job readme
+load: 0.98 0.47 0.19
+               total        used        free      shared  buff/cache   available
+Mem:           32022         721       28270          55        3030       30930
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   42G  46% /
+largest processes (RSS MB, elapsed, command):
+  198 02:02 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  131 02:38 /actions-runner/bin/Runner.Worker spawnclient 149 152
+  112 47:18 [redacted] -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  111 47:06 /actions-runner/bin/Runner.Listener run --jitconfig [redacted]
+  72 47:34 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "progress", "id": "benches/test_scans.py::test_scan_filter[grafeo-medium]"}
+bench output:
+=== 2026-11-14T10:39:25Z run 43582385221 attempt 1 job readme
+load: 1.00 0.57 0.24
+               total        used        free      shared  buff/cache   available
+Mem:           32022        1201       27788          55        3032       30450
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   42G  46% /
+largest processes (RSS MB, elapsed, command):
+  679 03:04 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  131 03:40 /actions-runner/bin/Runner.Worker spawnclient 149 152
+  112 48:08 /actions-runner/bin/Runner.Listener run --jitconfig [redacted]
+  112 48:20 [redacted] -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 48:36 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "run", "id": "benches/test_pattern_matching.py::test_pattern_square_rdf[grafeo-medium]"}
+bench output:
+=== 2026-11-14T10:40:27Z run 43582385221 attempt 1 job readme
+load: 1.00 0.66 0.30
+               total        used        free      shared  buff/cache   available
+Mem:           32022        1202       27786          55        3032       30449
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   42G  46% /
+largest processes (RSS MB, elapsed, command):
+  678 04:05 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.worker --db grafeo --selection
+  131 04:41 /actions-runner/bin/Runner.Worker spawnclient 149 152
+  112 49:09 /actions-runner/bin/Runner.Listener run --jitconfig [redacted]
+  112 49:21 [redacted] -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 49:37 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "progress", "id": "benches/test_pattern_matching.py::test_pattern_triangle_rdf[grafeo-medium]"}
+bench output:
+=== 2026-11-14T10:41:28Z run 43582385221 attempt 1 job readme
+load: 1.15 0.76 0.35
+               total        used        free      shared  buff/cache   available
+Mem:           32022        1054       27934          55        3034       30597
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        78G   36G   42G  46% /
+largest processes (RSS MB, elapsed, command):
+  529 00:02 /actions-runner/_work/graph-bench/graph-bench/.venv/bin/python -m graph_bench.runner.resources --db grafeo --selection
+  131 05:42 /actions-runner/bin/Runner.Worker spawnclient 149 152
+  112 50:10 /actions-runner/bin/Runner.Listener run --jitconfig [redacted]
+  111 50:22 [redacted] -config /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml -envconfig /opt/aws/amazon-cloudwatch-agent/etc/env-config.json -otelconfig
+  72 50:38 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+grafeo-1: {"kind": "entry", "id": "benches/test_pattern_matching.py::test_sem_trail_self_loop[grafeo-medium]", "status": "ok", "error": null, "timing": {"median_ns": 462621.0, "p99_ns": 467375.16, "min_ns": 457864, "iterations": 10}, "preflight_ns": 
+bench output:
