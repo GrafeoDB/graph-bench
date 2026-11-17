@@ -250,15 +250,15 @@ Single-threaded.
 
 | Benchmark | Grafeo | DuckDB + DuckPGQ | LadybugDB | NeuG | Oxigraph | TuringDB | ArcadeDB† | FalkorDB† | HelixDB† | Neo4j† |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Empty database | **13.2** | 215 | 127 | ≠ | 14.2 | 858 | 689 | **146** | 153 | 6055 |
+| Empty database | **13.2** | 216 | 127 | ≠ | 14.3 | 832 | 689 | **146** | 153 | 6055 |
 
 ### Load (medium scale, s)
 
 | Benchmark | Grafeo | DuckDB + DuckPGQ | LadybugDB | NeuG | Oxigraph | TuringDB | ArcadeDB† | FalkorDB† | HelixDB† | Neo4j† |
 |---|---|---|---|---|---|---|---|---|---|---|
-| LDBC SNB | 2.10 | **1.25** | 2.03 | 5.52 | ⊘ | 5.77 | 3.82 | **3.12** | 70.0 | 10.4 |
-| Graphalytics | 0.908 | **0.317** | 1.00 | 3.12 | ⊘ | 3.54 | **1.05** | 12.1 | 53.8 | 10.2 |
-| LDBC SNB (RDF) | 3.31 | ⊘ | ⊘ | ⊘ | **2.31** | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| LDBC SNB | 2.07 | **1.25** | 2.03 | 5.25 | ⊘ | 5.62 | 3.82 | **3.12** | 70.0 | 10.4 |
+| Graphalytics | 0.904 | **0.317** | 1.01 | 3.19 | ⊘ | 3.48 | **1.05** | 12.1 | 53.8 | 10.2 |
+| LDBC SNB (RDF) | 3.30 | ⊘ | ⊘ | ⊘ | **2.39** | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
 
 ### Load (query language) (medium scale, s)
 
@@ -271,35 +271,35 @@ Single-threaded.
 
 | Benchmark | Grafeo | DuckDB + DuckPGQ | LadybugDB | NeuG | Oxigraph | TuringDB | ArcadeDB† | FalkorDB† | HelixDB† | Neo4j† |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Label scan | **53.6** | ⊘ | 86.1 | 57.7 | ⊘ | 163 | 12.2 | **9.12** | ⏱ | ⏱ |
-| Property filter | 200 | ⊘ | 192 | **115** | ⊘ | 400 | 94.5 | **57.1** | ⏱ | ⏱ |
-| Aggregation | 14.0 | ⊘ | **4.94** | 11.7 | ⊘ | 8.35 | 5.59 | **2.69** | ⊘ | 11.1 |
-| Order plus limit | 87.3 | ⊘ | 40.1 | **3.29** | ⊘ | 61.5 | 55.2 | **19.8** | ⏱ | 42.7 |
-| Property filter with average | 82.6 | ⊘ | **7.99** | 11.6 | ⊘ | 64.5 | 50.9 | **30.6** | ⏱ | 47.1 |
-| Label scan (SQL/PGQ) | 53.7 | **15.5** | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
-| Property filter (SQL/PGQ) | 199 | **73.5** | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
-| Aggregation (SQL/PGQ) | 13.6 | **4.60** | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
-| Order plus limit (SQL/PGQ) | 201 | **38.5** | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
-| Property filter with average (SQL/PGQ) | 79.9 | **35.7** | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
-| Label scan (SPARQL) | **193** | ⊘ | ⊘ | ⊘ | 399 | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
-| Property filter (SPARQL) | **2834** | ⊘ | ⊘ | ⊘ | 3413 | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| Label scan | **54.5** | ⊘ | 85.8 | 57.9 | ⊘ | 163 | 12.2 | **9.12** | ⏱ | ⏱ |
+| Property filter | 203 | ⊘ | 192 | **115** | ⊘ | 400 | 94.5 | **57.1** | ⏱ | ⏱ |
+| Aggregation | 13.9 | ⊘ | **4.97** | 11.6 | ⊘ | 8.37 | 5.59 | **2.69** | ⊘ | 11.1 |
+| Order plus limit | 88.2 | ⊘ | 40.2 | **3.30** | ⊘ | 61.5 | 55.2 | **19.8** | ⏱ | 42.7 |
+| Property filter with average | 83.6 | ⊘ | **8.02** | 11.7 | ⊘ | 64.7 | 50.9 | **30.6** | ⏱ | 47.1 |
+| Label scan (SQL/PGQ) | 54.5 | **16.6** | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| Property filter (SQL/PGQ) | 203 | **75.7** | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| Aggregation (SQL/PGQ) | 13.6 | **4.62** | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| Order plus limit (SQL/PGQ) | 203 | **38.6** | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| Property filter with average (SQL/PGQ) | 80.7 | **35.9** | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| Label scan (SPARQL) | **192** | ⊘ | ⊘ | ⊘ | 400 | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| Property filter (SPARQL) | **2831** | ⊘ | ⊘ | ⊘ | 3415 | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
 | Aggregation (SPARQL) | **123** | ⊘ | ⊘ | ⊘ | 238 | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
-| Order plus limit (SPARQL) | **1415** | ⊘ | ⊘ | ⊘ | 1745 | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
-| Property filter with average (SPARQL) | **830** | ⊘ | ⊘ | ⊘ | 1278 | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| Order plus limit (SPARQL) | **1413** | ⊘ | ⊘ | ⊘ | 1762 | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| Property filter with average (SPARQL) | **831** | ⊘ | ⊘ | ⊘ | 1309 | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
 
 ### Hops (medium scale, ms)
 
 | Benchmark | Grafeo | DuckDB + DuckPGQ | LadybugDB | NeuG | Oxigraph | TuringDB | ArcadeDB† | FalkorDB† | HelixDB† | Neo4j† |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 1-hop | 3.80 | ⊘ | 8.46 | **2.36** | ⊘ | ⏱ | **2.04** | 7.02 | ⏱ | 4.34 |
-| 2-hop | 259 | ⊘ | 189 | **132** | ⊘ | 163 | 102 | **43.2** | ⏱ | 73.6 |
-| Variable length 1 to 3 | 961 | ⊘ | ⏱ | ⏱ | ⊘ | **534** | 470 | ⏱ | ⏱ | **342** |
-| 1-hop (SQL/PGQ) | **3.66** | ⏱ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
-| 2-hop (SQL/PGQ) | **202** | 999 | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
-| Variable length 1 to 3 (SQL/PGQ) | **839** | ⏱ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
-| 1-hop (SPARQL) | **21.4** | ⊘ | ⊘ | ⊘ | 42.4 | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
-| 2-hop (SPARQL) | **1464** | ⊘ | ⊘ | ⊘ | 3313 | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
-| IC13 shortest path | **19.5** | ⊘ | ≠ | 126 | ⊘ | ✗ | **3.32** | ✗ | ⏱ | 6.48 |
+| 1-hop | 3.84 | ⊘ | 8.46 | **2.32** | ⊘ | ⏱ | **2.04** | 7.02 | ⏱ | 4.34 |
+| 2-hop | 261 | ⊘ | 190 | **131** | ⊘ | 162 | 102 | **43.2** | ⏱ | 73.6 |
+| Variable length 1 to 3 | 969 | ⊘ | ⏱ | ⏱ | ⊘ | **531** | 470 | ⏱ | ⏱ | **342** |
+| 1-hop (SQL/PGQ) | **3.70** | ⏱ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| 2-hop (SQL/PGQ) | **201** | 1000 | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| Variable length 1 to 3 (SQL/PGQ) | **843** | ⏱ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| 1-hop (SPARQL) | **21.4** | ⊘ | ⊘ | ⊘ | 43.1 | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| 2-hop (SPARQL) | **1468** | ⊘ | ⊘ | ⊘ | 3364 | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| IC13 shortest path | **20.0** | ⊘ | ≠ | 125 | ⊘ | ✗ | **3.32** | ✗ | ⏱ | 6.48 |
 
 ### Pattern matching (small scale, ms)
 
@@ -311,54 +311,54 @@ Single-threaded.
 
 | Benchmark | Grafeo | DuckDB + DuckPGQ | LadybugDB | NeuG | Oxigraph | TuringDB | ArcadeDB† | FalkorDB† | HelixDB† | Neo4j† |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Triangles through a person | **9.34** | ⊘ | 38.4 | 10.9 | ⊘ | ⏱ | ⏱ | 59.3 | ⊘ | **28.3** |
-| 4-cycles through a person | 1005 | ⊘ | 1440 | **810** | ⊘ | ⏱ | ⏱ | ⏱ | ⊘ | **129** |
-| Common friends | **6.18** | ⊘ | 21.9 | 64.9 | ⊘ | 101 | ⏱ | 28.1 | 39.2 | **4.05** |
-| Multi-pattern join | 24.8 | ⊘ | 92.2 | **6.30** | ⊘ | 15.6 | **49.7** | ⏱ | ⊘ | 60.4 |
-| Triangles through a hub person | 494 | ⊘ | 2062 | **322** | ⊘ | ⏱ | **1976** | ⏱ | ⊘ | ⏱ |
-| Triangles, whole graph | 3259 | ⊘ | **3178** | 3577 | ⊘ | ⏱ | ⏱ | ⏱ | ⊘ | ⏱ |
-| 2-hop paths, whole graph | 71.6 | ⊘ | **20.1** | 160 | ⊘ | ⏱ | ⏱ | ⏱ | ⏱ | ⏱ |
-| 2-hop paths per source, top 10 | **5935** | ⊘ | 12423 | ⏱ | ⊘ | ⏱ | ⏱ | ⏱ | ⊘ | ⏱ |
-| Out-degree, top 10 | 43.2 | ⊘ | **18.3** | 35.1 | ⊘ | 55.5 | **32.5** | 52.3 | ⊘ | 54.1 |
+| Triangles through a person | **9.37** | ⊘ | 38.1 | 10.9 | ⊘ | ⏱ | ⏱ | 59.3 | ⊘ | **28.3** |
+| 4-cycles through a person | 1003 | ⊘ | 1453 | **808** | ⊘ | ⏱ | ⏱ | ⏱ | ⊘ | **129** |
+| Common friends | **6.13** | ⊘ | 22.0 | 63.9 | ⊘ | 100 | ⏱ | 28.1 | 39.2 | **4.05** |
+| Multi-pattern join | 24.5 | ⊘ | 92.5 | **6.26** | ⊘ | 15.6 | **49.7** | ⏱ | ⊘ | 60.4 |
+| Triangles through a hub person | 489 | ⊘ | 2080 | **321** | ⊘ | ⏱ | **1976** | ⏱ | ⊘ | ⏱ |
+| Triangles, whole graph | 3228 | ⊘ | **3178** | 3564 | ⊘ | ⏱ | ⏱ | ⏱ | ⊘ | ⏱ |
+| 2-hop paths, whole graph | 71.2 | ⊘ | **20.0** | 160 | ⊘ | ⏱ | ⏱ | ⏱ | ⏱ | ⏱ |
+| 2-hop paths per source, top 10 | **5934** | ⊘ | 12454 | ⏱ | ⊘ | ⏱ | ⏱ | ⏱ | ⊘ | ⏱ |
+| Out-degree, top 10 | 43.2 | ⊘ | **18.2** | 35.3 | ⊘ | 56.5 | **32.5** | 52.3 | ⊘ | 54.1 |
 | Trail semantics with self-loops | ✓ | ⊘ | ≠ | ≠ | ⊘ | ≠ | ✓ | ≠ | ≠ | ✓ |
-| Triangles through a person (SQL/PGQ) | **8.77** | ⏱ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
-| 4-cycles through a person (SQL/PGQ) | **928** | 2710 | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
-| Common friends (SQL/PGQ) | **93.9** | 529 | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
-| Multi-pattern join (SQL/PGQ) | **27.8** | ✗ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
-| Triangles through a person (SPARQL) | 12319 | ⊘ | ⊘ | ⊘ | **2280** | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| Triangles through a person (SQL/PGQ) | **8.75** | ⏱ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| 4-cycles through a person (SQL/PGQ) | **923** | 2718 | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| Common friends (SQL/PGQ) | **91.5** | 530 | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| Multi-pattern join (SQL/PGQ) | **27.9** | ✗ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| Triangles through a person (SPARQL) | 12314 | ⊘ | ⊘ | ⊘ | **2231** | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
 | 4-cycles through a person (SPARQL) | ⏱ | ⊘ | ⊘ | ⊘ | ⏱ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
-| Common friends (SPARQL) | **32.8** | ⊘ | ⊘ | ⊘ | ⏱ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| Common friends (SPARQL) | **32.9** | ⊘ | ⊘ | ⊘ | ⏱ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
 | Multi-pattern join (SPARQL) |  |  |  |  |  |  | ⊘ | ⊘ | ⊘ | ⊘ |
 
 ### Complex queries (medium scale, ms)
 
 | Benchmark | Grafeo | DuckDB + DuckPGQ | LadybugDB | NeuG | Oxigraph | TuringDB | ArcadeDB† | FalkorDB† | HelixDB† | Neo4j† |
 |---|---|---|---|---|---|---|---|---|---|---|
-| IS1 person profile | 2.64 | ⊘ | 4.28 | **2.19** | ⊘ | ⏱ | **1.14** | ⏱ | ⏱ | ⏱ |
-| IS2 recent messages of a person | 5.16 | ⊘ | 512 | **4.52** | ⊘ | 159 | **2.84** | 7.19 | ⏱ | 8.72 |
-| IS3 friends of a person | **11.1** | ⊘ | 17.7 | 12.4 | ⊘ | 122 | **8.61** | 9.41 | ⊘ | ⏱ |
-| IS4 message content | 2.21 | ⊘ | 67.9 | **1.64** | ⊘ | 74.8 | ⏱ | ⏱ | ⏱ | **4.17** |
-| IS5 message creator | 2.09 | ⊘ | 37.4 | **1.59** | ⊘ | 76.9 | ⏱ | ⏱ | **32.3** | ⏱ |
-| IS6 forum of a message | 3.09 | ⊘ | 215 | **2.26** | ⊘ | 114 | 109 | ⏱ | **46.2** | ⏱ |
-| IS7 replies of a message | 6.17 | ⊘ | 41.7 | **3.86** | ⊘ | 152 | **2.37** | 9.30 | ⊘ | 5.50 |
-| IC2 recent messages by friends | 16.0 | ⊘ | 96.3 | **7.76** | ⊘ | 145 | 21.1 | **10.2** | ⏱ | 29.0 |
-| IC6 tag co-occurrence | 502 | ⊘ | 634 | **186** | ⊘ | 430 | 431 | 548 | ⊘ | **318** |
+| IS1 person profile | 2.66 | ⊘ | 4.33 | **2.22** | ⊘ | ⏱ | **1.14** | ⏱ | ⏱ | ⏱ |
+| IS2 recent messages of a person | 5.22 | ⊘ | 518 | **4.52** | ⊘ | 157 | **2.84** | 7.19 | ⏱ | 8.72 |
+| IS3 friends of a person | **10.9** | ⊘ | 17.8 | 12.4 | ⊘ | 122 | **8.61** | 9.41 | ⊘ | ⏱ |
+| IS4 message content | 2.20 | ⊘ | 68.2 | **1.64** | ⊘ | 74.5 | ⏱ | ⏱ | ⏱ | **4.17** |
+| IS5 message creator | 2.09 | ⊘ | 37.6 | **1.57** | ⊘ | 76.7 | ⏱ | ⏱ | **32.3** | ⏱ |
+| IS6 forum of a message | 3.11 | ⊘ | 215 | **2.26** | ⊘ | 113 | 109 | ⏱ | **46.2** | ⏱ |
+| IS7 replies of a message | 6.26 | ⊘ | 41.8 | **3.86** | ⊘ | 151 | **2.37** | 9.30 | ⊘ | 5.50 |
+| IC2 recent messages by friends | 15.8 | ⊘ | 95.9 | **7.79** | ⊘ | 144 | 21.1 | **10.2** | ⏱ | 29.0 |
+| IC6 tag co-occurrence | 510 | ⊘ | 634 | **186** | ⊘ | 429 | 431 | 548 | ⊘ | **318** |
 
 ### Algorithms (medium scale, ms)
 
 | Benchmark | Grafeo | DuckDB + DuckPGQ | LadybugDB | NeuG | Oxigraph | TuringDB | ArcadeDB† | FalkorDB† | HelixDB† | Neo4j† |
 |---|---|---|---|---|---|---|---|---|---|---|
 | BFS | **29.0** | ⏱ | 160 | 52.8 | ⊘ | ⊘ | ⏱ | ⏱ | ⊘ | ⏱ |
-| WCC | 92.3 | ⏱ | ✗ | **27.4** | ⊘ | ⊘ | ⏱ | **14.9** | ⊘ | 107 |
-| PageRank | **83.8** | 133 | ✗ | ⏱ | ⊘ | ⊘ | 121 | **15.6** | ⊘ | ⏱ |
+| WCC | 92.0 | ⏱ | ✗ | **27.8** | ⊘ | ⊘ | ⏱ | **14.9** | ⊘ | 107 |
+| PageRank | **83.5** | 133 | ✗ | ⏱ | ⊘ | ⊘ | 121 | **15.6** | ⊘ | ⏱ |
 
 ### RDF/SPARQL (medium scale, ms)
 
 | Benchmark | Grafeo | DuckDB + DuckPGQ | LadybugDB | NeuG | Oxigraph | TuringDB | ArcadeDB† | FalkorDB† | HelixDB† | Neo4j† |
 |---|---|---|---|---|---|---|---|---|---|---|
-| IS1 person profile | **13.1** | ⊘ | ⊘ | ⊘ | 14.1 | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
-| IS4 message content | **7.20** | ⊘ | ⊘ | ⊘ | 7.63 | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
-| IS6 forum of a message | 11.3 | ⊘ | ⊘ | ⊘ | **10.8** | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| IS1 person profile | **13.2** | ⊘ | ⊘ | ⊘ | 14.1 | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| IS4 message content | **7.25** | ⊘ | ⊘ | ⊘ | 7.65 | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| IS6 forum of a message | 11.4 | ⊘ | ⊘ | ⊘ | **10.9** | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
 
 ### SQL/PGQ (medium scale, ms)
 
@@ -367,18 +367,18 @@ Single-threaded.
 | IS1 person profile | **2.66** | ⏱ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
 | IS4 message content | **2.16** | ✗ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
 | IS6 forum of a message | ✗ | ✗ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
-| IC13 shortest path | **20.9** | ⏱ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| IC13 shortest path | **21.8** | ⏱ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
 
 ### Memory (medium scale, MiB)
 
 | Dataset | Grafeo | DuckDB + DuckPGQ | LadybugDB | NeuG | Oxigraph | TuringDB | ArcadeDB† | FalkorDB† | HelixDB† | Neo4j† |
 |---|---|---|---|---|---|---|---|---|---|---|
-| LDBC SNB, loaded | 93.8 | 63.7 | 124 | **28.8** | ⊘ | 183 | 851 | 434 | 684 | **83.6** |
-| LDBC SNB, peak during load | 153 | 147 | 182 | **135** | ⊘ | 357 | 1007 | **488** | 740 | 5021 |
-| Graphalytics, loaded | 42.4 | 38.6 | 98.3 | **19.1** | ⊘ | 86.8 | 308 | 353 | 575 | **112** |
-| Graphalytics, peak during load | **106** | 122 | 157 | 129 | ⊘ | 262 | 543 | **407** | 630 | 5022 |
+| LDBC SNB, loaded | 96.4 | 63.9 | 122 | **28.4** | ⊘ | 183 | 851 | 434 | 684 | **83.6** |
+| LDBC SNB, peak during load | 156 | 147 | 181 | **135** | ⊘ | 358 | 1007 | **488** | 740 | 5021 |
+| Graphalytics, loaded | 42.4 | 38.9 | 98.2 | **18.4** | ⊘ | 87.0 | 308 | 353 | 575 | **112** |
+| Graphalytics, peak during load | **107** | 122 | 157 | 128 | ⊘ | 262 | 543 | **407** | 630 | 5022 |
 | LDBC SNB (RDF), loaded | 353 | ⊘ | ⊘ | ⊘ | **277** | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
-| LDBC SNB (RDF), peak during load | 529 | ⊘ | ⊘ | ⊘ | **364** | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
+| LDBC SNB (RDF), peak during load | 530 | ⊘ | ⊘ | ⊘ | **364** | ⊘ | ⊘ | ⊘ | ⊘ | ⊘ |
 
 "Loaded" is the memory the load added (after minus before); "peak" is the process tree's absolute peak during the load, interpreter and started engine included.
 
@@ -394,7 +394,7 @@ Single-threaded.
 
 ✓: an answer-check-only case agrees; it has no time budget and is not ranked.
 
-graph-bench dc7c477 · Grafeo 0.6.3 (pypi) · aarch64, 16 cores, Linux-6.5.0-1024-aws-aarch64-with-glibc2.35 · 2026-11-16 · selection full · bench mode
+graph-bench ae7375e · Grafeo 0.6.3 (pypi) · aarch64, 16 cores, Linux-6.5.0-1024-aws-aarch64-with-glibc2.35 · 2026-11-17 · selection full · bench mode
 
 Local snapshot†: graph-bench ebfbf59 · Grafeo 0.6.1 (pypi) · AMD Ryzen 7 7800X3D 8-Core Processor, 16 cores, Linux-6.18.54.1-microsoft-standard-WSL2-x86_64-with-glibc2.39 · 2026-11-02 · selection full · bench mode
 
