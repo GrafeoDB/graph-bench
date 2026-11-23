@@ -18,20 +18,20 @@ GDS_JAR = f"neo4j-graph-data-science-{NEO4J_VERSION}.jar"
 # `binary.package.checksum`).
 # The Java major Neo4j requires; `graph_bench.pins_update` looks for newer Temurin releases of this major only.
 JRE_MAJOR = 21
-JRE_RELEASE = "jdk-21.0.13+9"
+JRE_RELEASE = "jdk-21.0.13.1+2"
 JRE_VERSION = "21.0.13"
-_JRE_BASE = "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.13%2B9"
+_JRE_BASE = "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.13.1%2B2"
 JRES: dict[tuple[str, str], tuple[str, str]] = {
     ("linux", "x86_64"): (
-        f"{_JRE_BASE}/OpenJDK21U-jre_x64_linux_hotspot_21.0.13_9.tar.gz",
-        "a535a1df9c6284d9618872984e026ae0352d1f7e9e0605425c0e6114f47351dd",
+        f"{_JRE_BASE}/OpenJDK21U-jre_x64_linux_hotspot_21.0.13.1_2.tar.gz",
+        "18f44fab9065217f3ba61d0eef8a7b5f3c3713aa7293001b0d4ac10ede3850f0",
     ),
     ("linux", "aarch64"): (
-        f"{_JRE_BASE}/OpenJDK21U-jre_aarch64_linux_hotspot_21.0.13_9.tar.gz",
-        "b1734db7ade49c3f6acc6ae06233b8c2dd90e3e2f00f67000ae1c972aaa64d8c",
+        f"{_JRE_BASE}/OpenJDK21U-jre_aarch64_linux_hotspot_21.0.13.1_2.tar.gz",
+        "52bc58323d9266538a6361a3cf8365fc1186dd9510d7f33f623681c4aabb7e72",
     ),
     ("win32", "amd64"): (
-        f"{_JRE_BASE}/OpenJDK21U-jre_x64_windows_hotspot_21.0.13_9.zip",
-        "2332c0b4cff6bed722da3567c91d5e47568bcba863fa4945d0a8d6fc76158628",
+        f"{_JRE_BASE}/OpenJDK21U-jre_x64_windows_hotspot_21.0.13.1_2.zip",
+        "e15ee1e54a5a3b38027a09cedfa87bc3348d7dd3ce50866dd3d9671d7fffc6c1",
     ),
 }
